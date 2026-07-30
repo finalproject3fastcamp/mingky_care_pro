@@ -1,3 +1,7 @@
+
+# 학습용 자료입니다.
+출처: https://github.com/pinklab-art/pinky_pro
+
 # Pinky Pro
 ROS2 packages for Pinky Pro
 
