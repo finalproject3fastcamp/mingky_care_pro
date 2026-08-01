@@ -1,233 +1,77 @@
+# AI 기반 대학병원 환자 안내 및 약국 자동 조제 로봇 시스템
 
-# 학습용 자료입니다.
-출처: https://github.com/pinklab-art/pinky_pro
+Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연동하여
+환자의 병원 이용 전 과정을 지원하는 AI 기반 스마트 병원 서비스 프로젝트입니다.
 
-# Pinky Pro
-ROS2 packages for Pinky Pro
+## 1. 프로젝트 개요
 
-![Pinky Pro](doc/pinky_pro_image.png)
----
-### Pinky Pro ROS2 아키텍처
+대학병원은 진료과와 검사실이 다양하고 건물이 복잡하여 초진 환자나 고령 환자가
+진료 일정에 따라 여러 장소를 방문하는 데 어려움을 겪는다. 또한 약국에서는
+반복적인 약품 분류 및 전달 업무가 지속적으로 발생한다.
 
-![Pinky Pro ROS2 아키텍처](doc/architecture.png)
+본 프로젝트는 Pinky 자율주행 로봇과 고정형 OMX 로봇팔을 연동하여
+환자의 병원 이용 전 과정을 지원하는 것을 목표로 한다.
 
-## 📚 문서 및 가이드 (Documentation)
-* **[Pinky Pro 소개](https://github.com/pinklab-art/pinky_study/wiki)**
+- **Pinky** — 환자의 당일 진료 일정에 맞춰 검사실, 진료실, 약국 등 여러 목적지를 순차적으로 안내
+- **OMX** — 모방학습(Imitation Learning)을 활용해 처방된 약품을 Pick & Place 방식으로 트레이에 적재
+- **웹 대시보드** — 로봇의 상태, 환자의 진료 진행 현황, 이동 경로 및 작업 로그를 실시간으로 확인
 
-* **[초기 설정](https://github.com/pinklab-art/pinky_study/wiki/0.-%EC%B4%88%EA%B8%B0%EC%84%A4%EC%A0%95(PinkyPro))**
+## 2. 프로젝트 목표
 
-* **[수업 자료 (Part 1)](https://github.com/pinklab-art/pinky_study/wiki/2.1-Pinky-Pro(part1))**
+- 대학병원 환자의 복잡한 진료 동선을 자동으로 안내하여 이동 편의성을 향상한다.
+- 자율주행과 모방학습을 하나의 의료 서비스로 통합한다.
+- ROS2 기반의 자율주행 로봇 시스템을 구축한다.
+- 웹 기반의 실시간 모니터링 및 관리 시스템을 구현한다.
+- 다양한 병원 환경과 시나리오에서 시스템 성능을 실험하고 분석한다.
 
-* **[수업 자료 (Part 2)](https://github.com/pinklab-art/pinky_study/wiki/2.2-Pinky-Pro(part2))**
+## 3. 사용자 시나리오
 
-* **[수업 자료 (Part 3)](https://github.com/pinklab-art/pinky_study/wiki/2.3-Pinky-Pro(part3%E2%80%90%EC%8B%9C%EB%AE%AC%EB%A0%88%EC%9D%B4%EC%85%98))**
-
-* **[수업 자료 (Part 4)](https://github.com/pinklab-art/pinky_study/wiki/2.4-Pinky-Pro(part4%E2%80%90%EC%8B%A4%EB%AC%BC%EB%A1%9C%EB%B4%87%ED%99%9C%EC%9A%A9))**
-   
-
-## 🙏 Special Thanks · Contributors
-
-**[byeongkyu](https://github.com/byeongkyu)** – Pinky PRO 모델 ROS 2 패키지 개발  
-참고 레포지토리: [pinky_robot](https://github.com/byeongkyu/pinky_robot)
-
-# 💻 PC 설정
-
-## 환경
-* **OS:** Ubuntu 24.04
-* **ROS:** ROS2 Jazzy
-* **Architecture:** x86\_64 (amd64) (Recommended)
-    * (ARM64 환경의 경우 [관련 문서](doc/arm64_guide.md)를 참고하세요.)
-
----
-
-## 1. Pinky Pro ROS2 pkg clone
+1. 환자가 접수 후 QR 코드(또는 예약 정보)를 로봇에 제시하면 당일 진료 일정을 확인한다.
+2. Pinky가 진료 일정에 따라 X-ray실, CT실, 진료실, 물리치료실 등 다음 목적지까지 순차적으로 안내한다.
+3. 각 검사가 완료되면 시스템이 다음 검사 또는 진료 장소를 자동으로 확인하고 Pinky가 다음 목적지까지 안내한다.
+4. 모든 진료가 끝나면 Pinky가 환자를 원내 약국까지 안내하고, OMX가 모방학습을 통해 처방된 약을 Pick & Place 방식으로 조제한다.
+5. 환자가 약을 수령하면 Pinky는 충전소로 복귀하고, 시스템은 이동 경로·진료 진행 상태·작업 로그를 대시보드에 기록한다.
 
 ```
-mkdir -p ~/pinky_pro/src
-cd ~/pinky_pro/src
-git clone https://github.com/pinklab-art/pinky_pro.git
-```
-## 2. dependency 설치
-```
-cd ~/pinky_pro
-rosdep install --from-paths src --ignore-src -r -y
-```
-## 3. build
-```
-cd ~/pinky_pro
-colcon build
+접수 → X-ray → CT → 진료실 → 물리치료 → 약국
 ```
 
-# Pinky Pro 사용 매뉴얼
+## 4. 레포지토리 구조
 
-## 환경
-- ubuntu 24.04
-- ros2 jazzy
-
-## pinky Pro 실행
 ```
-ros2 launch pinky_bringup bringup_robot.launch.xml
-```
-
-## Map building
-#### launch slam toolbox
-```
-ros2 launch pinky_navigation map_building.launch.xml
-```
-#### [ONLY PC] map view 
-```
-ros2 launch pinky_navigation map_view.launch.xml
-```
-#### robot keyborad control
-```
-ros2 run teleop_twist_keyboard teleop_twist_keyboard 
-```
-#### map save 
-```
-ros2 run nav2_map_server map_saver_cli -f <map name>
+.
+├── src/
+│   ├── pinky/    # Pinky 모바일 로봇 — 병원 내 자율주행 안내 (ROS2 패키지)
+│   └── omx/      # OMX 로봇팔 — 약품 Pick & Place 모방학습
+└── README.md
 ```
 
-## Navigation2 
-#### launch navigation2
-```
-ros2 launch pinky_navigation bringup_launch.xml map:=<map name>
-```
+각 파트의 상세 사용법과 오픈소스 출처는 하위 README를 참고한다.
 
-#### [ONLY PC] nav2 view
-```
-ros2 launch pinky_navigation nav2_view.launch.xml
-```
+| 파트 | 문서 | 기반 오픈소스 |
+| --- | --- | --- |
+| Pinky | [src/pinky/README.md](src/pinky/README.md) | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
+| OMX | [src/omx/README.md](src/omx/README.md) | [huggingface/lerobot](https://github.com/huggingface/lerobot) |
 
-# 시뮬레이션
-## Pinky Pro gazebo 실행
-#### 가제보 실행
-```
-ros2 launch pinky_gz_sim launch_sim.launch.xml
-```
+## 5. 개발 환경
 
-## Map building
-#### launch slam toolbox
-```
-ros2 launch pinky_navigation gz_map_building.launch.xml
-```
-#### [ONLY PC] map view 
-```
-ros2 launch pinky_navigation gz_map_view.launch.xml
-```
-#### robot keyborad control
-```
-ros2 run teleop_twist_keyboard teleop_twist_keyboard 
-```
-#### map save 
-```
-ros2 run nav2_map_server map_saver_cli -f <map name>
-```
+- Ubuntu 24.04 / ROS2 Jazzy
+- Pinky Pro (SLAM Toolbox, Nav2)
+- OpenManipulator-X 리더 - 팔로워 암 (Dynamixel SDK)
 
-## Navigation2 
-#### launch navigation2
-```
-ros2 launch pinky_navigation gz_bringup_launch.xml map:=<map name>
-```
+## 6. 팀원 역할
 
-#### [ONLY PC] nav2 view
-```
-ros2 launch pinky_navigation gz_nav2_view.launch.xml
-```
+> 추후 업데이트 예정
 
-# 센서 동작
-## LED control
-### LED server start
-```
-ros2 run pinky_led led_server
-```
-### LED service call
-#### fill with color
-```
-ros2 service call /set_led pinky_interfaces/srv/SetLed "{command: 'fill', r: 255, g: 0, b: 0}"
-```
-#### set pixel colors
-```
-ros2 service call /set_led pinky_interfaces/srv/SetLed "{command: 'set_pixel', pixels: [4, 5, 6, 7], r: 0, g: 0, b: 255}"
-```
-#### clear
-```
-ros2 service call /set_led pinky_interfaces/srv/SetLed "{command: 'clear'}"
-```
-#### set brightness
-```
-ros2 service call /set_brightness pinky_interfaces/srv/SetBrightness "{brightness: 10}"
-```
-## LCD control
-### emotion server start
-```
-ros2 run pinky_emotion emotion_server
-```
-or
-```
-ros2 run pinky_emotion emotion_server --ros-args -p load_frame_skip:=3
-```
+## 7. 기대 효과
 
-### set emotion
-Available emotions: (hello, basic, angry, bored, fun, happy, interest, sad)
-```
-ros2 service call /set_emotion pinky_interfaces/srv/Emotion "{emotion: 'happy'}"
-```
+- 대학병원 내 환자의 복잡한 진료 동선을 자동으로 안내하여 이동 편의성을 향상한다.
+- 의료진의 반복적인 환자 안내 및 약품 전달 업무를 일부 자동화한다.
+- 자율주행과 모방학습을 결합한 통합 AI 의료 서비스의 가능성을 검증한다.
+- 실제 병원 환경을 고려한 서비스 시나리오를 구현하고 검증한다.
+- ROS2, 컴퓨터 비전, 모방학습, 웹 서비스를 통합한 실무형 AI 로봇 프로젝트를 수행한다.
 
-# 웹 서버
-## Start web server
-### Real Robot
-Launch SLAM web server
-```
-ros2 launch pinky_navigation web_slam.launch.xml
-```
+## 라이선스
 
-Or launch Nav2 web server
-```
-ros2 launch pinky_navigation web_nav2.launch.xml map:=<map name>
-```
-
-With custom IP address (Optional)
-```
-ros2 launch pinky_navigation web_nav2.launch.xml map:=<map name> ip:=0.0.0.0
-```
-### Simulation (Gazebo)
-Launch SLAM web server
-```
-ros2 launch pinky_navigation gz_web_slam.launch.xml
-```
-
-Or launch Nav2 web server
-```
-ros2 launch pinky_navigation gz_web_nav2.launch.xml map:=<map name>
-```
-
-With custom IP address (Optional)
-```
-ros2 launch pinky_navigation gz_web_nav2.launch.xml map:=<map name> ip:=0.0.0.0
-```
-
-## Web Access
-**Default (Real Robot):**
-[`http://192.168.4.1:8080`](http://192.168.4.1:8080)
-
-**Default (Simulation):**
-[`http://localhost:8080`](http://localhost:8080)
-
-**If you specified a custom IP:**
-`http://<host_ip>:<port>`
-
-# 🛠️ 트러블슈팅 (Troubleshooting)
-
-## 공유기 과부하로 인한 로봇 통신 끊김 및 지연 현상 해결 방법
-여러 대의 Pinky Pro를 동일한 공유기에 연결하여 단체로 운영하거나 주행할 때, **ROS2 DDS 통신 트래픽으로 인한 공유기 성능 한계** 때문에 로봇의 통신이 끊기거나 움직임이 원활하지 않은 이슈가 발생할 수 있습니다.
-
-이러한 현상이 나타나면, 각 Pinky와 사용자(PC) 간의 개별 연결은 유지한 상태에서 **Pinky들이 공통으로 연결된 외부 공유기와의 연결을 해제**하면 통신량이 줄어들어 문제가 해결됩니다.
-
-Pinky Pro의 터미널에서 아래 명령어를 순서대로 입력하여 외부 네트워크 설정을 삭제하고 재부팅해 주세요.
-
-```bash
-sudo rm /etc/netplan/90*
-sudo reboot
-```
-
-**Note:** 이 명령어는 외부 공유기와 연결하기 위해 생성된 netplan 설정 파일(90으로 시작하는 파일)을 삭제하는 명령어입니다. 재부팅 후에는 **로봇이 공유기를 거치지 않고 사용자의 PC와 직접 통신**하는 기본 상태로 돌아가므로, 공유기 성능 한계로 발생하던 지연 현상이 사라집니다. 다시 외부 인터넷 연결이 필요한 경우에는 초기 네트워크 설정 과정을 다시 진행해야 합니다.
+`src/pinky`는 [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro)의 ROS2 패키지를 기반으로 하며
+Apache License 2.0을 따른다. ([src/pinky/LICENSE](src/pinky/LICENSE))
