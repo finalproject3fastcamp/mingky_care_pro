@@ -88,3 +88,9 @@ Desktop.ini
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# PostgreSQL local data
+database/.env
+database/data/
+database/*.dump
+database/*.backup
