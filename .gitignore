@@ -1,0 +1,4 @@
+src/database/.env
+src/database/data/
+src/database/*.dump
+src/database/*.backup
