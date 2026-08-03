@@ -16,6 +16,18 @@
   z-index: 10;
 }
 
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-logo {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
 .app-header h1 {
   font-size: 1.05rem;
   font-weight: 700;
