@@ -43,10 +43,8 @@
   ```
   ## Summary
   <1-3 bullet>
-
-  ## Test plan
-  [체크리스트]
   ```
+- Test plan 섹션은 사용하지 않는다 (사용자가 명시적으로 요청한 경우에만 추가)
 - `gh pr create --title "..." --body "$(cat <<'EOF' ... EOF)"` 로 생성
 - 생성된 PR URL 출력
 
