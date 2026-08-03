@@ -5,7 +5,7 @@ PostgreSQL 로컬 개발 환경과 스키마 변경 이력을 관리하는 디�
 ## 로컬 실행
 
 ```bash
-cd src/database
+cd database
 cp .env.example .env
 docker compose up -d
 docker compose ps
