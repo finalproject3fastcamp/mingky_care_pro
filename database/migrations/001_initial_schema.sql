@@ -9,6 +9,7 @@ CREATE TABLE patients (
     patient_id VARCHAR(20) PRIMARY KEY,
     name VARCHAR(50) NOT NULL,
     age SMALLINT NOT NULL CHECK (age >= 0),
+    birth_date DATE NOT NULL,
     gender VARCHAR(10) NOT NULL,
     condition_id BIGINT NOT NULL REFERENCES conditions(condition_id)
 );
