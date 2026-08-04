@@ -76,7 +76,7 @@ MINGKY_REPO="$(resolve_repo_root)"
 [[ -n "${MINGKY_REPO}" ]] \
   || fail "저장소 경로를 찾을 수 없습니다. MINGKY_REPO 환경 변수를 지정하세요."
 
-MAP_PATH="${MAP_PATH:-${MINGKY_REPO}/pinky_map/pinky_6294/yun_map.yaml}"
+MAP_PATH="${MAP_PATH:-${MINGKY_REPO}/mingky_ros/mingky_bringup/map/yun_map_highres_clean.yaml}"
 
 [[ -f /opt/ros/jazzy/setup.bash ]] \
   || fail "ROS 2 Jazzy setup 파일을 찾을 수 없습니다."

@@ -4,7 +4,7 @@ project(mingky_bringup)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY launch config
+  DIRECTORY launch config map
   DESTINATION share/${PROJECT_NAME}
 )
 

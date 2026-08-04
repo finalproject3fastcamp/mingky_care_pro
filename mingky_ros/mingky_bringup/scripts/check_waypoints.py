@@ -76,9 +76,25 @@ def occupied_cells(map_yaml: Path):
     return cells, meta, (width, height), extent
 
 
-def find_default(name: str, *relative: str) -> Path | None:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
+def find_default(*relative: str) -> Path | None:
+    """설치된 패키지 share 를 먼저 보고, 없으면 소스 트리를 거슬러 올라간다.
+
+    ros2 run 으로 실행하면 이 파일이 install/.../lib 에 있어서 소스 트리
+    탐색만으로는 map/ 과 config/ 을 찾지 못한다.
+    """
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share = Path(get_package_share_directory("mingky_bringup"))
+        for rel in relative:
+            candidate = share / Path(rel).relative_to("mingky_ros/mingky_bringup") \
+                if rel.startswith("mingky_ros/mingky_bringup/") else share / rel
+            if candidate.is_file():
+                return candidate
+    except Exception:
+        pass
+
+    for parent in Path(__file__).resolve().parents:
         for rel in relative:
             candidate = parent / rel
             if candidate.is_file():
@@ -102,12 +118,11 @@ def main() -> int:
     args = p.parse_args()
 
     map_yaml = args.map or find_default(
-        "map",
         "mingky_ros/mingky_bringup/map/yun_map_highres_clean.yaml",
         "pinky_map/pinky_6294/yun_map.yaml",
     )
     wp_yaml = args.waypoints or find_default(
-        "waypoints", "mingky_ros/mingky_bringup/config/hospital_waypoints.yaml")
+        "mingky_ros/mingky_bringup/config/hospital_waypoints.yaml")
 
     if map_yaml is None or wp_yaml is None:
         return print("맵 또는 waypoint 파일을 찾지 못했습니다. --map / --waypoints 로 지정하세요.") or 2

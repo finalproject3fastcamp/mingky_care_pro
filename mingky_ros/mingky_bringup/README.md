@@ -58,9 +58,27 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 - `PINKY_IP`: Pinky IP, 기본값 `192.168.4.1`
 - `PINKY_SSID`: Pinky Wi-Fi SSID, 기본값 `pinky_6294`
 - `PINKY_DOMAIN_ID`: ROS Domain ID, 기본값 `21`
-- `MAP_PATH`: 지도 YAML 경로
+- `MAP_PATH`: 지도 YAML 경로 (기본 `map/yun_map_highres_clean.yaml`)
 - `WAYPOINT_FILE`: waypoint 출력 YAML 경로
 - `MINGKY_REPO`: 자동 탐색 대신 사용할 저장소 루트 경로
+
+## 맵
+
+기준 맵은 `map/yun_map_highres_clean.yaml` 입니다.
+
+```
+192 x 147 px   resolution 0.025   origin (-1.818, -1.529)
+범위 x[-1.818, 2.982]  y[-1.529, 2.146]   = 4.80 x 3.68 m
+```
+
+**맵과 waypoint 는 같은 패키지에 둡니다.** 좌표가 맵에 종속적이라 따로
+관리하면 어느 맵 기준인지 알 수 없게 되고, 맵을 교체했을 때 조용히
+어긋납니다.
+
+이전 맵(`pinky_map/pinky_6294/yun_map.yaml`, res 0.05)에서 넘어오면서
+`origin` 이 `(-0.169, -1.847)` → `(-1.818, -1.529)` 로 바뀌어 **기존 waypoint
+23개가 전부 무효**가 되었습니다. 참고용으로
+`config/hospital_waypoints.legacy-yun_map.yaml` 에 남겼습니다.
 
 ## Waypoint 검증
 
