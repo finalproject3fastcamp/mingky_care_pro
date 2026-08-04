@@ -21,12 +21,16 @@ config/event_codes.yaml 3절의 규칙을 코드로 옮긴 곳이다.
 """
 
 import json
+import logging
 import uuid
 
 import asyncpg
+from asyncpg.exceptions import IntegrityConstraintViolationError
 
 from .event_codes import UNKNOWN_CODE, EventCodeRegistry
 from .schemas import EventIn, IngestResult
+
+log = logging.getLogger("mingky")
 
 _INSERT = """
     INSERT INTO events (event_id, robot_id, session_id, occurred_at,
@@ -95,6 +99,28 @@ async def _apply_state(conn: asyncpg.Connection, event: EventIn) -> int:
     return int(result.split()[-1]) if result.startswith("UPDATE") else 0
 
 
+async def _apply_state_safely(conn: asyncpg.Connection, event: EventIn,
+                              result: IngestResult) -> int:
+    """상태 갱신을 세이브포인트 안에서 실행한다.
+
+    시계가 어긋난 로봇이 보내면 003 의 CHECK 에 걸릴 수 있다.
+    예) ended_at 이 started_at 보다 앞선 session.ended.
+
+    그때 배치 전체를 실패시키면 게이트웨이가 같은 배치를 무한히 재전송한다.
+    미등록 코드를 거부하지 않는 것과 같은 이유로, 이벤트는 남기고
+    상태 갱신만 건너뛴 뒤 응답으로 알린다. 제약 자체는 완화하지 않는다.
+    """
+    try:
+        # asyncpg 의 중첩 트랜잭션은 세이브포인트로 동작한다.
+        async with conn.transaction():
+            return await _apply_state(conn, event)
+    except IntegrityConstraintViolationError as exc:
+        log.warning("상태 갱신 거부: %s (%s) — %s",
+                    event.event_code, event.event_id, exc)
+        result.rejected_updates.append(event.event_code)
+        return 0
+
+
 def _unknown_marker(event: EventIn) -> EventIn:
     """미등록 코드를 받았다는 사실 자체를 이벤트로 남긴다."""
     return EventIn(
@@ -130,7 +156,8 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
                 result.inserted += 1
                 # 규칙 3 — 새로 들어온 이벤트에 대해서만 상태를 건드린다.
                 if known:
-                    result.state_updates += await _apply_state(conn, event)
+                    result.state_updates += await _apply_state_safely(
+                        conn, event, result)
             else:
                 result.duplicates += 1
 

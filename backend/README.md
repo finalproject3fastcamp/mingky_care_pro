@@ -26,7 +26,7 @@ uvicorn app.main:app --reload
 기본 접속: <http://localhost:8000>
 
 - `GET /health` — 헬스체크. 로드된 이벤트 코드 수도 함께 반환
-- `POST /qr/scan` — QR 스캔 → 오늘 진료 일정 조회
+- `POST /qr/scan` — QR 스캔 → 안내 세션 시작 + 오늘 진료 일정 조회
 - `POST /events` — 로봇 이벤트 배치 적재
 - `GET /docs` — OpenAPI 문서
 
@@ -35,7 +35,7 @@ uvicorn app.main:app --reload
 ```bash
 curl -X POST http://localhost:8000/qr/scan \
   -H 'Content-Type: application/json' \
-  -d '{"patient_id":"p001"}'
+  -d '{"patient_id":"p001","robot_id":"pinky-01","marker_id":20}'
 ```
 
 ## 환경 변수
@@ -96,8 +96,8 @@ app/
 ```
 
 ```json
-{ "received": 1, "inserted": 1, "duplicates": 0,
-  "state_updates": 1, "unknown_codes": [] }
+{ "received": 1, "inserted": 1, "duplicates": 0, "state_updates": 1,
+  "unknown_codes": [], "rejected_updates": [] }
 ```
 
 ### 적재 규칙
@@ -126,3 +126,44 @@ app/
 한 세션에서 같은 장소를 두 번 방문할 수 있어(진료실 초진·판독) 이름만으로는
 어느 단계인지 결정되지 않기 때문에, **아직 도착하지 않은 가장 이른 단계**를
 현재 단계로 봅니다.
+
+
+## QR 스캔과 세션
+
+`POST /qr/scan` 만 요청-응답 방식입니다. 로봇이 `session_id` 를 즉시 받아야
+이후 발행하는 모든 이벤트에 달고 다닐 수 있는데, 이벤트는 단방향이라 응답을
+줄 수 없기 때문입니다. 상태를 바꾸는 경로는 여전히 하나이고, 세션 생성도
+여기서만 일어납니다.
+
+스캔 시 두 가지가 만들어집니다.
+
+1. `guidance_sessions` 행 — `robot_id` 가 필요해서 요청에 함께 받습니다
+2. `session_steps` — `examination_steps`(마스터)를 **복사**합니다
+
+두 번째가 중요합니다. 마스터를 조회 때마다 조인하면 나중에 검사 순서가
+바뀔 때 **과거 안내 기록의 일정까지 소급해서 달라집니다.**
+
+### 응답 코드
+
+| 코드 | 상황 |
+| --- | --- |
+| `200` | 세션 생성. **같은 로봇의 재스캔이면 기존 세션을 그대로 반환** |
+| `404` | 등록되지 않은 `patient_id` |
+| `409` | 다른 로봇이 이 환자를 안내 중이거나, 이 로봇이 다른 환자를 안내 중 |
+| `422` | `robot_id` 누락, `marker_id` 범위 밖 등 |
+
+재스캔이 `200` 인 것은 의도입니다. 로봇이 재부팅해도 같은 세션으로
+복귀할 수 있어야 합니다.
+
+`409` 는 `003` 의 부분 유니크 인덱스가 어차피 막지만, 미리 걸러야 원인이
+드러납니다. 걸러내지 않으면 `INSERT` 가 터져 `500` 이 나갑니다.
+
+### 제약 위반과 `rejected_updates`
+
+시계가 어긋난 로봇이 `session.ended` 를 세션 시작보다 앞선 시각으로 보내면
+`003` 의 `CHECK (ended_at >= started_at)` 에 걸립니다.
+
+이때 배치 전체를 실패시키면 게이트웨이가 같은 배치를 무한히 재전송합니다.
+그래서 상태 갱신을 **세이브포인트** 안에서 실행하고, 위반이 나면 이벤트는
+남긴 채 갱신만 건너뛴 뒤 응답의 `rejected_updates` 로 알립니다.
+제약 자체는 완화하지 않습니다 — 그게 시계 이상을 잡아주는 안전망입니다.
