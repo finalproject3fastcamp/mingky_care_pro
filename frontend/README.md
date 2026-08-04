@@ -14,6 +14,7 @@
 ## 실행
 
 ```bash
+cd frontend        # 프로젝트 루트에서
 nvm use            # .nvmrc → Node 24
 cp .env.example .env
 npm install
