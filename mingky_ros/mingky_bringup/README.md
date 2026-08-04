@@ -61,3 +61,90 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 - `MAP_PATH`: 지도 YAML 경로
 - `WAYPOINT_FILE`: waypoint 출력 YAML 경로
 - `MINGKY_REPO`: 자동 탐색 대신 사용할 저장소 루트 경로
+
+## Waypoint 검증
+
+```bash
+ros2 run mingky_bringup check_waypoints.py
+```
+
+두 가지를 검사합니다.
+
+**1. 벽까지 거리** — Nav2 는 로봇 내접 반경 + `footprint_padding` 안쪽 셀을
+통과 불가로 봅니다. 그보다 벽에 가까운 waypoint 는 planner 가 도달할 수
+없는데, NavFn 의 `tolerance` 가 "근처까지만" 경로를 그려주기 때문에
+**에러 없이 조용히 엉뚱한 곳에서 멈춥니다.**
+
+**2. waypoint 사이 간격** — 두 지점이 `xy_goal_tolerance` 지름보다 가까우면,
+한쪽에 서 있는 상태에서 다른 쪽으로 보내도 이미 도착 조건을 만족해
+**로봇이 움직이지 않고 즉시 성공을 반환합니다.**
+
+```bash
+# 다른 맵으로 검사
+ros2 run mingky_bringup check_waypoints.py --map <경로>/yun_map.yaml
+
+# 파라미터를 바꿨다면 같이 넘긴다
+ros2 run mingky_bringup check_waypoints.py --tolerance 0.15 --padding 0.0
+```
+
+도달 불가나 맵 밖 waypoint 가 있으면 종료 코드 `1` 을 돌려줍니다.
+
+### 맵을 바꿨다면 반드시 돌리세요
+
+**좌표는 맵에 종속적입니다.** `origin` 이나 `resolution` 이 바뀌면 기존
+waypoint 가 전혀 다른 물리 위치를 가리킵니다. 맵 밖으로 나가면 에러라도
+나지만, 안쪽에 남으면 조용히 틀립니다.
+
+그래서 맵과 waypoint 는 같은 패키지에 두고 함께 버전 관리해야 합니다.
+새 맵을 채택하면 `mingky_bringup/map/` 에 넣으세요.
+
+### 재측정 기준
+
+| 항목 | 값 |
+| --- | --- |
+| 벽에서 최소 | **0.15 m** |
+| `_goal` ↔ `_waiting` 간격 | **0.30 m** 이상 (나눌 경우) |
+| 충전소 | 도킹 지점이 아니라 **앞 0.3 m** |
+
+충전소 접점은 벽에 닿아야 해서 planner 가 구조적으로 도달할 수 없습니다.
+Nav2 로 앞까지 간 뒤 마지막 접근은 별도 동작으로 처리해야 합니다.
+
+## Foxglove Bridge
+
+Nav2 디버깅용 실시간 시각화입니다.
+
+```bash
+sudo apt install ros-jazzy-foxglove-bridge
+ros2 launch mingky_bringup foxglove.launch.py
+```
+
+**로봇마다 도메인이 달라(pinky1=21, pinky2=22) 관제 한 곳에서 두 대를 동시에
+볼 수 없습니다.** 로봇마다 하나씩 띄우고 Studio 에서 접속을 갈아탑니다.
+
+| 로봇 | 접속 주소 |
+| --- | --- |
+| pinky1 | `ws://192.168.0.21:8765` |
+| pinky2 | `ws://192.168.0.22:8765` |
+
+### 주행 디버깅에 띄울 패널
+
+| 패널 | 토픽 | 무엇을 보나 |
+| --- | --- | --- |
+| Map | `/map` | 맵이 실제와 맞나 |
+| Costmap | `/global_costmap/costmap` | **팽창이 통로를 막나** |
+| Path | `/plan`, `/local_plan` | 경로가 목표까지 그려지나 |
+| LaserScan | `/scan` | 라이다가 맵과 겹치나 |
+| Pose | `/amcl_pose`, `/particlecloud` | **위치추정이 발산하나** |
+| Plot | `/cmd_vel` | 직진이 0 인데 회전만 있나 |
+| Parameters | `controller_server` 등 | 재시작 없이 튜닝 |
+
+**Parameters 패널로 재시작 없이 값을 바꿀 수 있습니다.** 다만 Nav2 는
+라이프사이클 노드라 일부는 `configure` 때만 읽습니다. `read_only` 여부는
+이렇게 확인합니다.
+
+```bash
+ros2 param describe /controller_server general_goal_checker.xy_goal_tolerance
+```
+
+런타임 변경은 재시작하면 날아갑니다. **좋아진 값은 `nav2_params.yaml` 에
+반영해서 커밋하세요.**
