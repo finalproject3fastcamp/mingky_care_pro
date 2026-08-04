@@ -4,9 +4,28 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 
 ## Waypoint 측정 준비
 
-Pinky에서 `pinky_bringup`이 실행 중이어야 합니다. PC는 `pinky_6294` Wi-Fi에
-연결되어 있어야 하며, 기본 설정은 Pinky IP `192.168.4.1`, ROS Domain ID
-`21`입니다.
+Pinky에서 `pinky_bringup`이 실행 중이어야 합니다.
+
+기본 설정은 로봇이 공유기(`mingky`)에 붙어 있는 상태입니다.
+
+| 항목 | 기본값 |
+| --- | --- |
+| Pinky IP | `192.168.0.21` (pinky1) |
+| ROS Domain ID | `21` |
+| Wi-Fi SSID 검사 | 하지 않음 |
+
+SSID 를 강제하지 않는 이유는 관제컴퓨터처럼 유선으로 붙는 경우도 있기
+때문입니다. **실제로 `ping` 이 닿는지만 봅니다.**
+
+pinky2 로 작업하거나 AP 모드로 직접 붙는 경우는 환경변수로 바꿉니다.
+
+```bash
+# pinky2
+PINKY_IP=192.168.0.22 PINKY_DOMAIN_ID=22 ros2 run mingky_bringup run_waypoint_teleop.sh
+
+# AP 모드로 직접 접속했을 때
+PINKY_IP=192.168.4.1 PINKY_SSID=pinky_6294 ros2 run mingky_bringup run_waypoint_teleop.sh
+```
 
 프로젝트를 빌드하고 환경을 불러옵니다.
 
@@ -55,8 +74,8 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 
 기본값을 변경해야 할 때 다음 환경 변수를 사용할 수 있습니다.
 
-- `PINKY_IP`: Pinky IP, 기본값 `192.168.4.1`
-- `PINKY_SSID`: Pinky Wi-Fi SSID, 기본값 `pinky_6294`
+- `PINKY_IP`: Pinky IP, 기본값 `192.168.0.21`
+- `PINKY_SSID`: 지정하면 그 SSID 에 연결됐는지 검사한다. 기본값 없음(검사 안 함)
 - `PINKY_DOMAIN_ID`: ROS Domain ID, 기본값 `21`
 - `MAP_PATH`: 지도 YAML 경로 (기본 `map/yun_map_highres_clean.yaml`)
 - `WAYPOINT_FILE`: waypoint 출력 YAML 경로

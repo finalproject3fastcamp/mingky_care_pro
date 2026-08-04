@@ -2,8 +2,10 @@
 
 set -eo pipefail
 
-PINKY_IP="${PINKY_IP:-192.168.4.1}"
-PINKY_SSID="${PINKY_SSID:-pinky_6294}"
+# 로봇이 공유기(mingky)에 붙어 있는 상태를 기본으로 한다.
+# AP 모드(pinky_XXXX, 192.168.4.1)로 직접 붙어 작업하려면 환경변수로 덮어쓴다.
+PINKY_IP="${PINKY_IP:-192.168.0.21}"
+PINKY_SSID="${PINKY_SSID:-}"          # 비우면 SSID 검사를 건너뛴다
 PINKY_DOMAIN_ID="${PINKY_DOMAIN_ID:-21}"
 
 LOCALIZATION_PID=""
@@ -85,18 +87,21 @@ MAP_PATH="${MAP_PATH:-${MINGKY_REPO}/mingky_ros/mingky_bringup/map/yun_map_highr
 [[ -f "${MAP_PATH}" ]] \
   || fail "지도 파일을 찾을 수 없습니다: ${MAP_PATH}"
 
-command -v iwgetid >/dev/null 2>&1 \
-  || fail "iwgetid 명령을 찾을 수 없습니다."
 command -v ping >/dev/null 2>&1 \
   || fail "ping 명령을 찾을 수 없습니다."
 
-CURRENT_SSID="$(iwgetid -r 2>/dev/null || true)"
-[[ "${CURRENT_SSID}" == "${PINKY_SSID}" ]] \
-  || fail "현재 Wi-Fi는 '${CURRENT_SSID:-연결 안 됨}'입니다. PC를 '${PINKY_SSID}'에 연결하세요."
-echo "[확인] Wi-Fi: ${CURRENT_SSID}"
+# SSID 검사는 PINKY_SSID 를 지정했을 때만 한다.
+# 관제컴퓨터처럼 유선으로 붙는 경우도 있어 무선 SSID 를 강제하지 않는다.
+if [[ -n "${PINKY_SSID}" ]]; then
+  CURRENT_SSID="$(iwgetid -r 2>/dev/null || true)"
+  [[ "${CURRENT_SSID}" == "${PINKY_SSID}" ]] \
+    || fail "현재 Wi-Fi는 '${CURRENT_SSID:-연결 안 됨}'입니다. PC를 '${PINKY_SSID}'에 연결하세요."
+  echo "[확인] Wi-Fi: ${CURRENT_SSID}"
+fi
 
+# 실제로 닿는지가 기준이다. 어떤 경로로 붙었는지는 상관없다.
 ping -c 1 -W 2 "${PINKY_IP}" >/dev/null 2>&1 \
-  || fail "Pinky(${PINKY_IP})에 연결할 수 없습니다."
+  || fail "Pinky(${PINKY_IP})에 연결할 수 없습니다. PINKY_IP 환경변수로 주소를 바꿀 수 있습니다."
 echo "[확인] Pinky 응답: ${PINKY_IP}"
 
 # shellcheck disable=SC1091
