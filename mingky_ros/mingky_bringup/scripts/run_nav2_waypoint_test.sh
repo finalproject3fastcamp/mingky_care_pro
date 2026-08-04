@@ -7,6 +7,7 @@ PINKY_SSID="${PINKY_SSID:-pinky_6294}"
 PINKY_DOMAIN_ID="${PINKY_DOMAIN_ID:-21}"
 XY_TOLERANCE="0.25"
 YAW_TOLERANCE="0.25"
+INFLATION_RADIUS="0.15"
 
 NAV2_PID=""
 RVIZ_PID=""
@@ -22,15 +23,17 @@ declare -a WAYPOINT_YAWS=()
 usage() {
   cat <<'EOF'
 사용법:
-  run_nav2_waypoint_test.sh [--xy <meter>] [--yaw <radian>]
+  run_nav2_waypoint_test.sh [--xy <meter>] [--yaw <radian>] [--inflation <meter>]
 
 옵션:
   --xy <meter>    위치 도착 허용 오차 (기본값: 0.25)
   --yaw <radian>  방향 도착 허용 오차 (기본값: 0.25)
+  --inflation <meter>
+                  장애물 팽창 반경 (기본값: 0.15)
   -h, --help      도움말 출력
 
 예시:
-  run_nav2_waypoint_test.sh --xy 0.15 --yaw 0.25
+  run_nav2_waypoint_test.sh --xy 0.15 --yaw 0.25 --inflation 0.13
 EOF
 }
 
@@ -271,6 +274,11 @@ while (($# > 0)); do
       YAW_TOLERANCE="$2"
       shift 2
       ;;
+    --inflation)
+      (($# >= 2)) || fail "--inflation 뒤에 값을 입력하세요."
+      INFLATION_RADIUS="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -285,6 +293,8 @@ is_positive_number "${XY_TOLERANCE}" \
   || fail "--xy는 0보다 큰 숫자여야 합니다: ${XY_TOLERANCE}"
 is_positive_number "${YAW_TOLERANCE}" \
   || fail "--yaw는 0보다 큰 숫자여야 합니다: ${YAW_TOLERANCE}"
+is_positive_number "${INFLATION_RADIUS}" \
+  || fail "--inflation은 0보다 큰 숫자여야 합니다: ${INFLATION_RADIUS}"
 
 MINGKY_REPO="$(resolve_repo_root)"
 [[ -n "${MINGKY_REPO}" ]] \
@@ -354,13 +364,25 @@ ros2 param set /controller_server \
 ros2 param set /controller_server \
   general_goal_checker.yaw_goal_tolerance "${YAW_TOLERANCE}" >/dev/null \
   || fail "yaw_goal_tolerance를 적용하지 못했습니다."
+ros2 param set /global_costmap/global_costmap \
+  inflation_layer.inflation_radius "${INFLATION_RADIUS}" >/dev/null \
+  || fail "global costmap inflation_radius를 적용하지 못했습니다."
+ros2 param set /local_costmap/local_costmap \
+  inflation_layer.inflation_radius "${INFLATION_RADIUS}" >/dev/null \
+  || fail "local costmap inflation_radius를 적용하지 못했습니다."
 
 APPLIED_XY="$(ros2 param get /controller_server general_goal_checker.xy_goal_tolerance \
   | awk '{print $NF}')"
 APPLIED_YAW="$(ros2 param get /controller_server general_goal_checker.yaw_goal_tolerance \
   | awk '{print $NF}')"
+APPLIED_GLOBAL_INFLATION="$(ros2 param get /global_costmap/global_costmap \
+  inflation_layer.inflation_radius | awk '{print $NF}')"
+APPLIED_LOCAL_INFLATION="$(ros2 param get /local_costmap/local_costmap \
+  inflation_layer.inflation_radius | awk '{print $NF}')"
 echo "[확인] 적용된 위치 tolerance: ${APPLIED_XY}m"
 echo "[확인] 적용된 방향 tolerance: ${APPLIED_YAW}rad"
+echo "[확인] 적용된 global inflation radius: ${APPLIED_GLOBAL_INFLATION}m"
+echo "[확인] 적용된 local inflation radius: ${APPLIED_LOCAL_INFLATION}m"
 
 echo "[실행] Nav2 RViz를 시작합니다."
 ros2 launch pinky_navigation nav2_view.launch.xml &

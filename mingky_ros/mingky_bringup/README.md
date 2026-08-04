@@ -57,7 +57,8 @@ Pinky에서 `pinky_bringup`이 실행 중인 상태에서 위치·방향 도착 
 지정해 Nav2와 RViz를 실행합니다.
 
 ```bash
-ros2 run mingky_bringup run_nav2_waypoint_test.sh --xy 0.25 --yaw 0.25
+ros2 run mingky_bringup run_nav2_waypoint_test.sh \
+  --xy 0.25 --yaw 0.25 --inflation 0.15
 ```
 
 RViz가 열리면 `2D Pose Estimate`로 실제 로봇의 초기 위치와 방향을 지정하고,
@@ -71,6 +72,15 @@ RViz가 열리면 `2D Pose Estimate`로 실제 로봇의 초기 위치와 방향
 ```bash
 ros2 run mingky_bringup run_nav2_waypoint_test.sh --xy 0.15 --yaw 0.25
 ros2 run mingky_bringup run_nav2_waypoint_test.sh --xy 0.10 --yaw 0.25
+```
+
+장애물 팽창 영역이 통로를 막는지 비교하려면 `--inflation`으로 global/local
+costmap의 팽창 반경을 함께 지정합니다. 현재 기본값은 `0.15m`이며 실제 로봇의
+footprint와 안전 여유를 고려해 우선 `0.13m`까지만 줄여 시험합니다.
+
+```bash
+ros2 run mingky_bringup run_nav2_waypoint_test.sh \
+  --xy 0.15 --yaw 0.25 --inflation 0.13
 ```
 
 스크립트는 이전에 성공한 waypoint와 새 목표 사이의 저장 좌표 거리 및 방향
