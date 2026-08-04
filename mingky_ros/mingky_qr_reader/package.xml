@@ -10,6 +10,9 @@
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-requests</exec_depend>
+  <exec_depend>python3-pyzbar</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
