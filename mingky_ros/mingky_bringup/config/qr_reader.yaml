@@ -1,0 +1,6 @@
+qr_reader_node:
+  ros__parameters:
+    fps: 10.0
+    debounce_seconds: 5.0
+    http_timeout_seconds: 3.0
+    usb_device_index: 0

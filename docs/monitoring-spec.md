@@ -14,6 +14,15 @@ Pinky + OMX 병원 서비스의 실시간 모니터링·관제 기능 정의.
   - QR → DB 조회로 오늘 진료 일정 로드
   - 환자의 민감한 개인정보 노출 주의
 
+### 구현
+
+| 구성 요소 | 위치 |
+| --- | --- |
+| QR 인식 ROS2 노드 | [`mingky_ros/mingky_qr_reader/`](../mingky_ros/mingky_qr_reader/) |
+| launch / config | [`mingky_ros/mingky_bringup/`](../mingky_ros/mingky_bringup/) (`qr_reader.launch.py`, `config/qr_reader.yaml`) |
+| 백엔드 엔드포인트 `POST /qr/scan` | [`backend/app/routers/qr.py`](../backend/app/routers/qr.py) |
+| 인쇄용 환자 카드 생성기 | [`mingky_ros/mingky_qr_reader/scripts/generate_cards.py`](../mingky_ros/mingky_qr_reader/scripts/generate_cards.py) |
+
 ## 2. 기술 스택 및 결정 배경
 
 | 영역 | 선택 | 대안 | 선택 이유 |
