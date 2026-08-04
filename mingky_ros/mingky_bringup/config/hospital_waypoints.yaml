@@ -4,8 +4,8 @@ waypoints:
     x: 0.669
     y: 1.257
     yaw: -3.127
-  # 접수처 대기 위치
-  reception_waiting:
+  # 접수·수납 공용 대기 위치
+  reception_payment_waiting:
     x: 0.078
     y: 0.965
     yaw: 1.543
