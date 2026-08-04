@@ -97,6 +97,32 @@ ros2 run mingky_bringup check_waypoints.py
 한쪽에 서 있는 상태에서 다른 쪽으로 보내도 이미 도착 조건을 만족해
 **로봇이 움직이지 않고 즉시 성공을 반환합니다.**
 
+### 찍기 전에 확인하기
+
+측정한 뒤에 틀린 걸 알면 다시 찍어야 합니다. **찍기 전에 현재 자리가
+쓸 만한지 먼저 보세요.**
+
+```bash
+ros2 run mingky_bringup check_waypoints.py --probe
+```
+
+```
+현재 위치  x=1.300  y=-1.350
+벽까지     0.212m  ○ 좋습니다.
+가장 가까운 기존 waypoint  reception_goal  0.641m  ○
+
+여기서 찍어도 됩니다.
+```
+
+벽까지 거리와 **이미 찍은 waypoint 와의 간격**을 함께 봅니다.
+너무 가까우면 두 지점을 구분하지 못해 로봇이 움직이지 않습니다.
+
+좌표를 직접 넣어 확인할 수도 있습니다.
+
+```bash
+ros2 run mingky_bringup check_waypoints.py --at 1.30 -1.35
+```
+
 ```bash
 # 다른 맵으로 검사
 ros2 run mingky_bringup check_waypoints.py --map <경로>/yun_map.yaml
