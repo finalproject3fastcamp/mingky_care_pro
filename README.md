@@ -40,9 +40,16 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 ```
 .
-├── src/
-│   ├── pinky/    # Pinky 모바일 로봇 — 병원 내 자율주행 안내 (ROS2 패키지)
-│   └── omx/      # OMX 로봇팔 — 약품 Pick & Place 모방학습
+├── pinky/                   # Pinky 기본 ROS2 패키지
+├── omx/                     # OMX 제어·모방학습
+├── mingky_ros/              # 프로젝트 전용 ROS2 패키지
+│   ├── mingky_interfaces/   # 공통 msg, srv, action
+│   ├── mingky_qr_reader/    # IMX219 카메라 기반 QR 인식
+│   ├── mingky_guide_manager/# 환자 안내 절차와 상태 관리
+│   └── mingky_bringup/      # 프로젝트 통합 launch 및 설정
+├── frontend/                # React 기반 관제 대시보드
+├── database/                # PostgreSQL 스키마와 초기 데이터
+├── docs/                    # 설계 문서와 다이어그램
 └── README.md
 ```
 
@@ -50,8 +57,9 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 | 파트 | 문서 | 기반 오픈소스 |
 | --- | --- | --- |
-| Pinky | [src/pinky/README.md](src/pinky/README.md) | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
-| OMX | [src/omx/README.md](src/omx/README.md) | [huggingface/lerobot](https://github.com/huggingface/lerobot) |
+| Pinky | [pinky/README.md](pinky/README.md) | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
+| OMX | [omx/README.md](omx/README.md) | [huggingface/lerobot](https://github.com/huggingface/lerobot) |
+| Mingky ROS | [mingky_ros/README.md](mingky_ros/README.md) | 프로젝트 전용 패키지 |
 
 ## 5. 개발 환경
 
@@ -73,5 +81,5 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 ## 라이선스
 
-`src/pinky`는 [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro)의 ROS2 패키지를 기반으로 하며
-Apache License 2.0을 따른다. ([src/pinky/LICENSE](src/pinky/LICENSE))
+`pinky`는 [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro)의 ROS2 패키지를 기반으로 하며
+Apache License 2.0을 따른다. ([pinky/LICENSE](pinky/LICENSE))

@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE patients
+    DROP COLUMN IF EXISTS age;
+
+COMMIT;
