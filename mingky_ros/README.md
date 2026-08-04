@@ -6,7 +6,7 @@ Pinky 기본 드라이버와 내비게이션 패키지는 `../pinky/`에서 별�
 ## Packages
 
 - `mingky_interfaces`: 프로젝트 공통 `msg`, `srv`, `action` 정의
-- `mingky_qr_reader`: Pinky IMX219 카메라 기반 QR 인식
+- `mingky_qr_reader`: 후방 웹캠 기반 QR 인식
 - `mingky_guide_manager`: 환자 안내 절차와 상태 관리
 - `mingky_event_gateway`: 이벤트를 관제 서버로 전달 (로컬 큐 + 재시도)
 - `mingky_bringup`: 프로젝트 패키지 통합 실행과 설정

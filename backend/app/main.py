@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import db, registry
-from .routers import events, qr
+from .routers import events, qr, robots, sessions
 
 log = logging.getLogger("mingky")
 
@@ -26,6 +26,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Mingky Care Backend", lifespan=lifespan)
 app.include_router(qr.router)
 app.include_router(events.router)
+app.include_router(sessions.router)
+app.include_router(robots.router)
 
 
 @app.get("/health")
