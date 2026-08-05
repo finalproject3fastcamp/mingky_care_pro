@@ -74,6 +74,25 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 `config/waypoints/<map_name>_waypoints.yaml`에 `x`, `y`, `yaw` 형식으로
 추가됩니다. 같은 이름이 이미 존재하면 기존 좌표를 덮어쓰지 않고 중단합니다.
 
+## 일반 Nav2 실주행 테스트 (RViz 직접 목표 지정)
+
+저장 waypoint 없이, 지도 위 원하는 위치를 직접 클릭해 Nav2 주행을 시험할 때
+사용합니다.
+
+```bash
+ros2 run mingky_bringup run_nav2_manual_test.sh
+```
+
+지도 선택 후 RViz에서 다음 순서로 진행합니다.
+
+1. `2D Pose Estimate`로 로봇의 실제 초기 위치와 방향을 지정합니다.
+2. 터미널에서 Enter를 눌러 `map → base_footprint` TF 연결을 확인합니다.
+3. RViz의 `Nav2 Goal` 도구로 지도 위 목표 위치를 클릭하고, 드래그하여
+   도착 방향을 지정합니다.
+
+목표를 자유롭게 바꿔가며 costmap, 경로, 주행 동작을 확인할 수 있습니다.
+이 스크립트도 `map/` 바로 아래의 지도만 선택 목록에 표시합니다.
+
 ## 저장된 waypoint Nav2 실주행 테스트
 
 Pinky에서 `pinky_bringup`이 실행 중인 상태에서 Nav2와 RViz를 실행합니다.
