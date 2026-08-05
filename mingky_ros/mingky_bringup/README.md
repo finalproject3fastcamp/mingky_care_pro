@@ -41,6 +41,9 @@ source install/setup.bash
 ros2 run mingky_bringup run_waypoint_teleop.sh
 ```
 
+실행하면 `map/` 아래의 지도 목록이 표시됩니다. 선택한 `map_name.yaml`에 대해
+waypoint는 `config/waypoints/map_name_waypoints.yaml`으로 관리됩니다.
+
 이 명령은 전체 Nav2 주행 스택 대신 다음 구성요소만 실행합니다.
 
 - `map_server`
@@ -67,17 +70,16 @@ ros2 run mingky_bringup capture_waypoint.sh <waypoint_name>
 ros2 run mingky_bringup capture_waypoint.sh reception_goal
 ```
 
-좌표는 `config/hospital_waypoints.yaml`에 `x`, `y`, `yaw` 형식으로 추가됩니다.
-같은 이름이 이미 존재하면 기존 좌표를 덮어쓰지 않고 중단합니다.
+좌표는 측정 세션에서 선택한 지도 전용 파일
+`config/waypoints/<map_name>_waypoints.yaml`에 `x`, `y`, `yaw` 형식으로
+추가됩니다. 같은 이름이 이미 존재하면 기존 좌표를 덮어쓰지 않고 중단합니다.
 
 ## 저장된 waypoint Nav2 실주행 테스트
 
-Pinky에서 `pinky_bringup`이 실행 중인 상태에서 위치·방향 도착 허용 오차를
-지정해 Nav2와 RViz를 실행합니다.
+Pinky에서 `pinky_bringup`이 실행 중인 상태에서 Nav2와 RViz를 실행합니다.
 
 ```bash
-ros2 run mingky_bringup run_nav2_waypoint_test.sh \
-  --xy 0.25 --yaw 0.25 --inflation 0.15
+ros2 run mingky_bringup run_nav2_waypoint_test.sh
 ```
 
 RViz가 열리면 `2D Pose Estimate`로 실제 로봇의 초기 위치와 방향을 지정하고,
@@ -85,21 +87,18 @@ RViz가 열리면 `2D Pose Estimate`로 실제 로봇의 초기 위치와 방향
 메뉴가 표시되므로 가까운 두 waypoint를 연속으로 선택해 tolerance별 동작을
 비교할 수 있습니다.
 
-예를 들어 접수처와 수납 창구를 `0.25m`, `0.15m`, `0.10m`로 비교하려면 각
-설정으로 스크립트를 다시 실행합니다.
+도착 허용 오차와 costmap 값은 스크립트에서 변경하지 않습니다. 설정 파일을
+수정하거나 실행 중 RQT에서 조정한 다음 동일한 스크립트로 주행을 비교합니다.
 
 ```bash
-ros2 run mingky_bringup run_nav2_waypoint_test.sh --xy 0.15 --yaw 0.25
-ros2 run mingky_bringup run_nav2_waypoint_test.sh --xy 0.10 --yaw 0.25
+ros2 run rqt_reconfigure rqt_reconfigure
 ```
 
-장애물 팽창 영역이 통로를 막는지 비교하려면 `--inflation`으로 global/local
-costmap의 팽창 반경을 함께 지정합니다. 현재 기본값은 `0.15m`이며 실제 로봇의
-footprint와 안전 여유를 고려해 우선 `0.13m`까지만 줄여 시험합니다.
+실행 시 주행할 지도를 선택하면 대응하는
+`config/waypoints/<map_name>_waypoints.yaml`을 자동 사용합니다.
 
 ```bash
-ros2 run mingky_bringup run_nav2_waypoint_test.sh \
-  --xy 0.15 --yaw 0.25 --inflation 0.13
+ros2 run mingky_bringup run_nav2_waypoint_test.sh
 ```
 
 스크립트는 이전에 성공한 waypoint와 새 목표 사이의 저장 좌표 거리 및 방향
@@ -114,8 +113,6 @@ teleop이 동시에 속도 명령을 보내지 않도록 teleop을 실행하지 
 - `PINKY_IP`: Pinky IP, 기본값 `192.168.0.21`
 - `PINKY_SSID`: 지정하면 그 SSID 에 연결됐는지 검사한다. 기본값 없음(검사 안 함)
 - `PINKY_DOMAIN_ID`: ROS Domain ID, 기본값 `21`
-- `MAP_PATH`: 지도 YAML 경로 (기본 `map/yun_map_highres_clean.yaml`)
-- `WAYPOINT_FILE`: waypoint 출력 YAML 경로
 - `MINGKY_REPO`: 자동 탐색 대신 사용할 저장소 루트 경로
 
 ## 맵
@@ -134,7 +131,7 @@ teleop이 동시에 속도 명령을 보내지 않도록 teleop을 실행하지 
 이전 맵(`pinky_map/pinky_6294/yun_map.yaml`, res 0.05)에서 넘어오면서
 `origin` 이 `(-0.169, -1.847)` → `(-1.818, -1.529)` 로 바뀌어 **기존 waypoint
 23개가 전부 무효**가 되었습니다. 참고용으로
-`config/hospital_waypoints.legacy-yun_map.yaml` 에 남겼습니다.
+`config/waypoints/yun_map_waypoints.yaml` 에 남겼습니다.
 
 ## Waypoint 검증
 

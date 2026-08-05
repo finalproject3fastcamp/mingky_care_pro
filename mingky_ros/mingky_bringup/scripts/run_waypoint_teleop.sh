@@ -10,6 +10,7 @@ PINKY_DOMAIN_ID="${PINKY_DOMAIN_ID:-21}"
 
 LOCALIZATION_PID=""
 RVIZ_PID=""
+SESSION_FILE=""
 CLEANED_UP=false
 
 fail() {
@@ -33,6 +34,10 @@ cleanup() {
     return
   fi
   CLEANED_UP=true
+
+  if [[ -n "${SESSION_FILE}" && -f "${SESSION_FILE}" ]]; then
+    rm -f -- "${SESSION_FILE}"
+  fi
 
   echo
   echo "[정리] waypoint 작업용 RViz와 localization을 종료합니다."
@@ -74,11 +79,52 @@ wait_for_publisher() {
   return 1
 }
 
+select_map() {
+  local selection index
+
+  mapfile -t MAP_FILES < <(find "${MAP_DIR}" -maxdepth 1 -type f -name '*.yaml' -print | sort)
+  ((${#MAP_FILES[@]} > 0)) || fail "선택할 지도 YAML이 없습니다: ${MAP_DIR}"
+
+  echo
+  echo "================ waypoint 측정 지도 선택 ================"
+  for index in "${!MAP_FILES[@]}"; do
+    printf '[%d] %s\n' "$((index + 1))" "$(basename "${MAP_FILES[index]}")"
+  done
+  echo "[q] 종료"
+  echo "========================================================="
+
+  while true; do
+    read -r -p "측정할 지도 번호를 선택하세요: " selection
+    [[ "${selection}" == "q" || "${selection}" == "Q" ]] && exit 0
+    if [[ "${selection}" =~ ^[0-9]+$ ]] \
+      && ((selection >= 1 && selection <= ${#MAP_FILES[@]})); then
+      MAP_PATH="${MAP_FILES[selection - 1]}"
+      MAP_NAME="$(basename "${MAP_PATH}" .yaml)"
+      WAYPOINT_FILE="${WAYPOINT_DIR}/${MAP_NAME}_waypoints.yaml"
+      return
+    fi
+    echo "[안내] 1~${#MAP_FILES[@]} 사이의 번호 또는 q를 입력하세요."
+  done
+}
+
 MINGKY_REPO="$(resolve_repo_root)"
 [[ -n "${MINGKY_REPO}" ]] \
   || fail "저장소 경로를 찾을 수 없습니다. MINGKY_REPO 환경 변수를 지정하세요."
 
-MAP_PATH="${MAP_PATH:-${MINGKY_REPO}/mingky_ros/mingky_bringup/map/yun_map_highres_clean.yaml}"
+MAP_DIR="${MINGKY_REPO}/mingky_ros/mingky_bringup/map"
+WAYPOINT_DIR="${MINGKY_REPO}/mingky_ros/mingky_bringup/config/waypoints"
+SESSION_FILE="/tmp/mingky_waypoint_session_${PINKY_DOMAIN_ID}.txt"
+MAP_FILES=()
+MAP_PATH=""
+MAP_NAME=""
+WAYPOINT_FILE=""
+
+select_map
+mkdir -p "${WAYPOINT_DIR}"
+umask 077
+printf '%s\n%s\n' "${MAP_PATH}" "${WAYPOINT_FILE}" >"${SESSION_FILE}"
+echo "[선택] 지도: $(basename "${MAP_PATH}")"
+echo "[선택] waypoint 파일: $(basename "${WAYPOINT_FILE}")"
 
 [[ -f /opt/ros/jazzy/setup.bash ]] \
   || fail "ROS 2 Jazzy setup 파일을 찾을 수 없습니다."
@@ -162,9 +208,13 @@ cat <<'EOF'
 
    ros2 run mingky_bringup capture_waypoint.sh <waypoint_name>
 
+   현재 지도 전용 파일에 자동 저장됩니다.
+
 teleop과 이 세션을 종료하려면 Ctrl+C를 누르세요.
 ============================================================
 
 EOF
+
+echo "[안내] 저장 파일: ${MAP_NAME}_waypoints.yaml"
 
 ros2 run teleop_twist_keyboard teleop_twist_keyboard

@@ -150,7 +150,7 @@ def main() -> int:
         "pinky_map/pinky_6294/yun_map.yaml",
     )
     wp_yaml = args.waypoints or find_default(
-        "mingky_ros/mingky_bringup/config/hospital_waypoints.yaml")
+        "mingky_ros/mingky_bringup/config/waypoints/yun_map_highres_clean_waypoints.yaml")
 
     if map_yaml is None or wp_yaml is None:
         return print("맵 또는 waypoint 파일을 찾지 못했습니다. --map / --waypoints 로 지정하세요.") or 2
