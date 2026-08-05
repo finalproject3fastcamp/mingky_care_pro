@@ -6,7 +6,7 @@ CREATE TABLE runs (
   started_at TEXT NOT NULL,
   finished_at TEXT,
   status TEXT NOT NULL DEFAULT 'running'
-    CHECK (status IN ('running', 'succeeded', 'failed', 'aborted', 'cancelled')),
+    CHECK (status IN ('running', 'finished', 'succeeded', 'failed', 'aborted', 'cancelled')),
   label TEXT,
   robot_name TEXT,
   ros_domain_id INTEGER,
@@ -15,6 +15,9 @@ CREATE TABLE runs (
   map_sha256 TEXT NOT NULL,
   profile_path TEXT,
   profile_sha256 TEXT,
+  effective_params_path TEXT NOT NULL,
+  effective_params_sha256 TEXT NOT NULL,
+  effective_params_yaml TEXT NOT NULL,
   notes TEXT
 );
 
@@ -54,7 +57,7 @@ CREATE TABLE events (
   details_json TEXT
 );
 
--- 2~5Hz의 가벼운 주행 요약. 원본 토픽은 rosbag에 보관한다.
+-- 2~5Hz의 가벼운 주행 요약. 원본 토픽 전체 대신 분석에 필요한 수치만 둔다.
 CREATE TABLE samples (
   id INTEGER PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -68,11 +71,26 @@ CREATE TABLE samples (
   cmd_linear_x REAL,
   cmd_angular_z REAL,
   scan_min_range REAL,
+  scan_front_range REAL,
+  scan_left_range REAL,
+  scan_right_range REAL,
+  scan_rear_range REAL,
   global_plan_length REAL,
   local_plan_length REAL
 );
 
--- rosbag, Foxglove 레이아웃, 스크린샷 등 대형 결과물은 경로만 연결한다.
+-- 실패 시점의 costmap/path를 압축해 보관한다. 지속 원본 기록은 하지 않는다.
+CREATE TABLE snapshots (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  recorded_at TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  snapshot_type TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  payload_zlib BLOB NOT NULL
+);
+
+-- Foxglove 레이아웃·스크린샷 등 외부 결과물은 경로만 연결한다.
 CREATE TABLE artifacts (
   id INTEGER PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -84,3 +102,4 @@ CREATE TABLE artifacts (
 CREATE INDEX idx_goals_run_id ON goals(run_id);
 CREATE INDEX idx_events_run_id_time ON events(run_id, recorded_at);
 CREATE INDEX idx_samples_run_id_time ON samples(run_id, recorded_at);
+CREATE INDEX idx_snapshots_run_id_time ON snapshots(run_id, recorded_at);

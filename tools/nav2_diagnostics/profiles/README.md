@@ -9,5 +9,5 @@
 - `03_inflation_radius_025.yaml`
 - `04_cost_scaling_025.yaml`
 
-실험 실행 도구가 기본 `nav2_params.yaml`과 프로파일을 합쳐 임시 유효 설정을
-만들고, 그 파일의 해시를 SQLite에 기록하도록 구현할 예정입니다.
+실험 실행 도구가 기본 `nav2_params.yaml`과 프로파일을 합쳐 실험별 유효 설정을
+만듭니다. 유효 설정 원문과 해시는 SQLite에 함께 기록됩니다.
