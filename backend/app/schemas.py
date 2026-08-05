@@ -68,3 +68,76 @@ class IngestResult(BaseModel):
     # 이벤트는 적재됐으나 DB 제약에 걸려 상태 갱신을 못 한 코드.
     # 시계가 어긋난 로봇이 보내면 여기에 쌓인다.
     rejected_updates: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------- 조회 응답
+
+
+class PatientSummary(BaseModel):
+    """대시보드에 띄우는 환자 정보.
+
+    age 는 컬럼이 아니다. 002 에서 지웠고 birth_date 에서 계산한다.
+    저장해두면 시간이 지나면서 생년월일과 갈라진다.
+    """
+
+    patient_id: str
+    name: str
+    gender: str
+    birth_date: date
+    age: int
+    condition_name: str
+
+
+class SessionStep(BaseModel):
+    step_order: int
+    visit_name: str
+    arrived_at: datetime | None = None
+    completed_at: datetime | None = None
+    completed_source: str | None = None
+
+
+class SessionOut(BaseModel):
+    session_id: int
+    robot_id: str
+    marker_id: int | None = None
+    started_at: datetime
+    ended_at: datetime | None = None
+    end_reason: str | None = None
+    patient: PatientSummary
+    steps: list[SessionStep]
+    # 진행 중인 세션만 값이 있다. 끝난 세션에는 '현재' 가 없다.
+    current_step_order: int | None = None
+    current_visit: str | None = None
+
+
+class EventOut(BaseModel):
+    event_id: UUID
+    robot_id: str | None = None
+    session_id: int | None = None
+    occurred_at: datetime
+    received_at: datetime
+    level: str
+    event_code: str
+    source_node: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[EventOut]
+
+
+class RobotOut(BaseModel):
+    robot_id: str
+    robot_type: str
+    display_name: str
+    domain_id: int | None = None
+    is_active: bool
+    # 배터리는 저장된 마지막 표본이다. 실시간 값이 아니다.
+    battery_voltage: float | None = None
+    battery_percent: int | None = None
+    battery_recorded_at: datetime | None = None
+    active_session_id: int | None = None
+    active_patient_id: str | None = None
