@@ -15,7 +15,7 @@ export function PatientInfoCard({ patient }: Props) {
         <dt>성별</dt>
         <dd>{patient.gender}</dd>
         <dt>나이</dt>
-        <dd>{patient.age}세</dd>
+        <dd>만 {patient.age}세</dd>
         <dt>생년월일</dt>
         <dd className="mono">{patient.birth_date}</dd>
         <dt>질환</dt>
