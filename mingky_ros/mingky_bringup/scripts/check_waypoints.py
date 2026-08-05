@@ -17,7 +17,7 @@
 
 사용:
     ./check_waypoints.py
-    ./check_waypoints.py --map ../../../pinky_map/pinky_6294/yun_map.yaml
+    ./check_waypoints.py --map ../map/archive/yun_map.yaml
     ./check_waypoints.py --tolerance 0.12 --footprint 0.06 --padding 0.03
 """
 
@@ -147,7 +147,7 @@ def main() -> int:
 
     map_yaml = args.map or find_default(
         "mingky_ros/mingky_bringup/map/yun_map_highres_clean.yaml",
-        "pinky_map/pinky_6294/yun_map.yaml",
+        "mingky_ros/mingky_bringup/map/archive/yun_map.yaml",
     )
     wp_yaml = args.waypoints or find_default(
         "mingky_ros/mingky_bringup/config/waypoints/yun_map_highres_clean_waypoints.yaml")

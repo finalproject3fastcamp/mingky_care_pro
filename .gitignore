@@ -89,6 +89,9 @@ Desktop.ini
 # Claude Code local settings
 .claude/settings.local.json
 
+# Local handoff notes for the next coding session
+/CONTEXT.md
+
 # PostgreSQL local data
 database/.env
 database/data/

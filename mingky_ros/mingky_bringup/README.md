@@ -128,10 +128,15 @@ teleop이 동시에 속도 명령을 보내지 않도록 teleop을 실행하지 
 관리하면 어느 맵 기준인지 알 수 없게 되고, 맵을 교체했을 때 조용히
 어긋납니다.
 
-이전 맵(`pinky_map/pinky_6294/yun_map.yaml`, res 0.05)에서 넘어오면서
+이전 맵(`map/archive/yun_map.yaml`, res 0.05)에서 넘어오면서
 `origin` 이 `(-0.169, -1.847)` → `(-1.818, -1.529)` 로 바뀌어 **기존 waypoint
 23개가 전부 무효**가 되었습니다. 참고용으로
-`config/waypoints/yun_map_waypoints.yaml` 에 남겼습니다.
+`config/waypoints/archive/yun_map_waypoints.yaml` 에 남겼습니다.
+
+`map/` 바로 아래에는 현재 선택 가능한 지도만 둡니다. 이전 측정본과 편집 전
+원본은 `map/archive/`에 보관하며, waypoint도 대응하는 `config/waypoints/archive/`
+에 함께 둡니다. waypoint 측정·주행 스크립트는 `archive/`를 지도 선택 목록에
+표시하지 않습니다.
 
 ## Waypoint 검증
 

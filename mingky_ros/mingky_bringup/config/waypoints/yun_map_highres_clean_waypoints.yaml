@@ -2,8 +2,8 @@
 #
 # 좌표는 맵에 종속적이다. 맵의 origin 이나 resolution 이 바뀌면 여기 값이
 # 전혀 다른 물리 위치를 가리키므로, 맵을 교체하면 전부 다시 측정해야 한다.
-# 이전 맵(pinky_map/pinky_6294/yun_map.yaml) 기준 좌표는
-# config/waypoints/yun_map_waypoints.yaml 에 참고용으로 남겼다.
+# 이전 맵(map/archive/yun_map.yaml) 기준 좌표는
+# config/waypoints/archive/yun_map_waypoints.yaml 에 참고용으로 남겼다.
 #
 # 측정
 #     ros2 run mingky_bringup run_waypoint_teleop.sh
