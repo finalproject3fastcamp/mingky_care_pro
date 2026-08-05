@@ -71,6 +71,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 | --- | --- |
 | [docs/monitoring-spec.md](docs/monitoring-spec.md) | 관제 기능 스펙과 기술 스택 결정 배경 |
 | [config/event_codes.yaml](config/event_codes.yaml) | **이벤트 코드 정본.** 발행 가능한 목록과 payload 형태 |
+| **[docs/robot-onboarding.md](docs/robot-onboarding.md)** | **로봇을 처음 쓰는 사람이 따라 하는 순서** |
 | [docs/infra-setup.md](docs/infra-setup.md) | 네트워크·도메인·시간 동기화·로봇 복구 |
 | [docs/nav2-debugging.md](docs/nav2-debugging.md) | 주행 문제 진단 순서와 파라미터 튜닝 |
 
