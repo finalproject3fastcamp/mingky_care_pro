@@ -1,0 +1,9 @@
+# 지도 해상도(0.025m)와 동일한 costmap 해상도만 시험한다.
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      resolution: 0.025
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      resolution: 0.025

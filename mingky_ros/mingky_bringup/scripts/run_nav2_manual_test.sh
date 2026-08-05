@@ -8,6 +8,9 @@ set -eo pipefail
 PINKY_IP="${PINKY_IP:-192.168.0.21}"
 PINKY_SSID="${PINKY_SSID:-}"
 PINKY_DOMAIN_ID="${PINKY_DOMAIN_ID:-21}"
+# 개발 진단 도구가 지도·합쳐진 파라미터를 넘길 때만 사용한다.
+MINGKY_MAP_PATH="${MINGKY_MAP_PATH:-}"
+NAV2_PARAMS_FILE="${NAV2_PARAMS_FILE:-}"
 
 NAV2_PID=""
 RVIZ_PID=""
@@ -176,7 +179,11 @@ MINGKY_REPO="$(resolve_repo_root)"
 MAP_DIR="${MINGKY_REPO}/mingky_ros/mingky_bringup/map"
 MAP_FILES=()
 MAP_PATH=""
-select_map
+if [[ -n "${MINGKY_MAP_PATH}" ]]; then
+  MAP_PATH="${MINGKY_MAP_PATH}"
+else
+  select_map
+fi
 
 echo "[선택] 지도: $(basename "${MAP_PATH}")"
 
@@ -227,8 +234,13 @@ if ros2 node list 2>/dev/null | grep -Fxq '/controller_server'; then
 fi
 
 echo "[실행] $(basename "${MAP_PATH}")으로 Nav2를 시작합니다."
-ros2 launch pinky_navigation bringup_launch.xml \
-  map:="${MAP_PATH}" use_composition:=False &
+NAV2_LAUNCH_ARGS=(map:="${MAP_PATH}" use_composition:=False)
+if [[ -n "${NAV2_PARAMS_FILE}" ]]; then
+  [[ -f "${NAV2_PARAMS_FILE}" ]] || fail "Nav2 파라미터 파일을 찾을 수 없습니다: ${NAV2_PARAMS_FILE}"
+  NAV2_LAUNCH_ARGS+=(params_file:="${NAV2_PARAMS_FILE}")
+  echo "[실행] Nav2 파라미터: ${NAV2_PARAMS_FILE}"
+fi
+ros2 launch pinky_navigation bringup_launch.xml "${NAV2_LAUNCH_ARGS[@]}" &
 NAV2_PID=$!
 
 wait_for_nav2 40 \

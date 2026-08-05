@@ -86,6 +86,9 @@ Desktop.ini
 *.tmp
 *.bak
 
+# Nav2 development experiment artifacts (SQLite, rosbag, exported reports)
+/artifacts/nav2_diagnostics/
+
 # Claude Code local settings
 .claude/settings.local.json
 
