@@ -137,6 +137,129 @@ bringup 앞에 넣으세요.
 chronyc waitsync 60 0.1
 ```
 
+## 개발 PC 준비 (팀원용) — 처음 한 번
+
+로봇을 쓰려는 노트북에서 아래 네 가지를 먼저 하세요.
+**하나라도 빠지면 조용히 안 됩니다.**
+
+### 1. Wi-Fi 를 `mingky` 로
+
+로봇은 `192.168.0.0/24` 안에 있습니다. FASTCAMPUS 에서는 NAT 때문에
+로봇에 직접 접속할 수 없습니다. `mingky` 는 인터넷도 됩니다.
+
+### 2. chrony — 빠뜨리기 쉽지만 필수입니다
+
+**ROS 노드를 돌리는 모든 기계가 같은 시각 기준을 봐야 합니다.**
+로봇 2대만 맞춰두면 부족합니다.
+
+AMCL 은 로봇이 보낸 스캔의 타임스탬프와 자기 TF 캐시를 비교합니다.
+PC 시계가 로봇과 어긋나면 스캔이 전부 버려지고 이런 로그가 쏟아집니다.
+
+```
+[amcl] Message Filter dropping message: frame 'rplidar_link'
+       'the timestamp on the message is earlier than all the data in the transform cache'
+       → 'discarding message because the queue is full'
+```
+
+위치추정이 아예 동작하지 않습니다.
+
+```bash
+sudo apt install -y chrony
+sudo systemctl disable --now systemd-timesyncd
+printf '\nserver 192.168.0.10 iburst minpoll 4 maxpoll 6\nmakestep 1.0 3\n' \
+  | sudo tee -a /etc/chrony/chrony.conf
+sudo systemctl restart chrony && sudo systemctl enable chrony
+
+chronyc tracking | grep -E "Reference ID|System time|Leap"
+```
+
+`Reference ID` 가 `192.168.0.10` 을 가리켜야 합니다.
+
+### 3. 빌드
+
+PC 에서는 두 패키지만 빌드합니다.
+
+```bash
+cd ~/mingky_care_pro
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths pinky mingky_ros \
+  --packages-select pinky_navigation pinky_description
+colcon build --base-paths mingky_ros
+source install/setup.bash
+```
+
+`pinky_sensor_adc` · `pinky_imu_bno055` 같은 것은 I2C 하드웨어용이라
+PC 에서 빌드하면 깨집니다. **`--base-paths pinky` 를 통째로 빌드하지 마세요.**
+
+`pinky_description` 이 없으면 RViz 에 로봇 모양이 안 나오고 mesh 에러가
+쏟아집니다. 동작에는 지장이 없지만 로그가 시끄러워 진짜 오류를 놓칩니다.
+
+`pinky_navigation` 이 없으면 localization 실행이 실패합니다.
+
+### 4. 도메인
+
+**터미널마다** 설정해야 합니다. 새 터미널을 열면 초기화됩니다.
+
+```bash
+export ROS_DOMAIN_ID=21     # pinky1 · pinky2 는 22
+```
+
+## 로봇 bringup
+
+```bash
+ssh pinky@192.168.0.21
+```
+
+**띄우기 전에 중복부터 확인하세요.**
+
+```bash
+ps aux | grep -E "sllidar|pinky_bringup" | grep -v grep
+```
+
+이미 떠 있으면 라이다 USB 포트를 잡고 있어서, 새로 띄운 쪽이
+`SL_RESULT_OPERATION_TIMEOUT` 으로 죽습니다. SSH 세션이 끊겨도 프로세스는
+남으므로 흔하게 겪습니다.
+
+```bash
+pkill -f bringup_robot.launch ; pkill -f sllidar ; sleep 3
+ros2 launch pinky_bringup bringup_robot.launch.xml
+```
+
+**launch 파일 이름은 `bringup_robot.launch.xml` 입니다.**
+`bringup.launch.py` 가 아닙니다.
+
+PC 에서 확인합니다.
+
+```bash
+export ROS_DOMAIN_ID=21
+ros2 topic list | grep -E "odom|scan|batt"
+```
+
+```
+/battery/percent
+/battery/voltage
+/odom
+/scan
+```
+
+**`/scan` 이 없으면 라이다가 죽은 것입니다.** 로봇 쪽 로그에서
+`sllidar_node` 를 확인하세요. 중복 실행이거나 전원 부족입니다.
+
+## 잘 안 될 때 확인 순서
+
+| 증상 | 원인 | 확인 |
+| --- | --- | --- |
+| `ros2 topic list` 가 비어 있음 | 도메인 불일치 | `echo $ROS_DOMAIN_ID` 를 **모든 터미널에서** |
+| `/scan` 없음 | 라이다 죽음 | 로봇에서 `ps aux \| grep sllidar` |
+| `SL_RESULT_OPERATION_TIMEOUT` | **bringup 중복 실행** | `pkill -f sllidar` 후 재시작 |
+| AMCL 이 스캔을 전부 버림 | **PC 시계 미동기화** | `chronyc tracking` |
+| `Package 'pinky_navigation' not found` | PC 에 빌드 안 됨 | 위 3번 빌드 |
+| RViz mesh 에러 다발 | `pinky_description` 빌드 안 됨 | 동작에는 무관 |
+| 로봇에 ping 안 됨 | Wi-Fi 가 `mingky` 가 아님 | `iwgetid -r` |
+| Wi-Fi·BLE 가 계속 끊김 | **저전압** | 배터리 전압 |
+
+**맨 아래 두 줄을 먼저 의심하세요.** 원인 불명 증상의 대부분입니다.
+
 ## 배터리 — 원인 불명 증상의 공통 분모
 
 ```
