@@ -4,7 +4,7 @@ project(mingky_bringup)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY launch config
+  DIRECTORY launch config map
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -13,6 +13,7 @@ install(
     scripts/run_waypoint_teleop.sh
     scripts/capture_waypoint.sh
     scripts/run_nav2_waypoint_test.sh
+    scripts/check_waypoints.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -44,11 +44,14 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 ├── omx/                     # OMX 제어·모방학습
 ├── mingky_ros/              # 프로젝트 전용 ROS2 패키지
 │   ├── mingky_interfaces/   # 공통 msg, srv, action
-│   ├── mingky_qr_reader/    # IMX219 카메라 기반 QR 인식
+│   ├── mingky_qr_reader/    # 후방 웹캠 기반 QR 인식
 │   ├── mingky_guide_manager/# 환자 안내 절차와 상태 관리
+│   ├── mingky_event_gateway/# 이벤트 전달 (로컬 큐 + 재시도)
 │   └── mingky_bringup/      # 프로젝트 통합 launch 및 설정
+├── backend/                 # FastAPI 수집·조회 서버
 ├── frontend/                # React 기반 관제 대시보드
 ├── database/                # PostgreSQL 스키마와 초기 데이터
+├── config/                  # 서비스 간 공유 설정 (event_codes.yaml)
 ├── docs/                    # 설계 문서와 다이어그램
 └── README.md
 ```
@@ -60,6 +63,17 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 | Pinky | [pinky/README.md](pinky/README.md) | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
 | OMX | [omx/README.md](omx/README.md) | [huggingface/lerobot](https://github.com/huggingface/lerobot) |
 | Mingky ROS | [mingky_ros/README.md](mingky_ros/README.md) | 프로젝트 전용 패키지 |
+| Backend | [backend/README.md](backend/README.md) | FastAPI · asyncpg |
+
+운영·디버깅 문서
+
+| 문서 | 내용 |
+| --- | --- |
+| [docs/monitoring-spec.md](docs/monitoring-spec.md) | 관제 기능 스펙과 기술 스택 결정 배경 |
+| [config/event_codes.yaml](config/event_codes.yaml) | **이벤트 코드 정본.** 발행 가능한 목록과 payload 형태 |
+| **[docs/robot-onboarding.md](docs/robot-onboarding.md)** | **로봇을 처음 쓰는 사람이 따라 하는 순서** |
+| [docs/infra-setup.md](docs/infra-setup.md) | 네트워크·도메인·시간 동기화·로봇 복구 |
+| [docs/nav2-debugging.md](docs/nav2-debugging.md) | 주행 문제 진단 순서와 파라미터 튜닝 |
 
 ## 5. 개발 환경
 
