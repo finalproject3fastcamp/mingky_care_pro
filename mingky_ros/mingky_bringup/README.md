@@ -4,9 +4,28 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 
 ## Waypoint 측정 준비
 
-Pinky에서 `pinky_bringup`이 실행 중이어야 합니다. PC는 `pinky_6294` Wi-Fi에
-연결되어 있어야 하며, 기본 설정은 Pinky IP `192.168.4.1`, ROS Domain ID
-`21`입니다.
+Pinky에서 `pinky_bringup`이 실행 중이어야 합니다.
+
+기본 설정은 로봇이 공유기(`mingky`)에 붙어 있는 상태입니다.
+
+| 항목 | 기본값 |
+| --- | --- |
+| Pinky IP | `192.168.0.21` (pinky1) |
+| ROS Domain ID | `21` |
+| Wi-Fi SSID 검사 | 하지 않음 |
+
+SSID 를 강제하지 않는 이유는 관제컴퓨터처럼 유선으로 붙는 경우도 있기
+때문입니다. **실제로 `ping` 이 닿는지만 봅니다.**
+
+pinky2 로 작업하거나 AP 모드로 직접 붙는 경우는 환경변수로 바꿉니다.
+
+```bash
+# pinky2
+PINKY_IP=192.168.0.22 PINKY_DOMAIN_ID=22 ros2 run mingky_bringup run_waypoint_teleop.sh
+
+# AP 모드로 직접 접속했을 때
+PINKY_IP=192.168.4.1 PINKY_SSID=pinky_6294 ros2 run mingky_bringup run_waypoint_teleop.sh
+```
 
 프로젝트를 빌드하고 환경을 불러옵니다.
 
@@ -55,12 +74,30 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 
 기본값을 변경해야 할 때 다음 환경 변수를 사용할 수 있습니다.
 
-- `PINKY_IP`: Pinky IP, 기본값 `192.168.4.1`
-- `PINKY_SSID`: Pinky Wi-Fi SSID, 기본값 `pinky_6294`
+- `PINKY_IP`: Pinky IP, 기본값 `192.168.0.21`
+- `PINKY_SSID`: 지정하면 그 SSID 에 연결됐는지 검사한다. 기본값 없음(검사 안 함)
 - `PINKY_DOMAIN_ID`: ROS Domain ID, 기본값 `21`
-- `MAP_PATH`: 지도 YAML 경로
+- `MAP_PATH`: 지도 YAML 경로 (기본 `map/yun_map_highres_clean.yaml`)
 - `WAYPOINT_FILE`: waypoint 출력 YAML 경로
 - `MINGKY_REPO`: 자동 탐색 대신 사용할 저장소 루트 경로
+
+## 맵
+
+기준 맵은 `map/yun_map_highres_clean.yaml` 입니다.
+
+```
+192 x 147 px   resolution 0.025   origin (-1.818, -1.529)
+범위 x[-1.818, 2.982]  y[-1.529, 2.146]   = 4.80 x 3.68 m
+```
+
+**맵과 waypoint 는 같은 패키지에 둡니다.** 좌표가 맵에 종속적이라 따로
+관리하면 어느 맵 기준인지 알 수 없게 되고, 맵을 교체했을 때 조용히
+어긋납니다.
+
+이전 맵(`pinky_map/pinky_6294/yun_map.yaml`, res 0.05)에서 넘어오면서
+`origin` 이 `(-0.169, -1.847)` → `(-1.818, -1.529)` 로 바뀌어 **기존 waypoint
+23개가 전부 무효**가 되었습니다. 참고용으로
+`config/hospital_waypoints.legacy-yun_map.yaml` 에 남겼습니다.
 
 ## Waypoint 검증
 
@@ -78,6 +115,32 @@ ros2 run mingky_bringup check_waypoints.py
 **2. waypoint 사이 간격** — 두 지점이 `xy_goal_tolerance` 지름보다 가까우면,
 한쪽에 서 있는 상태에서 다른 쪽으로 보내도 이미 도착 조건을 만족해
 **로봇이 움직이지 않고 즉시 성공을 반환합니다.**
+
+### 찍기 전에 확인하기
+
+측정한 뒤에 틀린 걸 알면 다시 찍어야 합니다. **찍기 전에 현재 자리가
+쓸 만한지 먼저 보세요.**
+
+```bash
+ros2 run mingky_bringup check_waypoints.py --probe
+```
+
+```
+현재 위치  x=1.300  y=-1.350
+벽까지     0.212m  ○ 좋습니다.
+가장 가까운 기존 waypoint  reception_goal  0.641m  ○
+
+여기서 찍어도 됩니다.
+```
+
+벽까지 거리와 **이미 찍은 waypoint 와의 간격**을 함께 봅니다.
+너무 가까우면 두 지점을 구분하지 못해 로봇이 움직이지 않습니다.
+
+좌표를 직접 넣어 확인할 수도 있습니다.
+
+```bash
+ros2 run mingky_bringup check_waypoints.py --at 1.30 -1.35
+```
 
 ```bash
 # 다른 맵으로 검사

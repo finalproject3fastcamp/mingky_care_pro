@@ -76,9 +76,25 @@ def occupied_cells(map_yaml: Path):
     return cells, meta, (width, height), extent
 
 
-def find_default(name: str, *relative: str) -> Path | None:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
+def find_default(*relative: str) -> Path | None:
+    """설치된 패키지 share 를 먼저 보고, 없으면 소스 트리를 거슬러 올라간다.
+
+    ros2 run 으로 실행하면 이 파일이 install/.../lib 에 있어서 소스 트리
+    탐색만으로는 map/ 과 config/ 을 찾지 못한다.
+    """
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share = Path(get_package_share_directory("mingky_bringup"))
+        for rel in relative:
+            candidate = share / Path(rel).relative_to("mingky_ros/mingky_bringup") \
+                if rel.startswith("mingky_ros/mingky_bringup/") else share / rel
+            if candidate.is_file():
+                return candidate
+    except Exception:
+        pass
+
+    for parent in Path(__file__).resolve().parents:
         for rel in relative:
             candidate = parent / rel
             if candidate.is_file():
@@ -86,9 +102,37 @@ def find_default(name: str, *relative: str) -> Path | None:
     return None
 
 
+def current_pose(timeout: float = 5.0):
+    """/amcl_pose 를 한 건 읽어 (x, y) 를 돌려준다. ROS 환경에서만 동작한다."""
+    import rclpy
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+    rclpy.init()
+    node = Node("waypoint_probe")
+    box = {}
+    qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    node.create_subscription(
+        PoseWithCovarianceStamped, "/amcl_pose",
+        lambda m: box.setdefault("p", (m.pose.pose.position.x, m.pose.pose.position.y)),
+        qos)
+    deadline = node.get_clock().now().nanoseconds + int(timeout * 1e9)
+    while "p" not in box and node.get_clock().now().nanoseconds < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+    node.destroy_node()
+    rclpy.try_shutdown()
+    return box.get("p")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--probe", action="store_true",
+                   help="현재 /amcl_pose 위치를 검사한다. 찍기 전에 확인용")
+    p.add_argument("--at", nargs=2, type=float, metavar=("X", "Y"),
+                   help="좌표를 직접 주고 검사한다")
     p.add_argument("--map", type=Path, help="맵 yaml 경로")
     p.add_argument("--waypoints", type=Path, help="waypoint yaml 경로")
     p.add_argument("--footprint", type=float, default=0.06,
@@ -102,20 +146,58 @@ def main() -> int:
     args = p.parse_args()
 
     map_yaml = args.map or find_default(
-        "map",
         "mingky_ros/mingky_bringup/map/yun_map_highres_clean.yaml",
         "pinky_map/pinky_6294/yun_map.yaml",
     )
     wp_yaml = args.waypoints or find_default(
-        "waypoints", "mingky_ros/mingky_bringup/config/hospital_waypoints.yaml")
+        "mingky_ros/mingky_bringup/config/hospital_waypoints.yaml")
 
     if map_yaml is None or wp_yaml is None:
         return print("맵 또는 waypoint 파일을 찾지 못했습니다. --map / --waypoints 로 지정하세요.") or 2
 
     cells, meta, (w, h), (x0, x1, y0, y1) = occupied_cells(map_yaml)
-    waypoints = yaml.safe_load(wp_yaml.read_text())["waypoints"]
+    waypoints = yaml.safe_load(wp_yaml.read_text())["waypoints"] or {}
 
     blocked = args.footprint + args.padding
+
+    # --- 찍기 전 확인 모드 ---
+    if args.probe or args.at:
+        point = tuple(args.at) if args.at else current_pose()
+        if point is None:
+            print("/amcl_pose 를 받지 못했습니다. localization 이 떠 있는지,")
+            print("2D Pose Estimate 로 초기 위치를 찍었는지 확인하세요.")
+            return 2
+
+        print(f"현재 위치  x={point[0]:.3f}  y={point[1]:.3f}")
+        if not (x0 <= point[0] <= x1 and y0 <= point[1] <= y1):
+            print("  ✗ 맵 밖입니다. 위치추정이 틀렸을 가능성이 큽니다.")
+            return 1
+
+        dist = min(math.dist(point, c) for c in cells)
+        print(f"벽까지     {dist:.3f}m", end="  ")
+        if dist < blocked:
+            print(f"✗ 도달 불가 ({blocked:.2f}m 미만). 벽에서 더 떨어지세요.")
+        elif dist < args.margin:
+            print(f"△ 여유 부족 (권장 {args.margin:.2f}m). 조금 더 떨어지는 게 좋습니다.")
+        else:
+            print("○ 좋습니다.")
+
+        if waypoints:
+            near = sorted(
+                (math.dist(point, (float(v["x"]), float(v["y"]))), k)
+                for k, v in waypoints.items())
+            gap, name = near[0]
+            print(f"가장 가까운 기존 waypoint  {name}  {gap:.3f}m", end="  ")
+            if gap < args.tolerance * 2:
+                print(f"✗ 너무 가깝습니다 (판정 원 지름 {args.tolerance*2:.2f}m).")
+                print("   여기서 찍으면 두 지점을 구분하지 못해 로봇이 안 움직입니다.")
+            else:
+                print("○")
+
+        ok = dist >= args.margin and (
+            not waypoints or near[0][0] >= args.tolerance * 2)
+        print("\n" + ("여기서 찍어도 됩니다." if ok else "위치를 옮기세요."))
+        return 0 if ok else 1
 
     print(f"맵        {map_yaml}")
     print(f"          {w}x{h}px  res={meta['resolution']}  "
