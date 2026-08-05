@@ -1,0 +1,11 @@
+# 벽 주변의 비용 영향 범위만 0.20m로 넓혀 시험한다.
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      inflation_layer:
+        inflation_radius: 0.20
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      inflation_layer:
+        inflation_radius: 0.20
