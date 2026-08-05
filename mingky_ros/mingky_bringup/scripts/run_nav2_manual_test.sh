@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
 
+# 저장 waypoint 없이 RViz에서 Nav2 Goal을 직접 찍어 실주행을 시험한다.
 set -eo pipefail
 
-# 로봇이 공유기(mingky)에 붙어 있는 상태를 기본으로 한다.
-# AP 모드(pinky_XXXX, 192.168.4.1)로 직접 붙어 작업하려면 환경변수로 덮어쓴다.
+# 로봇이 공유기(mingky)에 연결된 구성을 기본으로 사용한다.
+# AP 모드로 직접 연결할 때만 PINKY_IP와 PINKY_SSID를 지정한다.
 PINKY_IP="${PINKY_IP:-192.168.0.21}"
-PINKY_SSID="${PINKY_SSID:-}"          # 비우면 SSID 검사를 건너뛴다
+PINKY_SSID="${PINKY_SSID:-}"
 PINKY_DOMAIN_ID="${PINKY_DOMAIN_ID:-21}"
 
-LOCALIZATION_PID=""
+NAV2_PID=""
 RVIZ_PID=""
-SESSION_FILE=""
 CLEANED_UP=false
+
+usage() {
+  cat <<'EOF'
+사용법:
+  run_nav2_manual_test.sh
+
+옵션:
+  -h, --help  도움말 출력
+
+지도를 선택한 뒤 RViz의 Nav2 Goal 도구로 목표 위치와 방향을 직접 지정합니다.
+EOF
+}
 
 fail() {
   echo "[실패] $1" >&2
@@ -35,21 +47,21 @@ cleanup() {
   fi
   CLEANED_UP=true
 
-  if [[ -n "${SESSION_FILE}" && -f "${SESSION_FILE}" ]]; then
-    rm -f -- "${SESSION_FILE}"
+  if [[ -z "${RVIZ_PID}" && -z "${NAV2_PID}" ]]; then
+    return
   fi
 
   echo
-  echo "[정리] waypoint 작업용 RViz와 localization을 종료합니다."
+  echo "[정리] RViz와 Nav2를 종료합니다."
 
   if [[ -n "${RVIZ_PID}" ]] && kill -0 "${RVIZ_PID}" 2>/dev/null; then
     kill -INT "${RVIZ_PID}" 2>/dev/null || true
     wait "${RVIZ_PID}" 2>/dev/null || true
   fi
 
-  if [[ -n "${LOCALIZATION_PID}" ]] && kill -0 "${LOCALIZATION_PID}" 2>/dev/null; then
-    kill -INT "${LOCALIZATION_PID}" 2>/dev/null || true
-    wait "${LOCALIZATION_PID}" 2>/dev/null || true
+  if [[ -n "${NAV2_PID}" ]] && kill -0 "${NAV2_PID}" 2>/dev/null; then
+    kill -INT "${NAV2_PID}" 2>/dev/null || true
+    wait "${NAV2_PID}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -79,6 +91,46 @@ wait_for_publisher() {
   return 1
 }
 
+wait_for_nav2() {
+  local timeout_seconds="${1:-40}"
+  local elapsed=0
+  local state=""
+
+  while ((elapsed < timeout_seconds)); do
+    state="$(ros2 lifecycle get /controller_server 2>/dev/null || true)"
+    if [[ "${state}" == active* ]] \
+      && ros2 action list 2>/dev/null | grep -Fxq '/navigate_to_pose'; then
+      echo "[확인] Nav2 controller와 /navigate_to_pose가 활성화되었습니다."
+      return 0
+    fi
+    sleep 1
+    ((elapsed += 1))
+  done
+
+  return 1
+}
+
+wait_for_transform() {
+  local source_frame="$1"
+  local target_frame="$2"
+  local timeout_seconds="${3:-15}"
+  local elapsed=0
+  local output=""
+
+  while ((elapsed < timeout_seconds)); do
+    output="$(timeout 2 ros2 run tf2_ros tf2_echo \
+      "${source_frame}" "${target_frame}" 2>/dev/null || true)"
+    if grep -Fq 'Translation:' <<<"${output}"; then
+      echo "[확인] TF: ${source_frame} → ${target_frame}"
+      return 0
+    fi
+    sleep 1
+    ((elapsed += 1))
+  done
+
+  return 1
+}
+
 select_map() {
   local selection index
 
@@ -86,45 +138,47 @@ select_map() {
   ((${#MAP_FILES[@]} > 0)) || fail "선택할 지도 YAML이 없습니다: ${MAP_DIR}"
 
   echo
-  echo "================ waypoint 측정 지도 선택 ================"
+  echo "================ 일반 Nav2 주행 지도 선택 ================"
   for index in "${!MAP_FILES[@]}"; do
     printf '[%d] %s\n' "$((index + 1))" "$(basename "${MAP_FILES[index]}")"
   done
   echo "[q] 종료"
-  echo "========================================================="
+  echo "==========================================================="
 
   while true; do
-    read -r -p "측정할 지도 번호를 선택하세요: " selection
+    read -r -p "주행할 지도 번호를 선택하세요: " selection
     [[ "${selection}" == "q" || "${selection}" == "Q" ]] && exit 0
     if [[ "${selection}" =~ ^[0-9]+$ ]] \
       && ((selection >= 1 && selection <= ${#MAP_FILES[@]})); then
       MAP_PATH="${MAP_FILES[selection - 1]}"
-      MAP_NAME="$(basename "${MAP_PATH}" .yaml)"
-      WAYPOINT_FILE="${WAYPOINT_DIR}/${MAP_NAME}_waypoints.yaml"
       return
     fi
     echo "[안내] 1~${#MAP_FILES[@]} 사이의 번호 또는 q를 입력하세요."
   done
 }
 
+while (($# > 0)); do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "알 수 없는 옵션입니다: $1"
+      ;;
+  esac
+done
+
 MINGKY_REPO="$(resolve_repo_root)"
 [[ -n "${MINGKY_REPO}" ]] \
   || fail "저장소 경로를 찾을 수 없습니다. MINGKY_REPO 환경 변수를 지정하세요."
 
 MAP_DIR="${MINGKY_REPO}/mingky_ros/mingky_bringup/map"
-WAYPOINT_DIR="${MINGKY_REPO}/mingky_ros/mingky_bringup/config/waypoints"
-SESSION_FILE="/tmp/mingky_waypoint_session_${PINKY_DOMAIN_ID}.txt"
 MAP_FILES=()
 MAP_PATH=""
-MAP_NAME=""
-WAYPOINT_FILE=""
-
 select_map
-mkdir -p "${WAYPOINT_DIR}"
-umask 077
-printf '%s\n%s\n' "${MAP_PATH}" "${WAYPOINT_FILE}" >"${SESSION_FILE}"
+
 echo "[선택] 지도: $(basename "${MAP_PATH}")"
-echo "[선택] waypoint 파일: $(basename "${WAYPOINT_FILE}")"
 
 [[ -f /opt/ros/jazzy/setup.bash ]] \
   || fail "ROS 2 Jazzy setup 파일을 찾을 수 없습니다."
@@ -135,9 +189,9 @@ echo "[선택] waypoint 파일: $(basename "${WAYPOINT_FILE}")"
 
 command -v ping >/dev/null 2>&1 \
   || fail "ping 명령을 찾을 수 없습니다."
+command -v timeout >/dev/null 2>&1 \
+  || fail "timeout 명령을 찾을 수 없습니다."
 
-# SSID 검사는 PINKY_SSID 를 지정했을 때만 한다.
-# 관제컴퓨터처럼 유선으로 붙는 경우도 있어 무선 SSID 를 강제하지 않는다.
 if [[ -n "${PINKY_SSID}" ]]; then
   CURRENT_SSID="$(iwgetid -r 2>/dev/null || true)"
   [[ "${CURRENT_SSID}" == "${PINKY_SSID}" ]] \
@@ -145,11 +199,11 @@ if [[ -n "${PINKY_SSID}" ]]; then
   echo "[확인] Wi-Fi: ${CURRENT_SSID}"
 fi
 
-# 실제로 닿는지가 기준이다. 어떤 경로로 붙었는지는 상관없다.
 ping -c 1 -W 2 "${PINKY_IP}" >/dev/null 2>&1 \
   || fail "Pinky(${PINKY_IP})에 연결할 수 없습니다. PINKY_IP 환경변수로 주소를 바꿀 수 있습니다."
 echo "[확인] Pinky 응답: ${PINKY_IP}"
 
+# setup.bash는 정의되지 않은 변수를 참조할 수 있으므로 set -u 전에 불러온다.
 # shellcheck disable=SC1091
 source /opt/ros/jazzy/setup.bash
 # shellcheck disable=SC1090
@@ -157,7 +211,8 @@ source "${MINGKY_REPO}/install/setup.bash"
 set -u
 
 export ROS_DOMAIN_ID="${PINKY_DOMAIN_ID}"
-export ROS_LOCALHOST_ONLY=0
+unset ROS_LOCALHOST_ONLY
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 
 ros2 daemon stop >/dev/null 2>&1 || true
 ros2 daemon start >/dev/null
@@ -167,27 +222,19 @@ wait_for_publisher /odom 15 \
 wait_for_publisher /scan 15 \
   || fail "/scan publisher가 없습니다. Pinky LiDAR와 bringup을 확인하세요."
 
-ros2 pkg executables teleop_twist_keyboard 2>/dev/null \
-  | grep -q 'teleop_twist_keyboard' \
-  || fail "teleop_twist_keyboard 패키지를 찾을 수 없습니다."
-
-echo "[실행] 지도 서버와 AMCL localization을 시작합니다."
-ros2 launch pinky_navigation localization_launch.xml \
-  map:="${MAP_PATH}" use_composition:=False &
-LOCALIZATION_PID=$!
-
-wait_for_publisher /map 15 \
-  || fail "/map publisher가 시작되지 않았습니다. 위 localization 로그를 확인하세요."
-
-if ! kill -0 "${LOCALIZATION_PID}" 2>/dev/null; then
-  wait "${LOCALIZATION_PID}" || true
-  LOCALIZATION_PID=""
-  fail "localization이 시작 직후 종료되었습니다."
+if ros2 node list 2>/dev/null | grep -Fxq '/controller_server'; then
+  fail "이미 /controller_server가 실행 중입니다. 기존 Nav2를 먼저 종료하세요."
 fi
 
-echo "[실행] waypoint 작업용 RViz를 시작합니다."
-# nav2_view의 Map display는 map_server의 일회성 지도를 받을 수 있도록
-# Transient Local QoS로 설정되어 있다. 전체 Nav2 노드는 실행하지 않는다.
+echo "[실행] $(basename "${MAP_PATH}")으로 Nav2를 시작합니다."
+ros2 launch pinky_navigation bringup_launch.xml \
+  map:="${MAP_PATH}" use_composition:=False &
+NAV2_PID=$!
+
+wait_for_nav2 40 \
+  || fail "Nav2가 제한 시간 안에 활성화되지 않았습니다. 위 로그를 확인하세요."
+
+echo "[실행] Nav2 RViz를 시작합니다."
 ros2 launch pinky_navigation nav2_view.launch.xml &
 RVIZ_PID=$!
 sleep 3
@@ -202,19 +249,22 @@ cat <<'EOF'
 
 ============================================================
 1. RViz의 '2D Pose Estimate'로 실제 로봇 위치와 방향을 지정하세요.
-2. 키보드 teleop으로 원하는 waypoint까지 이동하세요.
-3. 키에서 손을 떼어 로봇을 정지하세요.
-4. 다른 터미널에서 다음 명령으로 현재 위치를 저장하세요.
+2. 지도와 LaserScan이 실제 환경에 맞는지 확인하세요.
+3. 이 터미널에서 Enter를 눌러 TF 연결을 확인하세요.
+4. RViz 상단의 'Nav2 Goal'을 선택합니다.
+5. 지도에서 목표 위치를 클릭한 뒤, 드래그하여 도착 방향을 지정합니다.
 
-   ros2 run mingky_bringup capture_waypoint.sh <waypoint_name>
-
-   현재 지도 전용 파일에 자동 저장됩니다.
-
-teleop과 이 세션을 종료하려면 Ctrl+C를 누르세요.
+목표를 바꿔 여러 번 시험할 수 있습니다.
+주행 중에는 teleop을 함께 실행하지 마세요.
+종료하려면 RViz를 닫거나 이 터미널에서 Ctrl+C를 누르세요.
 ============================================================
 
 EOF
+read -r -p "초기 위치 설정을 마쳤으면 Enter를 누르세요: "
 
-echo "[안내] 저장 파일: ${MAP_NAME}_waypoints.yaml"
+wait_for_transform map base_footprint 15 \
+  || fail "map → base_footprint TF가 없습니다. RViz에서 2D Pose Estimate를 다시 지정하세요."
 
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+echo "[준비 완료] RViz의 Nav2 Goal 도구로 자유롭게 목표를 지정하세요."
+wait "${RVIZ_PID}" || true
+RVIZ_PID=""

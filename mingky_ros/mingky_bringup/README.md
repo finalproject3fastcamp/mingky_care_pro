@@ -41,6 +41,9 @@ source install/setup.bash
 ros2 run mingky_bringup run_waypoint_teleop.sh
 ```
 
+실행하면 `map/` 아래의 지도 목록이 표시됩니다. 선택한 `map_name.yaml`에 대해
+waypoint는 `config/waypoints/map_name_waypoints.yaml`으로 관리됩니다.
+
 이 명령은 전체 Nav2 주행 스택 대신 다음 구성요소만 실행합니다.
 
 - `map_server`
@@ -67,8 +70,60 @@ ros2 run mingky_bringup capture_waypoint.sh <waypoint_name>
 ros2 run mingky_bringup capture_waypoint.sh reception_goal
 ```
 
-좌표는 `config/hospital_waypoints.yaml`에 `x`, `y`, `yaw` 형식으로 추가됩니다.
-같은 이름이 이미 존재하면 기존 좌표를 덮어쓰지 않고 중단합니다.
+좌표는 측정 세션에서 선택한 지도 전용 파일
+`config/waypoints/<map_name>_waypoints.yaml`에 `x`, `y`, `yaw` 형식으로
+추가됩니다. 같은 이름이 이미 존재하면 기존 좌표를 덮어쓰지 않고 중단합니다.
+
+## 일반 Nav2 실주행 테스트 (RViz 직접 목표 지정)
+
+저장 waypoint 없이, 지도 위 원하는 위치를 직접 클릭해 Nav2 주행을 시험할 때
+사용합니다.
+
+```bash
+ros2 run mingky_bringup run_nav2_manual_test.sh
+```
+
+지도 선택 후 RViz에서 다음 순서로 진행합니다.
+
+1. `2D Pose Estimate`로 로봇의 실제 초기 위치와 방향을 지정합니다.
+2. 터미널에서 Enter를 눌러 `map → base_footprint` TF 연결을 확인합니다.
+3. RViz의 `Nav2 Goal` 도구로 지도 위 목표 위치를 클릭하고, 드래그하여
+   도착 방향을 지정합니다.
+
+목표를 자유롭게 바꿔가며 costmap, 경로, 주행 동작을 확인할 수 있습니다.
+이 스크립트도 `map/` 바로 아래의 지도만 선택 목록에 표시합니다.
+
+## 저장된 waypoint Nav2 실주행 테스트
+
+Pinky에서 `pinky_bringup`이 실행 중인 상태에서 Nav2와 RViz를 실행합니다.
+
+```bash
+ros2 run mingky_bringup run_nav2_waypoint_test.sh
+```
+
+RViz가 열리면 `2D Pose Estimate`로 실제 로봇의 초기 위치와 방향을 지정하고,
+터미널의 한국어 메뉴에서 이동할 waypoint를 선택합니다. 주행이 성공하면 다시
+메뉴가 표시되므로 가까운 두 waypoint를 연속으로 선택해 tolerance별 동작을
+비교할 수 있습니다.
+
+도착 허용 오차와 costmap 값은 스크립트에서 변경하지 않습니다. 설정 파일을
+수정하거나 실행 중 RQT에서 조정한 다음 동일한 스크립트로 주행을 비교합니다.
+
+```bash
+ros2 run rqt_reconfigure rqt_reconfigure
+```
+
+실행 시 주행할 지도를 선택하면 대응하는
+`config/waypoints/<map_name>_waypoints.yaml`을 자동 사용합니다.
+
+```bash
+ros2 run mingky_bringup run_nav2_waypoint_test.sh
+```
+
+스크립트는 이전에 성공한 waypoint와 새 목표 사이의 저장 좌표 거리 및 방향
+차이를 계산합니다. 두 값이 현재 tolerance 안쪽이면 즉시 성공 가능성을, 위치만
+안쪽이면 제자리 회전 가능성을 주행 전에 경고합니다. 테스트 중에는 Nav2와
+teleop이 동시에 속도 명령을 보내지 않도록 teleop을 실행하지 않습니다.
 
 ## 환경 변수
 
@@ -77,8 +132,6 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 - `PINKY_IP`: Pinky IP, 기본값 `192.168.0.21`
 - `PINKY_SSID`: 지정하면 그 SSID 에 연결됐는지 검사한다. 기본값 없음(검사 안 함)
 - `PINKY_DOMAIN_ID`: ROS Domain ID, 기본값 `21`
-- `MAP_PATH`: 지도 YAML 경로 (기본 `map/yun_map_highres_clean.yaml`)
-- `WAYPOINT_FILE`: waypoint 출력 YAML 경로
 - `MINGKY_REPO`: 자동 탐색 대신 사용할 저장소 루트 경로
 
 ## 맵
@@ -94,10 +147,15 @@ ros2 run mingky_bringup capture_waypoint.sh reception_goal
 관리하면 어느 맵 기준인지 알 수 없게 되고, 맵을 교체했을 때 조용히
 어긋납니다.
 
-이전 맵(`pinky_map/pinky_6294/yun_map.yaml`, res 0.05)에서 넘어오면서
+이전 맵(`map/archive/yun_map.yaml`, res 0.05)에서 넘어오면서
 `origin` 이 `(-0.169, -1.847)` → `(-1.818, -1.529)` 로 바뀌어 **기존 waypoint
 23개가 전부 무효**가 되었습니다. 참고용으로
-`config/hospital_waypoints.legacy-yun_map.yaml` 에 남겼습니다.
+`config/waypoints/archive/yun_map_waypoints.yaml` 에 남겼습니다.
+
+`map/` 바로 아래에는 현재 선택 가능한 지도만 둡니다. 이전 측정본과 편집 전
+원본은 `map/archive/`에 보관하며, waypoint도 대응하는 `config/waypoints/archive/`
+에 함께 둡니다. waypoint 측정·주행 스크립트는 `archive/`를 지도 선택 목록에
+표시하지 않습니다.
 
 ## Waypoint 검증
 

@@ -35,7 +35,21 @@ MINGKY_REPO="$(resolve_repo_root)"
 [[ -n "${MINGKY_REPO}" ]] \
   || fail "저장소 경로를 찾을 수 없습니다. MINGKY_REPO 환경 변수를 지정하세요."
 
-OUTPUT_FILE="${WAYPOINT_FILE:-${MINGKY_REPO}/mingky_ros/mingky_bringup/config/hospital_waypoints.yaml}"
+SESSION_FILE="/tmp/mingky_waypoint_session_${PINKY_DOMAIN_ID}.txt"
+[[ -r "${SESSION_FILE}" ]] \
+  || fail "waypoint 측정 세션을 찾지 못했습니다. 먼저 run_waypoint_teleop.sh를 실행하세요."
+
+mapfile -t SESSION_VALUES <"${SESSION_FILE}"
+MAP_PATH="${SESSION_VALUES[0]:-}"
+OUTPUT_FILE="${SESSION_VALUES[1]:-}"
+WAYPOINT_DIR="${MINGKY_REPO}/mingky_ros/mingky_bringup/config/waypoints"
+
+[[ -f "${MAP_PATH}" ]] \
+  || fail "측정 세션의 지도 파일을 찾지 못했습니다: ${MAP_PATH:-없음}"
+case "${OUTPUT_FILE}" in
+  "${WAYPOINT_DIR}"/*_waypoints.yaml) ;;
+  *) fail "측정 세션의 waypoint 파일 경로가 올바르지 않습니다." ;;
+esac
 
 [[ -f /opt/ros/jazzy/setup.bash ]] \
   || fail "ROS 2 Jazzy setup 파일을 찾을 수 없습니다."
@@ -72,7 +86,8 @@ read -r X Y _ <<<"${TRANSLATION_VALUES}"
 read -r _ _ YAW <<<"${RPY_VALUES}"
 
 if [[ ! -f "${OUTPUT_FILE}" ]]; then
-  printf 'waypoints:\n' >"${OUTPUT_FILE}"
+  mkdir -p "${WAYPOINT_DIR}"
+  printf '# 지도: %s\nwaypoints:\n' "$(basename "${MAP_PATH}")" >"${OUTPUT_FILE}"
 fi
 
 {
@@ -86,4 +101,5 @@ echo "[저장 완료] ${WAYPOINT_NAME}"
 echo "  x: ${X}"
 echo "  y: ${Y}"
 echo "  yaw: ${YAW}"
+echo "  지도: $(basename "${MAP_PATH}")"
 echo "  파일: ${OUTPUT_FILE}"

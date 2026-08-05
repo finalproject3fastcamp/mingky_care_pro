@@ -12,6 +12,8 @@ install(
   PROGRAMS
     scripts/run_waypoint_teleop.sh
     scripts/capture_waypoint.sh
+    scripts/run_nav2_manual_test.sh
+    scripts/run_nav2_waypoint_test.sh
     scripts/check_waypoints.py
   DESTINATION lib/${PROJECT_NAME}
 )
