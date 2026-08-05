@@ -1,116 +1,55 @@
-waypoints:
-  # 약국 대기 위치
-  pharmacy_waiting:
-    x: 0.669
-    y: 1.257
-    yaw: -3.127
-  # 접수·수납 공용 대기 위치
-  reception_payment_waiting:
-    x: 0.078
-    y: 0.965
-    yaw: 1.543
-  # 접수처 안내 목표 위치
-  reception_goal:
-    x: 0.240
-    y: 1.049
-    yaw: -1.619
-  # 수납 창구 안내 목표 위치
-  payment_goal:
-    x: 0.390
-    y: 1.077
-    yaw: -1.597
-  # 약국 안내 목표 위치
-  pharmacy_goal:
-    x: 0.699
-    y: 1.035
-    yaw: 0.023
-  # 화장실 대기 위치
-  restroom_waiting:
-    x: 0.551
-    y: 0.070
-    yaw: 1.559
-  # 화장실 안내 목표 위치
-  restroom_goal:
-    x: 0.573
-    y: 0.233
-    yaw: -1.491
-  # 충전 위치 1
-  charging_station_1:
-    x: 0.283
-    y: 0.016
-    yaw: 1.568
-  # 충전 위치 2
-  charging_station_2:
-    x: 0.025
-    y: 0.016
-    yaw: 0.014
-  # 물리치료실 안내 목표 위치
-  physical_therapy_goal:
-    x: 1.415
-    y: 0.393
-    yaw: 0.091
-  # 물리치료실 대기 위치
-  physical_therapy_waiting:
-    x: 1.470
-    y: 0.209
-    yaw: -2.969
-  # 진료실 안내 목표 위치
-  treatment_room_goal:
-    x: 1.407
-    y: -0.190
-    yaw: 0.049
-  # 진료실 대기 위치
-  treatment_room_waiting:
-    x: 1.494
-    y: -0.366
-    yaw: 3.106
-  # X-ray실 안내 목표 위치
-  xray_room_goal:
-    x: 1.531
-    y: -0.665
-    yaw: 0.006
-  # X-ray실 대기 위치
-  xray_room_waiting:
-    x: 1.534
-    y: -0.927
-    yaw: 3.140
-  # CT실 대기 위치
-  ct_room_waiting:
-    x: 1.532
-    y: -1.400
-    yaw: -3.079
-  # CT실 안내 목표 위치
-  ct_room_goal:
-    x: 1.479
-    y: -1.541
-    yaw: 0.023
-  # 병동 안내 목표 위치
-  ward_goal:
-    x: 0.969
-    y: -1.553
-    yaw: -3.121
-  # 병동 대기 위치
-  ward_waiting:
-    x: 0.864
-    y: -1.446
-    yaw: -0.017
-  # MRI실 안내 목표 위치
-  mri_room_goal:
-    x: 0.839
-    y: -1.001
-    yaw: -3.126
-  # MRI실 대기 위치
-  mri_room_waiting:
-    x: 0.834
-    y: -0.806
-    yaw: -0.013
-  # 임상병리실 안내 목표 위치
-  clinical_pathology_room_goal:
-    x: 0.874
-    y: -0.495
-    yaw: -3.106
-  # 임상병리실 대기 위치
-  clinical_pathology_room_waiting:
-    x: 0.788
-    y: -0.402
-    yaw: 0.062
+# 병원 waypoint. 기준 맵은 map/yun_map_highres_clean.yaml 이다.
+#
+# 좌표는 맵에 종속적이다. 맵의 origin 이나 resolution 이 바뀌면 여기 값이
+# 전혀 다른 물리 위치를 가리키므로, 맵을 교체하면 전부 다시 측정해야 한다.
+# 이전 맵(pinky_map/pinky_6294/yun_map.yaml) 기준 좌표는
+# hospital_waypoints.legacy-yun_map.yaml 에 참고용으로 남겼다.
+#
+# 측정
+#     ros2 run mingky_bringup run_waypoint_teleop.sh
+#     ros2 run mingky_bringup capture_waypoint.sh <이름>
+#
+# 검증 (측정 후 반드시)
+#     ros2 run mingky_bringup check_waypoints.py
+#
+# 기준
+#     벽에서 최소            0.15 m
+#     서로 다른 목적지 간     0.30 m 이상
+#     충전소                 도킹 지점이 아니라 앞 0.3 m
+#
+# 벽에 0.09 m 보다 가까우면 planner 가 도달하지 못한다. 그런데 NavFn 의
+# tolerance 가 '근처까지만' 경로를 그려주기 때문에 에러 없이 조용히 실패하고,
+# 로봇은 목표 앞에서 좌우로 회전하다 멈춘다.
+
+waypoints: {}
+
+# 재측정 체크리스트 (이전 맵 기준 이름)
+#
+#   [ ] reception_goal
+#   [ ] payment_goal
+#   [ ] reception_payment_waiting
+#   [ ] pharmacy_goal
+#   [ ] pharmacy_waiting
+#   [ ] treatment_room_goal
+#   [ ] treatment_room_waiting
+#   [ ] xray_room_goal
+#   [ ] xray_room_waiting
+#   [ ] ct_room_goal
+#   [ ] ct_room_waiting
+#   [ ] mri_room_goal
+#   [ ] mri_room_waiting
+#   [ ] clinical_pathology_room_goal
+#   [ ] clinical_pathology_room_waiting
+#   [ ] physical_therapy_goal
+#   [ ] physical_therapy_waiting
+#   [ ] ward_goal
+#   [ ] ward_waiting
+#   [ ] restroom_goal
+#   [ ] restroom_waiting
+#   [ ] charging_station_1
+#   [ ] charging_station_2
+#
+# _goal 과 _waiting 을 정말 나눠야 하는지 먼저 판단할 것.
+# 이전 맵에서 두 지점 간격이 0.127~0.262 m 였는데, 로봇 자체가 0.12 m 라
+# 그 정도 물러남은 의미가 없고 tolerance 안에 들어 로봇이 움직이지 않았다.
+# 나눌 거면 0.30 m 이상 벌리고, 아니면 하나로 합쳐라.
