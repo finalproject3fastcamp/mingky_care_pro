@@ -68,6 +68,29 @@ artifacts/nav2_diagnostics/<run_id>/effective_nav2_params.yaml
 - `--notes <메모>`: 시험 구간이나 관찰 목적을 SQLite에 함께 남깁니다.
 - `--sample-hz <Hz>`: 위치·속도·LiDAR 요약을 기록하는 초당 횟수입니다. 기본값은 `5`입니다.
 
+### 프로파일 예시
+
+아래처럼 새 프로파일을 작성하면 벽 주변 비용 영향 범위만 `0.25m`로 시험할 수
+있습니다.
+
+```yaml
+# profiles/03_inflation_radius_025.yaml
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      inflation_layer:
+        inflation_radius: 0.25
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      inflation_layer:
+        inflation_radius: 0.25
+```
+
+이 프로파일은 `cost_scaling_factor`, footprint 등 다른 값은 기본 설정을 그대로
+사용합니다. 새 파일은 한 번에 검증할 파라미터 묶음 하나만 변경하도록 작성합니다.
+
 ### 종료 후 저장되는 결과
 
 각 실험은 `artifacts/nav2_diagnostics/<run_id>/`에 저장됩니다.
