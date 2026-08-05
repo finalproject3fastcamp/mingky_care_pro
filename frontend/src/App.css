@@ -103,6 +103,23 @@
   margin-bottom: 14px;
 }
 
+/* Camera */
+.camera-stream {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  border-radius: var(--radius);
+  background: #000;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+}
+
+.camera-offline {
+  color: var(--text-subtle);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
 /* Patient */
 .patient-name {
   font-size: 1.65rem;

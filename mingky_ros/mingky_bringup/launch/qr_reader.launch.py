@@ -58,6 +58,21 @@ def generate_launch_description() -> LaunchDescription:
         default_value='720',
         description='source=csi 캡처 세로 해상도',
     )
+    preview_port_arg = DeclareLaunchArgument(
+        'preview_port',
+        default_value='0',
+        description='>0 이면 그 포트로 MJPEG 미리보기 송출 (대시보드 임베드용)',
+    )
+    csi_hflip_arg = DeclareLaunchArgument(
+        'csi_hflip',
+        default_value='false',
+        description='source=csi 좌우 반전 (뒤집혀 장착된 카메라 보정)',
+    )
+    csi_vflip_arg = DeclareLaunchArgument(
+        'csi_vflip',
+        default_value='false',
+        description='source=csi 상하 반전 (뒤집혀 장착된 카메라 보정)',
+    )
 
     qr_node = Node(
         package='mingky_qr_reader',
@@ -74,6 +89,9 @@ def generate_launch_description() -> LaunchDescription:
                 'marker_id': LaunchConfiguration('marker_id'),
                 'csi_width': LaunchConfiguration('csi_width'),
                 'csi_height': LaunchConfiguration('csi_height'),
+                'csi_hflip': LaunchConfiguration('csi_hflip'),
+                'csi_vflip': LaunchConfiguration('csi_vflip'),
+                'preview_port': LaunchConfiguration('preview_port'),
             },
         ],
     )
@@ -86,5 +104,8 @@ def generate_launch_description() -> LaunchDescription:
         marker_id_arg,
         csi_width_arg,
         csi_height_arg,
+        csi_hflip_arg,
+        csi_vflip_arg,
+        preview_port_arg,
         qr_node,
     ])

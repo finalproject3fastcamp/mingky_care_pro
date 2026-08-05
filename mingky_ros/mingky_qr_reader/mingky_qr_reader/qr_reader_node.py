@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -19,6 +20,69 @@ class LastScan:
     ts: float
 
 
+class _PreviewServer:
+    """노드가 잡은 프레임을 MJPEG 로 송출하는 경량 미리보기 서버.
+
+    카메라는 한 프로세스만 열 수 있어(스캔 중 별도 camera_server 사용 불가) 노드가
+    직접 최신 프레임을 공유 버퍼에 넣고, 접속한 뷰어들이 그 버퍼를 나눠 받는다.
+    대시보드에서 `<img src=".../stream">` 로 바로 임베드한다.
+    """
+
+    def __init__(self, port: int, logger) -> None:
+        from flask import Flask, Response  # 미리보기 켤 때만 필요
+
+        self._lock = threading.Lock()
+        self._jpeg: bytes | None = None
+
+        app = Flask(__name__)
+
+        @app.route("/")
+        def _index():
+            return ('<html><body style="margin:0;background:#000">'
+                    '<img src="/stream" style="width:100%"></body></html>')
+
+        @app.route("/stream")
+        def _stream():
+            return Response(self._frames(),
+                            mimetype="multipart/x-mixed-replace; boundary=frame")
+
+        self._thread = threading.Thread(
+            target=lambda: app.run(host="0.0.0.0", port=port,
+                                   threaded=True, use_reloader=False),
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info(f"미리보기 MJPEG 서버 시작: http://0.0.0.0:{port}/stream")
+
+    def _frames(self):
+        while True:
+            with self._lock:
+                buf = self._jpeg
+            if buf is not None:
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                       + buf + b"\r\n")
+            time.sleep(0.05)
+
+    def update(self, frame, codes) -> None:
+        """최신 프레임에 인식된 QR 박스·라벨을 얹어 JPEG 버퍼로 갱신한다."""
+        import numpy as np  # cv2 와 함께 항상 존재
+
+        disp = frame.copy()
+        for code in codes:
+            label = code.data.decode("utf-8", errors="replace")
+            pts = code.polygon
+            if pts and len(pts) >= 4:
+                poly = np.array([[p.x, p.y] for p in pts], dtype=np.int32)
+                cv2.polylines(disp, [poly], True, (0, 255, 0), 3)
+            r = code.rect
+            cv2.putText(disp, label, (r.left, max(r.top - 10, 20)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        ok, buf = cv2.imencode(".jpg", disp)
+        if ok:
+            with self._lock:
+                self._jpeg = buf.tobytes()
+
+
 class QrReaderNode(Node):
     def __init__(self) -> None:
         super().__init__("qr_reader_node")
@@ -29,6 +93,9 @@ class QrReaderNode(Node):
         # source=csi 캡처 해상도. QR 인식엔 720p 면 충분하고 CPU 도 여유롭다.
         self.declare_parameter("csi_width", 1280)
         self.declare_parameter("csi_height", 720)
+        # 카메라가 뒤집혀 장착된 경우 좌우/상하 반전으로 바로잡는다 (180° 장착이면 둘 다 true).
+        self.declare_parameter("csi_hflip", False)
+        self.declare_parameter("csi_vflip", False)
         self.declare_parameter("backend_url", "http://localhost:8000")
         # 스캔한 로봇. guidance_sessions.robot_id 가 NOT NULL 이라 백엔드가 필수로 받는다.
         self.declare_parameter("robot_id", "")
@@ -37,6 +104,8 @@ class QrReaderNode(Node):
         self.declare_parameter("fps", 10.0)
         self.declare_parameter("debounce_seconds", 5.0)
         self.declare_parameter("http_timeout_seconds", 3.0)
+        # >0 이면 그 포트로 MJPEG 미리보기 송출 (대시보드 <img> 임베드용). 0 이면 끔.
+        self.declare_parameter("preview_port", 0)
 
         self.source = self.get_parameter("source").value
         self.backend_url = self.get_parameter("backend_url").value.rstrip("/")
@@ -55,6 +124,11 @@ class QrReaderNode(Node):
         self._last: LastScan | None = None
 
         self._setup_source()
+
+        self._preview: _PreviewServer | None = None
+        preview_port = int(self.get_parameter("preview_port").value)
+        if preview_port > 0:
+            self._preview = _PreviewServer(preview_port, self.get_logger())
 
         period = 1.0 / max(fps, 0.1)
         self._timer = self.create_timer(period, self._tick)
@@ -91,10 +165,16 @@ class QrReaderNode(Node):
 
             width = int(self.get_parameter("csi_width").value)
             height = int(self.get_parameter("csi_height").value)
+            hflip = bool(self.get_parameter("csi_hflip").value)
+            vflip = bool(self.get_parameter("csi_vflip").value)
+            # 장착 방향 보정은 ISP 레벨에서(Transform) 처리해 디코드·미리보기에 함께 적용한다.
+            from libcamera import Transform
+
             picam2 = Picamera2()
             # RGB888 3채널. pyzbar 는 채널 순서와 무관하게 휘도로 디코드한다.
             picam2.configure(picam2.create_preview_configuration(
-                main={"format": "RGB888", "size": (width, height)}
+                main={"format": "RGB888", "size": (width, height)},
+                transform=Transform(hflip=hflip, vflip=vflip),
             ))
             try:
                 picam2.start()
@@ -128,7 +208,11 @@ class QrReaderNode(Node):
 
         # QR 만 디코드한다. 다른 심볼로지(DataBar 등)까지 돌리면 라이브 카메라
         # 노이즈에서 zbar 가 시끄러운 경고를 쏟고 CPU 도 낭비한다.
-        for code in pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE]):
+        codes = pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
+        if self._preview is not None:
+            self._preview.update(frame, codes)
+
+        for code in codes:
             value = code.data.decode("utf-8", errors="replace").strip()
             if not value:
                 continue

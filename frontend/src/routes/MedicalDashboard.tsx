@@ -1,3 +1,4 @@
+import { CameraStream } from '../components/CameraStream'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -7,6 +8,8 @@ import { usePolling } from '../lib/usePolling'
 
 const CURRENT_PATIENT_ID = 'p001'
 const POLL_MS = 3000
+// 로봇 QR 리더의 MJPEG 미리보기 URL. 미설정이면 카메라 카드를 숨긴다.
+const CAMERA_STREAM_URL = import.meta.env.VITE_CAMERA_STREAM_URL as string | undefined
 
 export function MedicalDashboard() {
   const schedule = usePolling(() => mockApi.getTodaySchedule(CURRENT_PATIENT_ID), POLL_MS)
@@ -27,6 +30,7 @@ export function MedicalDashboard() {
         <PatientInfoCard patient={schedule.data.patient} />
         {status.data && <RobotStatusBadge status={status.data} />}
       </div>
+      {CAMERA_STREAM_URL && <CameraStream streamUrl={CAMERA_STREAM_URL} />}
       <ProgressStepper
         steps={schedule.data.steps}
         currentStepOrder={schedule.data.current_step_order}
