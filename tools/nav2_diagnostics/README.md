@@ -31,21 +31,54 @@ artifacts/nav2_diagnostics/<run_id>/run.sqlite
 artifacts/nav2_diagnostics/<run_id>/effective_nav2_params.yaml
 ```
 
-## 구현 순서
+## 실행 순서
 
-## 사용법
+1. Pinky SSH 터미널에서 로봇 bringup을 실행하고 계속 켜 둡니다.
 
-Pinky bringup을 별도 터미널에서 실행한 뒤 PC에서 실행합니다.
+   ```bash
+   source /opt/ros/jazzy/setup.bash
+   source ~/pinky_pro/install/setup.bash
+   export ROS_DOMAIN_ID=21
+   ros2 launch pinky_bringup bringup_robot.launch.xml
+   ```
 
-```bash
-cd /home/wmk/Documents/mingky_care_pro
-tools/nav2_diagnostics/run_experiment.sh \
-  --profile tools/nav2_diagnostics/profiles/01_costmap_resolution_0025.yaml \
-  --label costmap-resolution-0025
-```
+2. PC 터미널에서 실험을 시작합니다.
 
-RViz에서 `2D Pose Estimate`를 먼저 지정하고 `Nav2 Goal`로 목표를 클릭합니다.
-종료하면 요약이 출력됩니다. 나중에 다시 볼 때는 다음을 사용합니다.
+   ```bash
+   cd /home/wmk/Documents/mingky_care_pro
+   tools/nav2_diagnostics/run_experiment.sh \
+     --profile tools/nav2_diagnostics/profiles/01_costmap_resolution_0025.yaml \
+     --label costmap-resolution-0025
+   ```
+
+3. RViz에서 `2D Pose Estimate`로 현재 로봇 위치와 방향을 지정한 뒤,
+   `Nav2 Goal`로 시험할 목표를 하나 이상 보냅니다.
+
+4. 실험을 마치려면 RViz를 닫거나, 실험 터미널에서 `Ctrl+C`를 누릅니다.
+   Nav2와 기록기가 종료되고 결과 요약이 출력됩니다.
+
+### 옵션 의미
+
+- `--profile <파일>`: 기본 `nav2_params.yaml`에 이번 실험 동안만 덮어쓸 값입니다.
+  예를 들어 `01_costmap_resolution_0025.yaml`은 global/local costmap 해상도만
+  `0.025m`로 바꿉니다. 원본 파라미터 파일은 수정하지 않습니다.
+- `--label <이름>`: 실험의 목적을 사람이 구분하기 위한 이름입니다. 결과 폴더 이름과
+  SQLite의 `runs.label`에만 사용하며 Nav2 동작에는 영향을 주지 않습니다.
+- `--map <파일>`: 기본 지도 대신 특정 지도 YAML을 선택합니다.
+- `--notes <메모>`: 시험 구간이나 관찰 목적을 SQLite에 함께 남깁니다.
+- `--sample-hz <Hz>`: 위치·속도·LiDAR 요약을 기록하는 초당 횟수입니다. 기본값은 `5`입니다.
+
+### 종료 후 저장되는 결과
+
+각 실험은 `artifacts/nav2_diagnostics/<run_id>/`에 저장됩니다.
+
+- `effective_nav2_params.yaml`: 기본 설정과 프로파일을 합친, 해당 실험에 실제 적용한 설정
+- `run.sqlite`: 지도·Git 커밋·프로파일·유효 파라미터 원문, 목표별 결과, 위치·속도·LiDAR
+  요약, Nav2 경고/오류를 저장한 DB
+- `run.sqlite` 내부 스냅샷: abort, recovery, planner/controller 오류 때의
+  global/local costmap과 경로
+
+나중에 실험 결과를 다시 요약하려면 다음을 사용합니다.
 
 ```bash
 python3 tools/nav2_diagnostics/report.py \
@@ -54,6 +87,23 @@ python3 tools/nav2_diagnostics/report.py \
 
 기록 대상은 `/amcl_pose`, `/odom`, `/cmd_vel`, `/scan`, global/local plan,
 global/local costmap, `/goal_pose`, NavigateToPose 상태, `/rosout`입니다.
+
+## Foxglove로 실시간 보기
+
+Foxglove은 기본 실험 실행에 자동으로 포함하지 않습니다. 실시간 시각화가 필요할
+때만 별도 PC 터미널에서 Bridge를 실행합니다.
+
+```bash
+cd /home/wmk/Documents/mingky_care_pro
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=21
+
+ros2 launch mingky_bringup foxglove.launch.py
+```
+
+Foxglove Desktop 또는 웹 앱에서 `ws://localhost:8765`으로 연결합니다.
+다른 PC에서 접속할 경우에는 Bridge를 실행한 PC의 IP를 사용합니다.
 
 ## 원칙
 
