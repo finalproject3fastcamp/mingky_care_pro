@@ -49,6 +49,25 @@ export interface RobotStatus {
   eta_seconds: number | null
 }
 
+/**
+ * GET /robots 응답. schemas.py 의 RobotOut 와 1:1.
+ *
+ * 배터리는 2분 주기 로그의 최신값이지 실시간이 아니다.
+ * battery_recorded_at 을 함께 보여줘야 사용자가 stale 인지 알 수 있다.
+ */
+export interface Robot {
+  robot_id: string
+  robot_type: string
+  display_name: string
+  domain_id: number | null
+  is_active: boolean
+  battery_voltage: number | null
+  battery_percent: number | null
+  battery_recorded_at: string | null
+  active_session_id: number | null
+  active_patient_id: string | null
+}
+
 export type NotificationLevel = 'info' | 'warning' | 'error'
 
 export interface NotificationEvent {

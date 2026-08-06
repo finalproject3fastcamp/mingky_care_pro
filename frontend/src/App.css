@@ -319,6 +319,13 @@
   font-weight: 500;
 }
 
+/* dd 값 옆에 붙는 얇은 부제 (예: 배터리 "74% · 3분 전 기록"). */
+.dd-meta {
+  color: var(--text-subtle);
+  font-weight: 400;
+  font-size: 0.85em;
+}
+
 /* Notifications */
 .notifications {
   list-style: none;

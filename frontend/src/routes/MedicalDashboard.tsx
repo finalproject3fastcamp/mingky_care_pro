@@ -3,7 +3,7 @@ import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
-import { getActiveSessions } from '../lib/api'
+import { getActiveSessions, getRobots } from '../lib/api'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
 import { mockApi } from '../lib/mock'
@@ -16,7 +16,9 @@ const CAMERA_STREAM_URL = import.meta.env.VITE_CAMERA_STREAM_URL as string | und
 export function MedicalDashboard() {
   // 시연은 로봇 1대 전제라 [0] 만 본다. 여러 대로 늘리면 세션 셀렉터가 필요하다.
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
-  // 로봇 상태(state·목적지·ETA)는 아직 백엔드 API 가 없어 mock 이다.
+  // 로봇 목록 (배터리 실 데이터 소스). session.robot_id 로 매칭해서 쓴다.
+  const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
+  // 로봇 상태 중 state·목적지·ETA 는 아직 백엔드 API 가 없어 mock 이다.
   // mock 은 signal 을 무시해도 되지만 시그니처가 맞아야 타입 체크가 통과한다.
   const status = usePolling(() => mockApi.getRobotStatus(), POLL_MS)
   // 엔지니어 대시보드는 useEventFeed(필터·정지 지원)를 쓴다. 여기는 최근 알림만
@@ -37,7 +39,7 @@ export function MedicalDashboard() {
   // 어느 소스든 최신 tick 이 실패하면 배너를 띄우고, 카드는 마지막 성공값으로
   // 계속 그린다. 다음 tick 이 성공하면 usePolling 이 error 를 null 로 지워
   // 배너는 자동으로 사라진다.
-  const stale = sessions.error || status.error || events.error
+  const stale = sessions.error || status.error || events.error || robots.error
 
   if (!session) {
     return (
@@ -48,6 +50,8 @@ export function MedicalDashboard() {
     )
   }
 
+  const robot = robots.data?.find((r) => r.robot_id === session.robot_id)
+
   return (
     <div className="dashboard">
       {stale && <ErrorBanner />}
@@ -57,7 +61,13 @@ export function MedicalDashboard() {
           robotId={session.robot_id}
           startedAt={session.started_at}
         />
-        {status.data && <RobotStatusBadge status={status.data} />}
+        {status.data && (
+          <RobotStatusBadge
+            status={status.data}
+            batteryPercent={robot?.battery_percent}
+            batteryRecordedAt={robot?.battery_recorded_at}
+          />
+        )}
       </div>
       {CAMERA_STREAM_URL && <CameraStream streamUrl={CAMERA_STREAM_URL} />}
       <ProgressStepper

@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-import type { ActiveSession } from '../types/monitoring'
+import type { ActiveSession, Robot } from '../types/monitoring'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -15,5 +15,12 @@ export async function getActiveSessions(
   const { data } = await api.get<ActiveSession[]>('/sessions/active', {
     signal: options.signal,
   })
+  return data
+}
+
+export async function getRobots(
+  options: { signal?: AbortSignal } = {},
+): Promise<Robot[]> {
+  const { data } = await api.get<Robot[]>('/robots', { signal: options.signal })
   return data
 }
