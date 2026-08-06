@@ -4,10 +4,9 @@ import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { getActiveSessions, getRobots } from '../lib/api'
-import { deriveCurrentDestination } from '../lib/derivedStatus'
+import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
-import { mockApi } from '../lib/mock'
 import { usePolling } from '../lib/usePolling'
 
 const POLL_MS = 3000
@@ -19,9 +18,6 @@ export function MedicalDashboard() {
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   // 로봇 목록 (배터리 실 데이터 소스). session.robot_id 로 매칭해서 쓴다.
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
-  // 로봇 상태 중 state·목적지·ETA 는 아직 백엔드 API 가 없어 mock 이다.
-  // mock 은 signal 을 무시해도 되지만 시그니처가 맞아야 타입 체크가 통과한다.
-  const status = usePolling(() => mockApi.getRobotStatus(), POLL_MS)
   // limit 30 은 알림 표시(최근 10건 슬라이스) 와 파생 상태(현재 목적지·상태) 를
   // 함께 감당하기 위한 크기다. 파생은 세션의 최근 nav 이벤트가 window 안에
   // 남아야 정확한데, 30 은 시연 한 세션의 이력을 넉넉히 담는다.
@@ -30,8 +26,8 @@ export function MedicalDashboard() {
     POLL_MS,
   )
 
-  // 초회 로딩: 세션이 대시보드의 뼈대라 이것만 기준으로 판단한다. status/events
-  // 는 실패해도 세션 카드는 그릴 수 있다.
+  // 초회 로딩: 세션이 대시보드의 뼈대라 이것만 기준으로 판단한다. robots/events
+  // 는 실패하거나 늦어도 세션 카드는 그릴 수 있다.
   if (sessions.loading && !sessions.data) {
     return <p>불러오는 중…</p>
   }
@@ -41,7 +37,7 @@ export function MedicalDashboard() {
   // 어느 소스든 최신 tick 이 실패하면 배너를 띄우고, 카드는 마지막 성공값으로
   // 계속 그린다. 다음 tick 이 성공하면 usePolling 이 error 를 null 로 지워
   // 배너는 자동으로 사라진다.
-  const stale = sessions.error || status.error || events.error || robots.error
+  const stale = sessions.error || events.error || robots.error
 
   if (!session) {
     return (
@@ -53,14 +49,16 @@ export function MedicalDashboard() {
   }
 
   const robot = robots.data?.find((r) => r.robot_id === session.robot_id)
+  const sessionEvents = events.data ?? []
 
-  // events.data === null 은 아직 응답 전. 그때는 undefined 로 넘겨 RobotStatusBadge
-  // 가 mock 으로 폴백하게 둔다. 배열이 오면 (비어 있어도) 파생 결과 (없으면 null)
-  // 를 전달해 이후로는 이벤트 기반으로 보인다.
-  const currentDestination =
-    events.data === null
-      ? undefined
-      : (deriveCurrentDestination(events.data, session.session_id)?.visitName ?? null)
+  // 이벤트가 아직 안 왔으면 파생값이 '대기'/null 로 나오는데, 첫 tick(3초 이내)만
+  // 짧게 그러다 실제 값으로 바뀐다. 사용자에게는 순간이라 별도 로딩 처리 안 함.
+  const derivedState = deriveRobotState(sessionEvents, {
+    session_id: session.session_id,
+    ended_at: session.ended_at,
+  })
+  const derivedDestination =
+    deriveCurrentDestination(sessionEvents, session.session_id)?.visitName ?? null
 
   return (
     <div className="dashboard">
@@ -71,14 +69,12 @@ export function MedicalDashboard() {
           robotId={session.robot_id}
           startedAt={session.started_at}
         />
-        {status.data && (
-          <RobotStatusBadge
-            status={status.data}
-            batteryPercent={robot?.battery_percent}
-            batteryRecordedAt={robot?.battery_recorded_at}
-            currentDestination={currentDestination}
-          />
-        )}
+        <RobotStatusBadge
+          state={derivedState}
+          batteryPercent={robot?.battery_percent ?? null}
+          batteryRecordedAt={robot?.battery_recorded_at ?? null}
+          currentDestination={derivedDestination}
+        />
       </div>
       {CAMERA_STREAM_URL && <CameraStream streamUrl={CAMERA_STREAM_URL} />}
       <ProgressStepper
@@ -87,7 +83,7 @@ export function MedicalDashboard() {
       />
       {/* 알림은 목록이 무한정 자라지 않도록 최근 10건만. events 는 파생용으로 30건 받는다. */}
       <NotificationArea
-        notifications={(events.data ?? []).slice(0, 10).map(toNotification)}
+        notifications={sessionEvents.slice(0, 10).map(toNotification)}
       />
     </div>
   )

@@ -14,6 +14,7 @@
  */
 
 import type { EventOut } from '../types/events'
+import type { RobotState } from '../types/monitoring'
 
 export interface DerivedDestination {
   /** session_steps.visit_name. 예: "X-ray". */
@@ -47,4 +48,54 @@ export function deriveCurrentDestination(
     .some((e) => e.event_code === 'nav.goal_succeeded')
 
   return { visitName: visit, arrived }
+}
+
+/**
+ * 이벤트에서 현재 로봇 상태를 파생한다.
+ *
+ * 우선순위 (앞에서 걸리면 그걸로 확정):
+ *   1. session.ended_at 이 세팅됨              → '완료'
+ *   2. robot.comm_lost 이벤트 있음             → '통신 두절'
+ *   3. robot.battery_low 이벤트 있음           → '배터리 부족'
+ *   4. robot.paused 이벤트 있음                → '일시정지'
+ *   5. 세션의 최신 nav.* 이벤트로 판정
+ *        goal_sent      → '안내중'
+ *        goal_succeeded → '도착'
+ *        goal_aborted   → '경로 이탈'
+ *        stuck          → '경로 이탈'
+ *   6. session.started 있음                    → '환자 확인'
+ *   7. 그 외                                   → '대기'
+ *
+ * 2~4 는 sticky 하다. event_codes.yaml 에 회복 이벤트가 없어서, 한 번
+ * 튀면 세션 끝날 때까지 그 상태로 잡힌다. 회복 이벤트가 정의되면 여기도
+ * 함께 확장한다.
+ */
+export function deriveRobotState(
+  events: EventOut[],
+  session: { session_id: number; ended_at: string | null },
+): RobotState {
+  if (session.ended_at) return '완료'
+
+  const sessionEvents = events.filter((e) => e.session_id === session.session_id)
+
+  if (sessionEvents.some((e) => e.event_code === 'robot.comm_lost')) return '통신 두절'
+  if (sessionEvents.some((e) => e.event_code === 'robot.battery_low')) return '배터리 부족'
+  if (sessionEvents.some((e) => e.event_code === 'robot.paused')) return '일시정지'
+
+  // DESC 정렬 가정. 최신 nav.* 하나만 본다.
+  const latestNav = sessionEvents.find((e) => e.event_code.startsWith('nav.'))
+  if (latestNav) {
+    switch (latestNav.event_code) {
+      case 'nav.goal_sent':
+        return '안내중'
+      case 'nav.goal_succeeded':
+        return '도착'
+      case 'nav.goal_aborted':
+      case 'nav.stuck':
+        return '경로 이탈'
+    }
+  }
+
+  if (sessionEvents.some((e) => e.event_code === 'session.started')) return '환자 확인'
+  return '대기'
 }

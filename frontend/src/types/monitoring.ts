@@ -42,13 +42,6 @@ export interface ActiveSession {
   current_visit: string | null
 }
 
-export interface RobotStatus {
-  state: RobotState
-  battery: number
-  current_destination: string | null
-  eta_seconds: number | null
-}
-
 /**
  * GET /robots 응답. schemas.py 의 RobotOut 와 1:1.
  *

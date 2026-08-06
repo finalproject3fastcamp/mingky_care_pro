@@ -1,26 +1,17 @@
-import type { RobotStatus } from '../types/monitoring'
+import type { RobotState } from '../types/monitoring'
 
 interface Props {
-  status: RobotStatus
-  /**
-   * GET /robots 의 최신 배터리 값.
-   * - number: 실제 로그 최신값
-   * - null:   로봇이 배터리 로그를 아직 남기지 않음
-   * - undefined: /robots 응답이 아직 도착 전 → mock 으로 폴백
-   */
-  batteryPercent?: number | null
-  /** 위 배터리 표본의 기록 시각. "N분 전" 부제로 표시. */
-  batteryRecordedAt?: string | null
-  /**
-   * 세션 이벤트에서 파생한 현재 목적지 (visit_name).
-   * - string: 최근 nav.goal_sent 의 visit_name
-   * - null:   세션에 nav 이벤트가 아직 없음 → "—"
-   * - undefined: events 응답이 아직 도착 전 → mock 으로 폴백
-   */
-  currentDestination?: string | null
+  /** 이벤트 스트림에서 파생한 로봇 상태. 자세한 규칙은 lib/derivedStatus.ts. */
+  state: RobotState
+  /** GET /robots 의 최신 배터리 값. null 이면 로봇이 아직 로그를 안 남긴 상태. */
+  batteryPercent: number | null
+  /** 위 배터리 표본의 기록 시각. "N분 전 기록" 부제로 표시. */
+  batteryRecordedAt: string | null
+  /** 세션 이벤트에서 파생한 현재 목적지 (visit_name). */
+  currentDestination: string | null
 }
 
-const errorStates = new Set([
+const errorStates = new Set<RobotState>([
   'QR 인식 실패',
   '경로 이탈',
   '통신 두절',
@@ -41,47 +32,32 @@ function relativeTime(iso: string): string {
 }
 
 export function RobotStatusBadge({
-  status,
+  state,
   batteryPercent,
   batteryRecordedAt,
   currentDestination,
 }: Props) {
-  const tone = errorStates.has(status.state)
+  const tone = errorStates.has(state)
     ? 'error'
-    : status.state === '일시정지'
+    : state === '일시정지'
       ? 'warning'
       : 'ok'
-  const pulsing = status.state === '안내중'
-
-  // /robots 이 아직 로드 안 됐으면 mock 으로 폴백. 로드됐지만 로봇에 로그가
-  // 없으면(null) — 시연에서는 있을 수 없지만 — "—" 로 표시한다.
-  const batteryDisplay =
-    batteryPercent === undefined
-      ? `${status.battery}%`
-      : batteryPercent == null
-        ? '—'
-        : `${batteryPercent}%`
+  const pulsing = state === '안내중'
 
   return (
     <div className="card">
       <div className="card-title">로봇 상태</div>
-      <div className={`state-badge ${tone}${pulsing ? ' pulsing' : ''}`}>{status.state}</div>
+      <div className={`state-badge ${tone}${pulsing ? ' pulsing' : ''}`}>{state}</div>
       <dl className="status-grid">
         <dt>배터리</dt>
         <dd>
-          {batteryDisplay}
+          {batteryPercent != null ? `${batteryPercent}%` : '—'}
           {batteryRecordedAt && (
             <span className="dd-meta"> · {relativeTime(batteryRecordedAt)} 기록</span>
           )}
         </dd>
         <dt>현재 목적지</dt>
-        <dd>
-          {currentDestination === undefined
-            ? (status.current_destination ?? '—')
-            : (currentDestination ?? '—')}
-        </dd>
-        <dt>예상 도착시간</dt>
-        <dd>{status.eta_seconds != null ? `${status.eta_seconds}초` : '—'}</dd>
+        <dd>{currentDestination ?? '—'}</dd>
       </dl>
     </div>
   )
