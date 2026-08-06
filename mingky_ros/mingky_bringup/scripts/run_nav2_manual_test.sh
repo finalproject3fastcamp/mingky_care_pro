@@ -121,7 +121,7 @@ wait_for_transform() {
   local output=""
 
   while ((elapsed < timeout_seconds)); do
-    output="$(timeout 2 ros2 run tf2_ros tf2_echo \
+    output="$(timeout 5 ros2 run tf2_ros tf2_echo \
       "${source_frame}" "${target_frame}" 2>/dev/null || true)"
     if grep -Fq 'Translation:' <<<"${output}"; then
       echo "[확인] TF: ${source_frame} → ${target_frame}"
@@ -224,9 +224,9 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 ros2 daemon stop >/dev/null 2>&1 || true
 ros2 daemon start >/dev/null
 
-wait_for_publisher /odom 15 \
+wait_for_publisher /odom 60 \
   || fail "/odom publisher가 없습니다. Pinky bringup과 Domain ID를 확인하세요."
-wait_for_publisher /scan 15 \
+wait_for_publisher /scan 60 \
   || fail "/scan publisher가 없습니다. Pinky LiDAR와 bringup을 확인하세요."
 
 if ros2 node list 2>/dev/null | grep -Fxq '/controller_server'; then
@@ -243,7 +243,7 @@ fi
 ros2 launch pinky_navigation bringup_launch.xml "${NAV2_LAUNCH_ARGS[@]}" &
 NAV2_PID=$!
 
-wait_for_nav2 40 \
+wait_for_nav2 90 \
   || fail "Nav2가 제한 시간 안에 활성화되지 않았습니다. 위 로그를 확인하세요."
 
 echo "[실행] Nav2 RViz를 시작합니다."
@@ -274,7 +274,7 @@ cat <<'EOF'
 EOF
 read -r -p "초기 위치 설정을 마쳤으면 Enter를 누르세요: "
 
-wait_for_transform map base_footprint 15 \
+wait_for_transform map base_footprint 45 \
   || fail "map → base_footprint TF가 없습니다. RViz에서 2D Pose Estimate를 다시 지정하세요."
 
 echo "[준비 완료] RViz의 Nav2 Goal 도구로 자유롭게 목표를 지정하세요."
