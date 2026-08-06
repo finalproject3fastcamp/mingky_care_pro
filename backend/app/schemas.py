@@ -143,6 +143,6 @@ class RobotOut(BaseModel):
     active_patient_id: str | None = None
     # 생존 여부는 DB 가 아니라 백엔드 메모리에서 온다(app/heartbeat.py).
     # unknown 은 '한 번도 heartbeat 를 안 보낸 로봇' 이다. offline 과 다르다 —
-    # OMX 는 ROS 가 아니라 LeRobot 으로 제어해서 보낼 수단 자체가 없다.
+    # OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없다.
     last_seen_at: datetime | None = None
     link_state: Literal["online", "offline", "unknown"] = "unknown"

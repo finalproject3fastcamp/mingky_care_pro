@@ -56,8 +56,16 @@ uvicorn app.main:app --reload
 > 늘려야 하면 `app/heartbeat.py` 의 저장소를 PostgreSQL 로 옮길 것.
 
 `link_state` 는 세 값이다. `unknown` 은 **한 번도 heartbeat 를 보낸 적 없는
-로봇**이며 `offline` 과 다르다. OMX 는 ROS 가 아니라 LeRobot 으로 제어해서
-heartbeat 를 보낼 수단이 없으므로 계속 `unknown` 이다.
+로봇**이며 `offline` 과 다르다.
+
+OMX 는 계속 `unknown` 이고 그게 맞다. 관제 PC 에 USB 직결된 LeRobot 프로세스
+(`/dev/omx_follower`)라서 **잃을 네트워크 링크가 없다.** 이 감시는 무선 구간이
+끊기는 것을 잡는 장치이므로 OMX 에는 적용 대상이 아니다.
+
+OMX 의 실패는 성격이 다르다 — 텔레옵 프로세스 종료, USB 장치 탈락,
+캘리브레이션 이상. 이건 프로세스·장치 수준 지표로 따로 봐야 하고,
+`config/event_codes.yaml` 의 `omx.*` 접두사가 아직 비어 있는 것과 같은
+맥락이다. heartbeat 로 억지로 묶지 않는다.
 
 ### 예시
 

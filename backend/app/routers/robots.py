@@ -49,8 +49,8 @@ async def list_robots() -> list[RobotOut]:
             **dict(row),
             last_seen_at=last_seen,
             # 한 번도 신호를 안 보낸 로봇은 offline 이 아니라 unknown 이다.
-            # OMX 는 ROS 가 아니라 LeRobot 으로 제어해서 heartbeat 를 보낼
-            # 수단이 없다. 이걸 두절로 표시하면 타임라인이 오탐으로 덮인다.
+            # OMX 는 관제 PC 에 USB 직결된 LeRobot 프로세스라 잃을 네트워크
+            # 링크가 없다. 이걸 두절로 표시하면 타임라인이 오탐으로 덮인다.
             link_state=("unknown" if last_seen is None
                         else "offline" if offline else "online"),
         ))
