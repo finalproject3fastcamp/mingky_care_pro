@@ -19,10 +19,11 @@ FASTCAMPUS_10F (기관 Wi-Fi, WPA2-PSK)
 | --- | --- | --- | --- |
 | 관제컴퓨터 | `192.168.0.10` | **25** | 유선 `enp131s0` |
 | pinky1 | `192.168.0.21` | **21** | 무선 2.4GHz · Raspberry Pi 5 |
-| pinky2 | `192.168.0.22` | **22** | 무선 2.4GHz · Raspberry Pi 5 |
+| pinky2 | `192.168.0.22` | **20** | 무선 2.4GHz · Raspberry Pi 5 |
 | 공유기 | `192.168.0.1` | — | ipTIME N604SR (2.4GHz 싱글밴드, 유선 100Mbps) |
 
-**ROS 도메인 = IP 끝자리** 입니다. 관제만 25 입니다.
+ROS 도메인은 위 표의 장비별 고정값을 사용합니다. IP 끝자리에서 유도하지
+않으며, 특히 pinky2는 IP가 `.22`여도 Domain ID는 `20`입니다.
 
 도메인이 다르면 **같은 서브넷이어도 서로 보이지 않습니다.** DDS 디스커버리
 포트가 도메인마다 다르기 때문입니다. 관제에서 로봇 토픽을 직접 보려면
@@ -63,7 +64,7 @@ iptime 이 NAT 를 하므로 바깥에서 안으로 들어올 수 없습니다.
 ```bash
 # 각 로봇에서
 sudo sed -i '/^ROS_DOMAIN_ID=/d' /etc/environment
-echo "ROS_DOMAIN_ID=21" | sudo tee -a /etc/environment    # pinky2 는 22
+echo "ROS_DOMAIN_ID=21" | sudo tee -a /etc/environment    # pinky2 는 20
 ```
 
 확인은 비대화형으로 해야 의미가 있습니다.
@@ -201,7 +202,7 @@ PC 에서 빌드하면 깨집니다. **`--base-paths pinky` 를 통째로 빌드
 **터미널마다** 설정해야 합니다. 새 터미널을 열면 초기화됩니다.
 
 ```bash
-export ROS_DOMAIN_ID=21     # pinky1 · pinky2 는 22
+export ROS_DOMAIN_ID=21     # pinky1 · pinky2 는 20
 ```
 
 ## 로봇 bringup

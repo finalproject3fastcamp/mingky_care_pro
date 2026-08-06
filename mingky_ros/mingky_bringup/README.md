@@ -57,7 +57,7 @@ pinky2 로 작업하거나 AP 모드로 직접 붙는 경우는 환경변수로 
 
 ```bash
 # pinky2
-PINKY_IP=192.168.0.22 PINKY_DOMAIN_ID=22 ros2 run mingky_bringup run_waypoint_teleop.sh
+PINKY_IP=192.168.0.22 PINKY_DOMAIN_ID=20 ros2 run mingky_bringup run_waypoint_teleop.sh
 
 # AP 모드로 직접 접속했을 때
 PINKY_IP=192.168.4.1 PINKY_SSID=pinky_6294 ros2 run mingky_bringup run_waypoint_teleop.sh
@@ -275,7 +275,7 @@ sudo apt install ros-jazzy-foxglove-bridge
 ros2 launch mingky_bringup foxglove.launch.py
 ```
 
-**로봇마다 도메인이 달라(pinky1=21, pinky2=22) 관제 한 곳에서 두 대를 동시에
+**로봇마다 도메인이 달라(pinky1=21, pinky2=20) 관제 한 곳에서 두 대를 동시에
 볼 수 없습니다.** 로봇마다 하나씩 띄우고 Studio 에서 접속을 갈아탑니다.
 
 | 로봇 | 접속 주소 |
