@@ -47,6 +47,10 @@ class GuideManager(Node):
         self.declare_parameter('robot_id', 'pinky-01')
         self.declare_parameter('event_codes_file', '')
         self.declare_parameter('waypoints_file', '')
+        # 좌표 파일은 맵마다 다르다. 맵의 origin 이나 resolution 이 바뀌면
+        # 같은 좌표가 전혀 다른 물리 위치를 가리키기 때문이다.
+        # Nav2 가 띄운 맵과 반드시 같은 이름을 줘야 한다.
+        self.declare_parameter('map_name', 'yun_map_highres_clean')
         # 로봇의 ap/battery_buzzer.py 와 같은 임계값을 쓴다.
         self.declare_parameter('battery_warn_v', 6.9)
         self.declare_parameter('battery_clear_v', 6.95)
@@ -59,7 +63,8 @@ class GuideManager(Node):
             self, self.robot_id, self.get_parameter('event_codes_file').value)
 
         self.waypoints = self._load_waypoints(
-            self.get_parameter('waypoints_file').value)
+            self.get_parameter('waypoints_file').value,
+            self.get_parameter('map_name').value)
 
         # --- 상태. 이 노드만 쓴다 ---
         self.robot_state = GuideState.ROBOT_IDLE
@@ -96,35 +101,62 @@ class GuideManager(Node):
 
     # ------------------------------------------------------------------ 설정
 
-    def _load_waypoints(self, explicit: str) -> dict:
+    def _waypoint_candidates(self, map_name: str) -> list[Path]:
+        """좌표 파일 후보를 우선순위대로 돌려준다.
+
+        파일명이 맵 이름에 묶여 있다(config/waypoints/<맵>_waypoints.yaml).
+        고정 이름을 쓰면 맵을 바꿨을 때 예전 좌표를 그대로 읽고, 로봇이 엉뚱한
+        곳으로 간다. 이름이 다르면 못 찾고 멈추는 편이 낫다.
+        """
+        relative = Path('config') / 'waypoints' / f'{map_name}_waypoints.yaml'
+        candidates = []
+        try:
+            candidates.append(
+                Path(get_package_share_directory('mingky_bringup')) / relative)
+        except PackageNotFoundError:
+            pass
+        # 빌드하지 않고 소스에서 바로 돌릴 때를 위한 경로.
+        for parent in Path(__file__).resolve().parents:
+            candidates.append(parent / 'mingky_bringup' / relative)
+        return candidates
+
+    def _load_waypoints(self, explicit: str, map_name: str) -> dict:
         """좌표는 맵과 같은 곳(mingky_bringup)에 두고 여기서는 읽기만 한다.
 
         DB 에 좌표를 넣지 않는 이유는 맵을 다시 만들면 모든 좌표가 무의미해지기
         때문이다. 맵과 waypoint 가 같은 패키지에 있어야 함께 버전 관리된다.
         """
-        path = Path(explicit) if explicit else None
+        if explicit:
+            path = Path(explicit).expanduser()
+            if not path.is_file():
+                self.get_logger().error(
+                    f'waypoints_file 이 없습니다: {path}. 주행 명령이 동작하지 않습니다.')
+                return {}
+        else:
+            path = next((c for c in self._waypoint_candidates(map_name) if c.is_file()),
+                        None)
+
         if path is None:
-            try:
-                share = Path(get_package_share_directory('mingky_bringup'))
-                cand = share / 'config' / 'hospital_waypoints.yaml'
-                if cand.is_file():
-                    path = cand
-            except PackageNotFoundError:
-                pass
-        if path is None:
-            for parent in Path(__file__).resolve().parents:
-                cand = parent / 'mingky_bringup' / 'config' / 'hospital_waypoints.yaml'
-                if cand.is_file():
-                    path = cand
-                    break
-        if path is None or not path.is_file():
+            searched = '\n  '.join(str(c) for c in self._waypoint_candidates(map_name))
             self.get_logger().error(
-                'hospital_waypoints.yaml 을 찾지 못했습니다. 주행 명령이 동작하지 않습니다.')
+                f"map_name='{map_name}' 의 좌표 파일을 찾지 못했습니다. "
+                f'주행 명령이 동작하지 않습니다.\n찾아본 경로:\n  {searched}\n'
+                '사용 가능한 맵은 mingky_bringup/config/waypoints/ 를 확인하세요.')
             return {}
+
         with open(path, encoding='utf-8') as f:
             data = yaml.safe_load(f) or {}
-        self.get_logger().info(f'waypoints 로드: {path}')
-        return data.get('waypoints', {})
+        waypoints = data.get('waypoints') or {}
+
+        # 파일은 있는데 비어 있는 경우가 제일 찾기 어렵다. 노드는 정상 기동하고
+        # 목표를 보낼 때마다 '알 수 없는 waypoint' 만 나온다. 기동 시에 짚는다.
+        if not waypoints:
+            self.get_logger().error(
+                f'{path} 에 waypoint 가 없습니다. 오래된 빌드 산출물일 수 있으니 '
+                'install/ 을 지우고 다시 빌드해 보세요.')
+        else:
+            self.get_logger().info(f'waypoints 로드: {path} ({len(waypoints)}개)')
+        return waypoints
 
     # ------------------------------------------------------------------ 배터리
 
