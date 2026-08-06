@@ -10,7 +10,6 @@ PINKY_DOMAIN_ID="${PINKY_DOMAIN_ID:-21}"
 XY_TOLERANCE=""
 YAW_TOLERANCE=""
 
-NAV2_PID=""
 RVIZ_PID=""
 ACTION_OUTPUT_FILE=""
 CLEANED_UP=false
@@ -29,8 +28,17 @@ usage() {
 옵션:
   -h, --help  도움말 출력
 
+이 스크립트는 Nav2 를 띄우지 않습니다. 로봇에서 먼저 실행하세요.
+
+  # pinky1
+  ros2 launch pinky_navigation bringup_launch.xml \
+    map:=$HOME/mingky_nav/yun_map_highres_clean.yaml \
+    params_file:=$HOME/mingky_nav/nav2_params.yaml \
+    use_composition:=False
+
+관제 PC 는 RViz 와 목표 전송만 담당합니다.
 Nav2 파라미터는 스크립트에서 변경하지 않습니다.
-nav2_params.yaml 또는 RQT에서 설정한 현재 값을 사용합니다.
+로봇의 nav2_params.yaml 또는 RQT에서 설정한 현재 값을 사용합니다.
 EOF
 }
 
@@ -61,21 +69,16 @@ cleanup() {
     ACTION_OUTPUT_FILE=""
   fi
 
-  if [[ -z "${RVIZ_PID}" && -z "${NAV2_PID}" ]]; then
+  if [[ -z "${RVIZ_PID}" ]]; then
     return
   fi
 
   echo
-  echo "[정리] RViz와 Nav2를 종료합니다."
+  echo "[정리] RViz를 종료합니다. 로봇의 Nav2 는 계속 실행됩니다."
 
   if [[ -n "${RVIZ_PID}" ]] && kill -0 "${RVIZ_PID}" 2>/dev/null; then
     kill -INT "${RVIZ_PID}" 2>/dev/null || true
     wait "${RVIZ_PID}" 2>/dev/null || true
-  fi
-
-  if [[ -n "${NAV2_PID}" ]] && kill -0 "${NAV2_PID}" 2>/dev/null; then
-    kill -INT "${NAV2_PID}" 2>/dev/null || true
-    wait "${NAV2_PID}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -133,7 +136,7 @@ wait_for_transform() {
   local output=""
 
   while ((elapsed < timeout_seconds)); do
-    output="$(timeout 2 ros2 run tf2_ros tf2_echo \
+    output="$(timeout 5 ros2 run tf2_ros tf2_echo \
       "${source_frame}" "${target_frame}" 2>/dev/null || true)"
     if grep -Fq 'Translation:' <<<"${output}"; then
       echo "[확인] TF: ${source_frame} → ${target_frame}"
@@ -185,6 +188,9 @@ load_waypoints() {
     WAYPOINT_YS+=("${y}")
     WAYPOINT_YAWS+=("${yaw}")
   done < <(
+    # 라벨 필드는 절대 비우지 않는다. 탭은 IFS 공백 문자라 연속되면 bash 의
+    # read 가 하나로 합쳐 버리고, 그러면 필드가 한 칸씩 밀려 yaw 가 빈다.
+    # capture_waypoint.sh 는 라벨 주석을 쓰지 않으므로 그때 키를 대신 넣는다.
     awk '
       /^  # / {
         label = $0
@@ -194,6 +200,9 @@ load_waypoints() {
       /^  [[:alnum:]_-]+:$/ {
         key = $1
         sub(/:$/, "", key)
+        # 라벨은 바로 앞 주석 줄에서만 온다. 다음 항목으로 새지 않게 비운다.
+        entry_label = (label == "" ? key : label)
+        label = ""
         x = y = yaw = ""
         next
       }
@@ -201,7 +210,7 @@ load_waypoints() {
       /^    y:/ { y = $2; next }
       /^    yaw:/ {
         yaw = $2
-        printf "%s\t%s\t%s\t%s\t%s\n", key, label, x, y, yaw
+        printf "%s\t%s\t%s\t%s\t%s\n", key, entry_label, x, y, yaw
       }
     ' "${WAYPOINT_FILE}"
   )
@@ -328,6 +337,9 @@ WAYPOINT_FILE=""
 select_map
 echo "[선택] 지도: $(basename "${MAP_PATH}")"
 echo "[선택] waypoint 파일: $(basename "${WAYPOINT_FILE}")"
+echo "[주의] 맵은 로봇의 Nav2 가 이미 올린 것을 씁니다."
+echo "       여기서 고른 것은 waypoint 파일을 정하기 위한 것이므로,"
+echo "       로봇이 같은 맵을 올렸는지 확인하세요. 다르면 좌표가 조용히 어긋납니다."
 
 [[ -f /opt/ros/jazzy/setup.bash ]] \
   || fail "ROS 2 Jazzy setup 파일을 찾을 수 없습니다."
@@ -370,22 +382,22 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 ros2 daemon stop >/dev/null 2>&1 || true
 ros2 daemon start >/dev/null
 
-wait_for_publisher /odom 15 \
+# 이 스크립트는 Nav2 를 띄우지 않는다. 로봇에서 이미 돌고 있어야 한다.
+#
+# 라이다 원본(/scan, 5.8KB/건)을 무선 너머로 보내면 조각 하나만 잃어도 메시지
+# 전체가 버려진다. 그래서 AMCL·costmap·controller 는 로봇 안에서 돌리고,
+# 관제 PC 는 목표만 보내고 결과만 받는다. 무선에는 작은 메시지만 흐른다.
+#
+#     로봇   ros2 launch pinky_navigation bringup_launch.xml \
+#              map:=<맵> params_file:=<파라미터> use_composition:=False
+#     PC     이 스크립트
+wait_for_publisher /odom 60 \
   || fail "/odom publisher가 없습니다. Pinky bringup과 Domain ID를 확인하세요."
-wait_for_publisher /scan 15 \
-  || fail "/scan publisher가 없습니다. Pinky LiDAR와 bringup을 확인하세요."
 
-if ros2 node list 2>/dev/null | grep -Fxq '/controller_server'; then
-  fail "이미 /controller_server가 실행 중입니다. 기존 Nav2를 먼저 종료하세요."
-fi
+# /scan 은 검사하지 않는다. 로봇 안에서만 쓰이므로 PC 에 안 와도 정상이다.
 
-echo "[실행] $(basename "${MAP_PATH}")으로 Nav2를 시작합니다."
-ros2 launch pinky_navigation bringup_launch.xml \
-  map:="${MAP_PATH}" use_composition:=False &
-NAV2_PID=$!
-
-wait_for_nav2 40 \
-  || fail "Nav2가 제한 시간 안에 활성화되지 않았습니다. 위 로그를 확인하세요."
+wait_for_nav2 90 \
+  || fail "로봇의 Nav2 를 찾지 못했습니다. 로봇에서 bringup_launch.xml 을 먼저 실행하세요."
 
 echo "[실행] Nav2 RViz를 시작합니다."
 ros2 launch pinky_navigation nav2_view.launch.xml &
@@ -402,7 +414,8 @@ cat <<'EOF'
 
 ============================================================
 1. RViz의 '2D Pose Estimate'로 실제 로봇 위치와 방향을 지정하세요.
-2. 지도와 LaserScan이 실제 환경에 맞는지 확인하세요.
+2. 파티클이 한 줌으로 모였는지 확인하세요. 제자리 회전이 가장 빠릅니다.
+   LaserScan 이 RViz 에 안 보여도 정상입니다. 로봇 안에서만 쓰입니다.
 3. 준비가 끝나면 이 터미널로 돌아와 Enter를 누르세요.
 4. 메뉴에서 저장된 waypoint를 선택하면 Nav2가 주행합니다.
 
@@ -413,7 +426,7 @@ cat <<'EOF'
 EOF
 read -r -p "초기 위치 설정을 마쳤으면 Enter를 누르세요: "
 
-wait_for_transform map base_footprint 15 \
+wait_for_transform map base_footprint 45 \
   || fail "map → base_footprint TF가 없습니다. RViz에서 2D Pose Estimate를 다시 지정하세요."
 
 XY_TOLERANCE="$(timeout 10 ros2 param get /controller_server \

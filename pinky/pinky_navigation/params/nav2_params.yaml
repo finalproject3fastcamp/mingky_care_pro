@@ -155,7 +155,7 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
-      xy_goal_tolerance: 0.25                    # [m] 목표 지점 반경 0.25m 안에 들어오면 도착 인정
+      xy_goal_tolerance: 0.10                    # [m] 판정 원 지름 0.20m. 맵이 4.80x3.68m 라 0.25(지름 0.50m)면 목적지를 구분하지 못한다
       yaw_goal_tolerance: 0.25                   # [rad] 목표 각도 오차 약 14도 이내면 올바르게 본 것으로 인정
 
     # ==========================================================
@@ -173,6 +173,7 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
+      footprint_padding: 0.01                    # global_costmap 과 맞춘다. 생략하면 Nav2 기본값 0.01 이지만 명시해 둔다
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: odom
@@ -180,14 +181,14 @@ local_costmap:
       rolling_window: true
       width: 3
       height: 3
-      resolution: 0.05
+      resolution: 0.025                          # 맵(yun_map_highres_clean)이 0.025 다. 굵으면 벽이 실제보다 두꺼워진다
       #robot_radius: 0.22
       footprint: '[[0.06, 0.06], [0.06, -0.06], [-0.06, -0.06], [-0.06, 0.06]]'
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.15
+        inflation_radius: 0.08
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -216,14 +217,14 @@ local_costmap:
 global_costmap:
   global_costmap:
     ros__parameters:
-      footprint_padding: 0.03
+      footprint_padding: 0.01                    # 내접 0.06 + 0.01 = 하한 0.07m. 0.03 이면 하한 0.09m 라 자유 공간의 35% 가 통과 불가가 된다
       update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
       #robot_radius: 0.22
       footprint: '[[0.06, 0.06], [0.06, -0.06], [-0.06, -0.06], [-0.06, 0.06]]'
-      resolution: 0.05
+      resolution: 0.025                          # 맵과 맞춘다
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       obstacle_layer:
@@ -246,7 +247,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.15
+        inflation_radius: 0.08
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
