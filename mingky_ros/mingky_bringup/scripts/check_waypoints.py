@@ -33,6 +33,11 @@ except ImportError:
     sys.exit("PyYAML 이 필요합니다: pip install pyyaml")
 
 
+# 로봇마다 전용이라 서로 오갈 일이 없는 지점의 이름 접두어.
+# 간격 검사에서 이 접두어끼리의 쌍은 건너뛴다.
+EXCLUSIVE_PREFIX = "charging_station_"
+
+
 def read_pgm(path: Path):
     """P5 (binary) PGM 을 읽는다. GIMP 가 넣는 주석 줄도 건너뛴다."""
     data = path.read_bytes()
@@ -229,16 +234,33 @@ def main() -> int:
         print(f"  {name:36s} {shown}  {verdict}")
 
     # --- 간격 검사 ---
+    #
+    # 간격 검사가 잡으려는 상황은 'A 에 서 있는 로봇을 B 로 보낼 때' 다.
+    # 로봇마다 전용인 지점끼리는 그 상황이 생기지 않는다. 충전소가 그렇다.
+    # pinky-01 은 charging_station_1 로만, pinky-02 는 charging_station_2 로만
+    # 간다(database/seeds/002_robots.sql). 한 대가 1번에서 2번으로 이동할 일이
+    # 없으므로 두 지점이 붙어 있어도 주행에 문제가 없다.
+    #
+    # 실제로 두 접근점은 0.096 m 떨어져 있고 yaw 가 176° 차이난다.
+    # 마주 보는 두 도크에 각각 접근하는 자리라 붙어 있는 것이 정상이다.
+    #
+    # 한 대가 두 충전소를 번갈아 쓰는 운용으로 바뀌면 이 예외를 지워야 한다.
     diameter = args.tolerance * 2
-    close = []
+    close, skipped = [], []
     for (n1, p1, in1, _), (n2, p2, in2, _) in combinations(rows, 2):
         if not (in1 and in2):
             continue
         gap = math.dist(p1, p2)
-        if gap < diameter:
-            close.append((gap, n1, n2))
+        if gap >= diameter:
+            continue
+        if n1.startswith(EXCLUSIVE_PREFIX) and n2.startswith(EXCLUSIVE_PREFIX):
+            skipped.append((gap, n1, n2))
+            continue
+        close.append((gap, n1, n2))
 
     print(f"\n간격 검사  xy_goal_tolerance={args.tolerance} → 판정 원 지름 {diameter:.2f}m")
+    for gap, n1, n2 in sorted(skipped):
+        print(f"  건너뜀  {gap:6.3f}m  {n1} ↔ {n2}  (로봇 전용 지점)")
     if close:
         print(f"  {len(close)}쌍이 겹칩니다. 한쪽에 서 있으면 다른 쪽으로 안 움직입니다.")
         for gap, n1, n2 in sorted(close)[:10]:
