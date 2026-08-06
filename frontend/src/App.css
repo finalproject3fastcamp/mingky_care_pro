@@ -86,6 +86,16 @@
   }
 }
 
+/* 폴링 실패 배너. 카드 위에 얹혀 이전 데이터를 그대로 유지한 채 상태만 알린다. */
+.poll-error-banner {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-left: 3px solid var(--warning);
+  font-size: 0.9rem;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -222,18 +232,18 @@
 .state-badge {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 20px;
+  gap: 14px;
+  padding: 14px 28px;
   border-radius: 999px;
   font-weight: 700;
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   margin-bottom: 18px;
 }
 
 .state-badge::before {
   content: '';
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: currentColor;
 }

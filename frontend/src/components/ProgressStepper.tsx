@@ -1,8 +1,8 @@
-import type { ExamStep } from '../types/monitoring'
+import type { SessionStep } from '../types/monitoring'
 
 interface Props {
-  steps: ExamStep[]
-  currentStepOrder: number
+  steps: SessionStep[]
+  currentStepOrder: number | null
 }
 
 export function ProgressStepper({ steps, currentStepOrder }: Props) {
@@ -11,13 +11,13 @@ export function ProgressStepper({ steps, currentStepOrder }: Props) {
       <div className="card-title">진행 상황</div>
       <ol className="stepper">
         {steps.map((step) => {
-          const done = step.step_order < currentStepOrder
+          const done = currentStepOrder != null && step.step_order < currentStepOrder
           const current = step.step_order === currentStepOrder
           const cls = current ? 'current' : done ? 'done' : 'pending'
           return (
-            <li key={step.examination_step_id} className={`step ${cls}`}>
+            <li key={step.step_order} className={`step ${cls}`}>
               <span className="step-index">{step.step_order}</span>
-              <span className="step-name">{step.examination_name}</span>
+              <span className="step-name">{step.visit_name}</span>
             </li>
           )
         })}

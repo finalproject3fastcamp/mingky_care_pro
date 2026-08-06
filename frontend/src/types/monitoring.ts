@@ -21,16 +21,25 @@ export interface Patient {
   condition_name: string
 }
 
-export interface ExamStep {
-  examination_step_id: number
+export interface SessionStep {
   step_order: number
-  examination_name: string
+  visit_name: string
+  arrived_at: string | null
+  completed_at: string | null
+  completed_source: string | null
 }
 
-export interface TodaySchedule {
+export interface ActiveSession {
+  session_id: number
+  robot_id: string
+  marker_id: number | null
+  started_at: string
+  ended_at: string | null
+  end_reason: string | null
   patient: Patient
-  steps: ExamStep[]
-  current_step_order: number
+  steps: SessionStep[]
+  current_step_order: number | null
+  current_visit: string | null
 }
 
 export interface RobotStatus {
