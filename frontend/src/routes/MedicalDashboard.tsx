@@ -4,6 +4,7 @@ import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { getActiveSessions, getRobots } from '../lib/api'
+import { deriveCurrentDestination } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
 import { mockApi } from '../lib/mock'
@@ -21,10 +22,11 @@ export function MedicalDashboard() {
   // 로봇 상태 중 state·목적지·ETA 는 아직 백엔드 API 가 없어 mock 이다.
   // mock 은 signal 을 무시해도 되지만 시그니처가 맞아야 타입 체크가 통과한다.
   const status = usePolling(() => mockApi.getRobotStatus(), POLL_MS)
-  // 엔지니어 대시보드는 useEventFeed(필터·정지 지원)를 쓴다. 여기는 최근 알림만
-  // 얻으면 되므로 usePolling + listEvents({ limit }) 로 충분하다.
+  // limit 30 은 알림 표시(최근 10건 슬라이스) 와 파생 상태(현재 목적지·상태) 를
+  // 함께 감당하기 위한 크기다. 파생은 세션의 최근 nav 이벤트가 window 안에
+  // 남아야 정확한데, 30 은 시연 한 세션의 이력을 넉넉히 담는다.
   const events = usePolling(
-    async (signal) => (await listEvents({ limit: 10 }, { signal })).items,
+    async (signal) => (await listEvents({ limit: 30 }, { signal })).items,
     POLL_MS,
   )
 
@@ -52,6 +54,14 @@ export function MedicalDashboard() {
 
   const robot = robots.data?.find((r) => r.robot_id === session.robot_id)
 
+  // events.data === null 은 아직 응답 전. 그때는 undefined 로 넘겨 RobotStatusBadge
+  // 가 mock 으로 폴백하게 둔다. 배열이 오면 (비어 있어도) 파생 결과 (없으면 null)
+  // 를 전달해 이후로는 이벤트 기반으로 보인다.
+  const currentDestination =
+    events.data === null
+      ? undefined
+      : (deriveCurrentDestination(events.data, session.session_id)?.visitName ?? null)
+
   return (
     <div className="dashboard">
       {stale && <ErrorBanner />}
@@ -66,6 +76,7 @@ export function MedicalDashboard() {
             status={status.data}
             batteryPercent={robot?.battery_percent}
             batteryRecordedAt={robot?.battery_recorded_at}
+            currentDestination={currentDestination}
           />
         )}
       </div>
@@ -74,7 +85,10 @@ export function MedicalDashboard() {
         steps={session.steps}
         currentStepOrder={session.current_step_order}
       />
-      <NotificationArea notifications={(events.data ?? []).map(toNotification)} />
+      {/* 알림은 목록이 무한정 자라지 않도록 최근 10건만. events 는 파생용으로 30건 받는다. */}
+      <NotificationArea
+        notifications={(events.data ?? []).slice(0, 10).map(toNotification)}
+      />
     </div>
   )
 }

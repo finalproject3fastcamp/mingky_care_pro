@@ -11,6 +11,13 @@ interface Props {
   batteryPercent?: number | null
   /** 위 배터리 표본의 기록 시각. "N분 전" 부제로 표시. */
   batteryRecordedAt?: string | null
+  /**
+   * 세션 이벤트에서 파생한 현재 목적지 (visit_name).
+   * - string: 최근 nav.goal_sent 의 visit_name
+   * - null:   세션에 nav 이벤트가 아직 없음 → "—"
+   * - undefined: events 응답이 아직 도착 전 → mock 으로 폴백
+   */
+  currentDestination?: string | null
 }
 
 const errorStates = new Set([
@@ -33,7 +40,12 @@ function relativeTime(iso: string): string {
   return `${Math.floor(secs / 86400)}일 전`
 }
 
-export function RobotStatusBadge({ status, batteryPercent, batteryRecordedAt }: Props) {
+export function RobotStatusBadge({
+  status,
+  batteryPercent,
+  batteryRecordedAt,
+  currentDestination,
+}: Props) {
   const tone = errorStates.has(status.state)
     ? 'error'
     : status.state === '일시정지'
@@ -63,7 +75,11 @@ export function RobotStatusBadge({ status, batteryPercent, batteryRecordedAt }: 
           )}
         </dd>
         <dt>현재 목적지</dt>
-        <dd>{status.current_destination ?? '—'}</dd>
+        <dd>
+          {currentDestination === undefined
+            ? (status.current_destination ?? '—')
+            : (currentDestination ?? '—')}
+        </dd>
         <dt>예상 도착시간</dt>
         <dd>{status.eta_seconds != null ? `${status.eta_seconds}초` : '—'}</dd>
       </dl>
