@@ -338,3 +338,235 @@
   color: var(--text-subtle);
   font-style: italic;
 }
+
+/* Buttons */
+.btn {
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 500;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.pager-label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Filters (engineer) */
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px 16px;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.filter-field > span {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.filter-field select,
+.filter-field input {
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+}
+
+.filter-field select:focus,
+.filter-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+/* Event timeline (engineer) */
+.event-timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-count {
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.event-error {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.event-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-row {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+}
+
+.event-row.info {
+  border-left-color: var(--accent);
+}
+
+.event-row.warning {
+  background: var(--warning-bg);
+  border-left-color: var(--warning);
+}
+
+.event-row.error {
+  background: var(--danger-bg);
+  border-left-color: var(--danger);
+}
+
+.event-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.event-time {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.event-level {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+}
+
+.event-level.warning {
+  background: #fff;
+  color: var(--warning);
+}
+
+.event-level.error {
+  background: #fff;
+  color: var(--danger);
+}
+
+.event-code {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.event-lag {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  cursor: help;
+}
+
+/* 시계 역전은 큐잉보다 심각하다. 색으로 구분한다. */
+.event-lag.ahead {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.event-meta {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+}
+
+.event-payload {
+  margin-top: 6px;
+}
+
+.event-payload summary {
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+  cursor: pointer;
+  user-select: none;
+}
+
+.event-payload pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  overflow-x: auto;
+}
