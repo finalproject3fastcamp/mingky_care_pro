@@ -162,9 +162,9 @@ export ROS_LOCALHOST_ONLY=0
 ros2 daemon stop >/dev/null 2>&1 || true
 ros2 daemon start >/dev/null
 
-wait_for_publisher /odom 15 \
+wait_for_publisher /odom 60 \
   || fail "/odom publisher가 없습니다. Pinky bringup과 Domain ID를 확인하세요."
-wait_for_publisher /scan 15 \
+wait_for_publisher /scan 60 \
   || fail "/scan publisher가 없습니다. Pinky LiDAR와 bringup을 확인하세요."
 
 ros2 pkg executables teleop_twist_keyboard 2>/dev/null \
@@ -176,7 +176,7 @@ ros2 launch pinky_navigation localization_launch.xml \
   map:="${MAP_PATH}" use_composition:=False &
 LOCALIZATION_PID=$!
 
-wait_for_publisher /map 15 \
+wait_for_publisher /map 60 \
   || fail "/map publisher가 시작되지 않았습니다. 위 localization 로그를 확인하세요."
 
 if ! kill -0 "${LOCALIZATION_PID}" 2>/dev/null; then
