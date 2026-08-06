@@ -2,6 +2,42 @@
 
 Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하는 ROS 2 패키지입니다.
 
+## 후방 USB 카메라
+
+Pinky에 V4L2 드라이버를 설치합니다.
+
+```bash
+sudo apt install ros-jazzy-v4l2-camera
+```
+
+후방 카메라는 번호가 바뀌는 `/dev/videoN` 대신 장치의 고정 by-id 경로를
+사용합니다. 기본 영상은 ArUco 처리에 맞춘 `640x480 mono8`이며 로봇 내부의
+다음 토픽으로 발행됩니다.
+
+```text
+/rear_camera/image_raw
+/rear_camera/camera_info
+```
+
+실행과 확인:
+
+```bash
+ros2 launch mingky_bringup rear_camera.launch.py
+ros2 topic hz /rear_camera/image_raw
+ros2 topic echo /rear_camera/camera_info --once
+```
+
+다른 장치를 시험할 때만 launch 인자로 덮어씁니다.
+
+```bash
+ros2 launch mingky_bringup rear_camera.launch.py video_device:=/dev/video8
+```
+
+컬러 영상 확인이 필요하면 `output_encoding:=bgr8`을 추가합니다.
+
+`camera_info_url`은 캘리브레이션 전까지 비워 둡니다. 영상 메시지의 frame은
+`rear_camera_optical_frame`이며 URDF의 `rear_camera_link` 아래에 등록됩니다.
+
 ## Waypoint 측정 준비
 
 Pinky에서 `pinky_bringup`이 실행 중이어야 합니다.

@@ -241,6 +241,14 @@
             <origin xyz="-0.095 -0.002 0.045" rpy="0 0 3.14159"/>
         </joint>
 
+        <!-- REP-103 optical frame: z forward, x right, y down. -->
+        <link name="rear_camera_optical_frame"/>
+        <joint name="${namespace}rear_camera_optical_fixed_joint" type="fixed">
+            <parent link="rear_camera_link"/>
+            <child link="rear_camera_optical_frame"/>
+            <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+        </joint>
+
         <link name="screen_mount">
             <visual>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
