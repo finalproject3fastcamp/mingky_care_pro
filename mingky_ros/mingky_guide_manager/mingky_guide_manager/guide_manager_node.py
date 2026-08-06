@@ -30,7 +30,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Float32, String
 
-from mingky_interfaces.msg import GuideState
+from mingky_interfaces.msg import GuideState, SessionStart
 
 from .event_publisher import EventPublisher
 
@@ -91,6 +91,14 @@ class GuideManager(Node):
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
         self.create_subscription(String, '~/start_session', self._on_start_session, 10)
         self.create_subscription(String, '~/goto', self._on_goto, 10)
+
+        # QR 노드가 백엔드 응답을 파싱해 흘려주는 세션 개시 신호.
+        # 지금은 수신·저장·로그만 한다. Nav2 자동 트리거는 아직 붙이지 않았다.
+        # session_start 자체는 이벤트가 아니라 로봇 내부 배관 신호라 events 로는 쏘지 않는다.
+        # 상응하는 session.started 는 백엔드가 POST /qr/scan 안에서 이미 반영한 뒤라 중복이다.
+        self.session_visits: list[str] = []
+        self.create_subscription(
+            SessionStart, '/qr_reader_node/session_start', self._on_session_start, 10)
 
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
@@ -202,6 +210,22 @@ class GuideManager(Node):
 
     def _on_goto(self, msg: String):
         self.send_goal(msg.data.strip())
+
+    def _on_session_start(self, msg: SessionStart):
+        """QR 노드에서 세션 정보가 들어왔을 때. 저장만 하고 주행은 아직 트리거하지 않는다."""
+        self.session_id = int(msg.session_id)
+        self.patient_id = str(msg.patient_id)
+        self.session_visits = list(msg.visit_names)
+        # 현재 방문지는 visit_name 이지 waypoint 키가 아니다. Nav2 매핑은 후속 작업.
+        idx = max(int(msg.current_step_order) - 1, 0)
+        self.current_visit = (
+            self.session_visits[idx] if 0 <= idx < len(self.session_visits) else '')
+        self.session_state = GuideState.SESSION_CONFIRMED
+        self.get_logger().info(
+            f'session_start 수신: session_id={self.session_id} '
+            f'patient={self.patient_id} step={msg.current_step_order}/'
+            f'{len(self.session_visits)} current_visit={self.current_visit!r} '
+            f'visits={self.session_visits}')
 
     # ------------------------------------------------------------------ 주행
 

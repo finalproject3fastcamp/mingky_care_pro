@@ -13,6 +13,8 @@ from pyzbar import pyzbar
 from pyzbar.pyzbar import ZBarSymbol
 from rclpy.node import Node
 
+from mingky_interfaces.msg import SessionStart
+
 
 @dataclass
 class LastScan:
@@ -130,6 +132,10 @@ class QrReaderNode(Node):
         if preview_port > 0:
             self._preview = _PreviewServer(preview_port, self.get_logger())
 
+        # 백엔드가 세션을 만들어 주면 로봇 내부에 SessionStart 를 흘려 다른 노드
+        # (guide_manager 등)가 session_id 와 진료 순서를 받도록 한다.
+        self._session_pub = self.create_publisher(SessionStart, "~/session_start", 10)
+
         period = 1.0 / max(fps, 0.1)
         self._timer = self.create_timer(period, self._tick)
         self.get_logger().info(
@@ -246,12 +252,43 @@ class QrReaderNode(Node):
 
         if response.status_code == 200:
             self.get_logger().info(f"QR 확인 성공: {patient_id}")
+            self._publish_session_start(response)
         elif response.status_code == 404:
             self.get_logger().warn(f"QR 인식 실패 (환자 없음): {patient_id}")
         else:
             self.get_logger().error(
                 f"백엔드 응답 이상: {response.status_code} {response.text[:200]}"
             )
+
+    def _publish_session_start(self, response: requests.Response) -> None:
+        """POST /qr/scan 응답을 파싱해 SessionStart 로 흘린다.
+
+        응답 스키마는 backend/app/schemas.py 의 TodaySchedule 와 1:1 이다.
+        파싱이 실패해도 노드는 계속 살아 있어야 한다 — 재스캔으로 회복 가능하고,
+        예외로 죽으면 카메라 리소스까지 재초기화해야 해서 손해가 크다.
+        """
+        try:
+            body = response.json()
+            steps = body.get("steps") or []
+            msg = SessionStart()
+            msg.session_id = int(body.get("session_id") or 0)
+            msg.patient_id = str(body.get("patient", {}).get("patient_id") or "")
+            msg.current_step_order = int(body.get("current_step_order") or 0)
+            # 백엔드는 이미 step_order 오름차순으로 보내지만, 명시적으로 정렬한다.
+            msg.visit_names = [
+                str(s.get("visit_name") or "")
+                for s in sorted(steps, key=lambda s: s.get("step_order", 0))
+            ]
+        except (ValueError, TypeError, AttributeError) as exc:
+            self.get_logger().error(f"세션 응답 파싱 실패: {exc}")
+            return
+
+        self._session_pub.publish(msg)
+        self.get_logger().info(
+            f"session_start 발행: session_id={msg.session_id} "
+            f"patient={msg.patient_id} step={msg.current_step_order}/"
+            f"{len(msg.visit_names)} visits={msg.visit_names}"
+        )
 
     def destroy_node(self) -> bool:
         if self._capture is not None:
