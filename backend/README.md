@@ -32,6 +32,7 @@ uvicorn app.main:app --reload
 - `GET /sessions/active` — 진행 중인 안내 목록
 - `GET /sessions/{id}` — 세션 상세 (끝난 세션 포함)
 - `GET /robots` — 로봇 목록 + 최근 배터리 + 활성 세션
+- `GET /patients/{patient_id}/photo` — 환자 프로필 사진 (`image/*`, private 캐시)
 - `GET /docs` — OpenAPI 문서
 
 ### 예시
