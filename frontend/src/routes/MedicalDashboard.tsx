@@ -52,7 +52,11 @@ export function MedicalDashboard() {
     <div className="dashboard">
       {stale && <ErrorBanner />}
       <div className="dashboard-row">
-        <PatientInfoCard patient={session.patient} />
+        <PatientInfoCard
+          patient={session.patient}
+          robotId={session.robot_id}
+          startedAt={session.started_at}
+        />
         {status.data && <RobotStatusBadge status={status.data} />}
       </div>
       {CAMERA_STREAM_URL && <CameraStream streamUrl={CAMERA_STREAM_URL} />}
