@@ -1,0 +1,20 @@
+image_width: 640
+image_height: 480
+camera_name: rear_camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [917.162162426996, 0.0, 248.8050895771682, 0.0, 921.8548116292283, 213.39887698201545, 0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.35357939819973677, 0.007371301113361366, -0.00231656961392452, 3.9980257905087e-05, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [917.162162426996, 0.0, 248.8050895771682, 0.0, 0.0, 921.8548116292283, 213.39887698201545, 0.0, 0.0, 0.0, 1.0, 0.0]
