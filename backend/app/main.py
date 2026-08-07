@@ -1,9 +1,10 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import db, registry
+from . import db, heartbeat, registry
 from .routers import events, patients, qr, robots, sessions
 
 log = logging.getLogger("mingky")
@@ -17,9 +18,19 @@ async def lifespan(app: FastAPI):
     log.info("event_codes 로드: %s (코드 %d개)", codes.source, len(codes))
 
     await db.connect()
+
+    # 생존 감시. 재시작하면 메모리가 비므로 감시 대상도 0 에서 시작한다.
+    # 첫 heartbeat 를 받은 로봇부터 감시에 들어가므로 기동 직후 전원이
+    # 두절로 찍히는 일은 없고, 별도 유예 로직도 필요 없다.
+    monitor = asyncio.create_task(heartbeat.monitor())
     try:
         yield
     finally:
+        monitor.cancel()
+        try:
+            await monitor
+        except asyncio.CancelledError:
+            pass
         await db.disconnect()
 
 
