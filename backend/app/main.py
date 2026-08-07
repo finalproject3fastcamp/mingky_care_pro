@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import db, heartbeat, registry
-from .routers import events, qr, robots, sessions
+from .routers import events, patients, qr, robots, sessions
 
 log = logging.getLogger("mingky")
 
@@ -39,6 +39,7 @@ app.include_router(qr.router)
 app.include_router(events.router)
 app.include_router(sessions.router)
 app.include_router(robots.router)
+app.include_router(patients.router)
 
 
 @app.get("/health")

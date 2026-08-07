@@ -33,6 +33,7 @@ uvicorn app.main:app --reload
 - `GET /sessions/{id}` — 세션 상세 (끝난 세션 포함)
 - `GET /robots` — 로봇 목록 + 최근 배터리 + 활성 세션 + 통신 상태
 - `POST /robots/{id}/heartbeat` — 로봇 생존 신호 (본문 없음, 204)
+- `GET /patients/{patient_id}/photo` — 환자 프로필 사진 (`image/*`, private 캐시)
 - `GET /docs` — OpenAPI 문서
 
 ## 로봇 생존 감시
@@ -98,6 +99,7 @@ app/
 ├── event_codes.py config/event_codes.yaml 로드와 검증
 ├── registry.py    이벤트 코드 정본을 앱 전체에서 공유
 ├── ingest.py      이벤트 적재와 상태 갱신
+├── heartbeat.py   로봇 생존 감시 (메모리 · 단일 프로세스 전제)
 └── routers/       엔드포인트별 라우터
 ```
 
