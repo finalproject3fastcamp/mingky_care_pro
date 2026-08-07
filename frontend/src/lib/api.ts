@@ -24,3 +24,13 @@ export async function getRobots(
   const { data } = await api.get<Robot[]>('/robots', { signal: options.signal })
   return data
 }
+
+export async function armRobot(robotId: string): Promise<Robot> {
+  const { data } = await api.post<Robot>(`/robots/${robotId}/arm`)
+  return data
+}
+
+export async function disarmRobot(robotId: string): Promise<Robot> {
+  const { data } = await api.delete<Robot>(`/robots/${robotId}/arm`)
+  return data
+}

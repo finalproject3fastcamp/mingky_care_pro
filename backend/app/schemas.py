@@ -141,8 +141,19 @@ class RobotOut(BaseModel):
     battery_recorded_at: datetime | None = None
     active_session_id: int | None = None
     active_patient_id: str | None = None
+    # 의료진이 이 로봇을 활성화한 시각. NULL = 대기 중.
+    # DB 컬럼이 아니라 app/arming.py 인메모리 레지스트리에서 조립한다.
+    armed_at: datetime | None = None
     # 생존 여부는 DB 가 아니라 백엔드 메모리에서 온다(app/heartbeat.py).
     # unknown 은 '한 번도 heartbeat 를 안 보낸 로봇' 이다. offline 과 다르다 —
     # OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없다.
     last_seen_at: datetime | None = None
     link_state: Literal["online", "offline", "unknown"] = "unknown"
+
+
+class RobotArmingOut(BaseModel):
+    """로봇 QR 노드가 폴링하는 최소 상태."""
+
+    robot_id: str
+    armed: bool
+    armed_at: datetime | None = None
