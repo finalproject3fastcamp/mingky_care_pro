@@ -86,6 +86,16 @@
   }
 }
 
+/* 폴링 실패 배너. 카드 위에 얹혀 이전 데이터를 그대로 유지한 채 상태만 알린다. */
+.poll-error-banner {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-left: 3px solid var(--warning);
+  font-size: 0.9rem;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -130,6 +140,18 @@
 
 .patient-details {
   margin-top: 14px;
+}
+
+/* 세션 메타 (로봇 · 시작 시각). 카드 하단 부제로 얹는다. */
+.patient-session-meta {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-subtle);
+  font-size: 0.85rem;
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .mono {
@@ -196,6 +218,16 @@
   text-align: center;
 }
 
+/* 스텝 아래 시간 라인 ("10:23 완료 · QR"). name 과 붙여서 표시. */
+.step-time {
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  text-align: center;
+  margin-top: -4px;
+}
+
 .step.done .step-index {
   background: var(--accent);
   border-color: var(--accent);
@@ -222,18 +254,18 @@
 .state-badge {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 20px;
+  gap: 14px;
+  padding: 14px 28px;
   border-radius: 999px;
   font-weight: 700;
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   margin-bottom: 18px;
 }
 
 .state-badge::before {
   content: '';
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: currentColor;
 }
@@ -285,6 +317,13 @@
   margin: 0;
   color: var(--text);
   font-weight: 500;
+}
+
+/* dd 값 옆에 붙는 얇은 부제 (예: 배터리 "74% · 3분 전 기록"). */
+.dd-meta {
+  color: var(--text-subtle);
+  font-weight: 400;
+  font-size: 0.85em;
 }
 
 /* Notifications */
