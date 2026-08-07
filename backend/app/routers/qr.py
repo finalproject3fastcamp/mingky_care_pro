@@ -7,9 +7,14 @@
 상태를 바꾸는 경로는 여전히 하나다. 세션 생성도 여기서만 일어난다.
 """
 
+import json
+import uuid
+from datetime import datetime, timezone
+
 from asyncpg.exceptions import UniqueViolationError
 from fastapi import APIRouter, HTTPException
 
+from .. import arming
 from ..db import get_pool
 from ..schemas import Patient, QrScanRequest, ScheduleStep, TodaySchedule
 
@@ -66,14 +71,29 @@ _CURRENT_STEP_SQL = """
     SELECT step_order FROM session_current_step WHERE session_id = $1
 """
 
+# 새 세션이 만들어질 때 backend 가 activation.consumed 를 남긴다.
+# arming 상태 자체는 인메모리라 events 로그가 유일한 히스토리다.
+_INSERT_EVENT = """
+    INSERT INTO events (event_id, robot_id, session_id, occurred_at,
+                        level, event_code, source_node, payload)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (event_id) DO NOTHING
+"""
+
 
 @router.post("/scan", response_model=TodaySchedule)
 async def scan(payload: QrScanRequest) -> TodaySchedule:
+    """QR 스캔 → 세션 조회/생성 + 오늘 일정."""
     pool = get_pool()
     async with pool.acquire() as conn:
         patient_row = await conn.fetchrow(_PATIENT_SQL, payload.patient_id)
         if patient_row is None:
             raise HTTPException(status_code=404, detail="patient not found")
+
+        # arming 은 인메모리라 트랜잭션 밖에서 검사한다. 재스캔 (같은 환자·같은
+        # 로봇) 은 disarm 이후 두 번째 스캔이라 armed 가 아닐 수 있어, 이미
+        # 활성 세션이 있는 경우는 arming 검사를 건너뛴다.
+        arming_ok = arming.is_armed(payload.robot_id)
 
         async with conn.transaction():
             by_patient = await conn.fetchrow(
@@ -88,11 +108,17 @@ async def scan(payload: QrScanRequest) -> TodaySchedule:
                         detail=f"patient already guided by {by_patient['robot_id']}")
                 # 같은 로봇의 재스캔. 기존 세션을 그대로 돌려준다.
                 session_id = by_patient["session_id"]
+                created = False
             elif by_robot is not None:
                 raise HTTPException(
                     status_code=409,
                     detail=f"robot busy with {by_robot['patient_id']}")
             else:
+                # 새 세션은 armed 상태에서만 만든다. 의료진이 미리 로봇을
+                # 활성화해야 안내가 시작되는 시나리오를 강제한다.
+                if not arming_ok:
+                    raise HTTPException(
+                        status_code=409, detail="robot not armed")
                 try:
                     session_id = await conn.fetchval(
                         _CREATE_SESSION_SQL, payload.patient_id, payload.robot_id,
@@ -104,9 +130,24 @@ async def scan(payload: QrScanRequest) -> TodaySchedule:
                         status_code=409, detail="session conflict") from exc
                 await conn.execute(
                     _SNAPSHOT_STEPS_SQL, session_id, patient_row["condition_id"])
+                # arming 이 세션으로 소비됨. 이벤트는 여기서만 남기고, dict
+                # 정리는 트랜잭션 커밋 후에 한다 (아래).
+                await conn.execute(
+                    _INSERT_EVENT,
+                    uuid.uuid4(), payload.robot_id, session_id,
+                    datetime.now(timezone.utc),
+                    "info", "activation.consumed", "backend.qr",
+                    json.dumps({}, ensure_ascii=False),
+                )
+                created = True
 
             step_rows = await conn.fetch(_STEPS_SQL, session_id)
             current = await conn.fetchval(_CURRENT_STEP_SQL, session_id)
+
+        # 커밋 성공 후에 인메모리 arming 을 지운다. 트랜잭션이 롤백되면
+        # arming 은 그대로 남아 재시도할 수 있다.
+        if created:
+            arming.disarm(payload.robot_id)
 
     return TodaySchedule(
         session_id=session_id,

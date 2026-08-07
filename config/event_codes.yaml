@@ -115,6 +115,28 @@ session.ended:
   applies_to: guidance_sessions.ended_at
 
 
+# === 로봇 활성화 (의료진 대시보드 → 로봇 arming) ============================
+#
+# 세션 시작 전에 의료진이 어떤 핑키를 쓸지 고르는 절차의 로그.
+# 실시간 상태(=지금 armed 인가) 는 백엔드 인메모리 (app/arming.py) 가 소유하고,
+# events 는 감사·타임라인용 히스토리만 남긴다. 화면 판정에 이 이벤트를 쓰지 않는다.
+
+activation.armed:
+  level: info
+  payload: {}
+  # 의료진이 로봇을 활성화. 발행 주체는 백엔드 (POST /robots/{id}/arm).
+
+activation.canceled:
+  level: info
+  payload: { reason: string }
+  # armed 해제. reason 은 'staff' (사용자 취소) 또는 'failsafe' (로봇 폴링 두절).
+
+activation.consumed:
+  level: info
+  payload: {}
+  # QR 스캔이 성공해 arming 이 실제 세션으로 이어짐. session_id 는 필드에 담긴다.
+
+
 # === 로봇 상태 ==============================================================
 
 robot.battery_low:

@@ -1,0 +1,71 @@
+import { useState } from 'react'
+
+import { disarmRobot } from '../lib/api'
+import type { Robot } from '../types/monitoring'
+
+interface Props {
+  robot: Robot
+  /** 로봇 QR 리더가 송출하는 MJPEG 미리보기 URL. 없으면 안내 문구를 대신 띄운다. */
+  cameraStreamUrl?: string
+  onDisarmed?: () => void
+}
+
+// 스캔 대기 카드. 의료진이 로봇을 활성화한 뒤 QR 이 들어오기 전까지의 상태.
+// 카메라 미리보기를 이 카드에 함께 넣는 이유는, 지금은 환자에게 "여기에 QR 을
+// 대세요" 를 정확히 안내해야 하는 순간이라 시선이 한 곳에 모여야 하기 때문이다.
+// 폴링이 다음 tick 에 세션을 잡으면 상위(MedicalDashboard) 가 이 카드를
+// 세션 뷰로 교체한다.
+export function ArmedWaiting({ robot, cameraStreamUrl, onDisarmed }: Props) {
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleDisarm() {
+    setPending(true)
+    setError(null)
+    try {
+      await disarmRobot(robot.robot_id)
+      onDisarmed?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '해제 실패')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="card armed-waiting">
+      <div className="armed-header">
+        <div>
+          <div className="card-title">스캔 대기</div>
+          <div className="armed-robot-name">{robot.display_name}</div>
+          <div className="armed-hint">환자의 QR 카드를 카메라에 대주세요.</div>
+        </div>
+        <button
+          type="button"
+          className="btn"
+          disabled={pending}
+          onClick={handleDisarm}
+        >
+          {pending ? '해제 중…' : '취소'}
+        </button>
+      </div>
+      {error && <p className="picker-error">{error}</p>}
+      {cameraStreamUrl ? (
+        <img
+          className="camera-stream armed-camera"
+          src={cameraStreamUrl}
+          alt="로봇 카메라 실시간"
+        />
+      ) : (
+        <div className="armed-camera-missing">
+          카메라 URL 이 설정되지 않았습니다.
+          <div className="armed-camera-missing-hint">
+            <code>frontend/.env</code> 의 <code>VITE_CAMERA_STREAM_URL</code> 에
+            로봇 QR 리더 노드의 미리보기 주소를 채우고 dev 서버를 재시작하세요.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+

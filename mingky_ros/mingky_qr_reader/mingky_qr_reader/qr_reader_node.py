@@ -30,11 +30,17 @@ class _PreviewServer:
     대시보드에서 `<img src=".../stream">` 로 바로 임베드한다.
     """
 
-    def __init__(self, port: int, logger) -> None:
+    def __init__(self, port: int, logger, max_width: int = 640,
+                 quality: int = 60) -> None:
         from flask import Flask, Response  # 미리보기 켤 때만 필요
 
-        self._lock = threading.Lock()
+        # 새 프레임이 들어온 것을 대기 중인 뷰어들에게 알린다. 조건변수를 쓰는
+        # 이유는 아래 _frames 주석 참고 — 같은 프레임 재송출이 지연의 원인이다.
+        self._cond = threading.Condition()
         self._jpeg: bytes | None = None
+        self._seq = 0
+        self._max_width = max_width
+        self._quality = quality
 
         app = Flask(__name__)
 
@@ -57,13 +63,25 @@ class _PreviewServer:
         logger.info(f"미리보기 MJPEG 서버 시작: http://0.0.0.0:{port}/stream")
 
     def _frames(self):
+        """새로 잡힌 프레임만, 프레임당 한 번씩 내보낸다.
+
+        고정 주기로 버퍼를 다시 쏘면 같은 그림이 중복 전송된다. 2.4GHz 무선에서는
+        그 여분이 링크를 채우고 소켓 버퍼에 밀려서, 뷰어가 보는 화면이 실제보다
+        몇 초 뒤처진다 (보내는 쪽은 최신인데 받는 쪽이 큐를 소화하는 중).
+        새 프레임을 기다렸다 보내면 큐가 쌓일 여지 자체가 없어진다.
+        """
+        last = -1
         while True:
-            with self._lock:
+            with self._cond:
+                # 타임아웃은 카메라가 멎어도 이 스레드가 영원히 잠들지 않게 하는
+                # 안전장치다. 깨어나도 보낼 게 없으면 그냥 다시 기다린다.
+                if not self._cond.wait_for(lambda: self._seq != last, timeout=2.0):
+                    continue
+                last = self._seq
                 buf = self._jpeg
             if buf is not None:
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
                        + buf + b"\r\n")
-            time.sleep(0.05)
 
     def update(self, frame, codes) -> None:
         """최신 프레임에 인식된 QR 박스·라벨을 얹어 JPEG 버퍼로 갱신한다."""
@@ -79,10 +97,25 @@ class _PreviewServer:
             r = code.rect
             cv2.putText(disp, label, (r.left, max(r.top - 10, 20)),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-        ok, buf = cv2.imencode(".jpg", disp)
+
+        # 미리보기는 사람이 "QR 을 어디에 대야 하는지" 보는 용도다. 디코드는
+        # 원본 해상도로 이미 끝났으므로, 전송량을 줄이는 쪽이 이득이 크다.
+        # 박스·라벨을 그린 뒤에 줄여야 좌표 변환이 필요 없다.
+        if 0 < self._max_width < disp.shape[1]:
+            scale = self._max_width / disp.shape[1]
+            disp = cv2.resize(
+                disp,
+                (self._max_width, max(int(disp.shape[0] * scale), 1)),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        ok, buf = cv2.imencode(
+            ".jpg", disp, [int(cv2.IMWRITE_JPEG_QUALITY), self._quality])
         if ok:
-            with self._lock:
+            with self._cond:
                 self._jpeg = buf.tobytes()
+                self._seq += 1
+                self._cond.notify_all()
 
 
 class QrReaderNode(Node):
@@ -108,6 +141,19 @@ class QrReaderNode(Node):
         self.declare_parameter("http_timeout_seconds", 3.0)
         # >0 이면 그 포트로 MJPEG 미리보기 송출 (대시보드 <img> 임베드용). 0 이면 끔.
         self.declare_parameter("preview_port", 0)
+        # 미리보기 전송용 축소 폭·JPEG 품질. 디코드는 원본 해상도로 하고 여기만
+        # 줄인다. 무선 링크가 좁아 원본을 그대로 흘리면 지연이 쌓인다.
+        # 0 이면 축소하지 않는다.
+        self.declare_parameter("preview_max_width", 640)
+        self.declare_parameter("preview_jpeg_quality", 60)
+        # arming 폴링 주기. 백엔드에 GET /robots/<id>/arming 을 주기로 던져
+        # 의료진이 이 로봇을 활성화했는지 확인한다. armed 가 아니면 QR 을
+        # 디코드/전송하지 않는다.
+        self.declare_parameter("arming_poll_seconds", 2.0)
+        # 폴링 실패가 이 횟수 연속되면 disarmed 로 취급한다 (페일세이프).
+        # 백엔드 두절 상태에서 오래된 arming 이 유효한 것처럼 남아 있으면
+        # 통신 회복 순간 스캔이 튀는 위험이 있다.
+        self.declare_parameter("arming_fail_disarm_after", 5)
 
         self.source = self.get_parameter("source").value
         self.backend_url = self.get_parameter("backend_url").value.rstrip("/")
@@ -116,6 +162,10 @@ class QrReaderNode(Node):
         self.debounce_seconds = float(self.get_parameter("debounce_seconds").value)
         self.http_timeout = float(self.get_parameter("http_timeout_seconds").value)
         fps = float(self.get_parameter("fps").value)
+        self.arming_poll_seconds = float(
+            self.get_parameter("arming_poll_seconds").value)
+        self.arming_fail_disarm_after = int(
+            self.get_parameter("arming_fail_disarm_after").value)
 
         if not self.robot_id:
             raise RuntimeError("robot_id 파라미터가 필요합니다 (백엔드가 필수로 받음)")
@@ -130,14 +180,26 @@ class QrReaderNode(Node):
         self._preview: _PreviewServer | None = None
         preview_port = int(self.get_parameter("preview_port").value)
         if preview_port > 0:
-            self._preview = _PreviewServer(preview_port, self.get_logger())
+            self._preview = _PreviewServer(
+                preview_port,
+                self.get_logger(),
+                max_width=int(self.get_parameter("preview_max_width").value),
+                quality=int(self.get_parameter("preview_jpeg_quality").value),
+            )
 
         # 백엔드가 세션을 만들어 주면 로봇 내부에 SessionStart 를 흘려 다른 노드
         # (guide_manager 등)가 session_id 와 진료 순서를 받도록 한다.
         self._session_pub = self.create_publisher(SessionStart, "~/session_start", 10)
 
+        # arming 상태. 백엔드 폴링 결과의 캐시다.
+        # 기동 직후는 disarmed 로 시작해, 첫 폴링이 armed 를 확인해야 스캔이 켜진다.
+        self._armed = False
+        self._arming_fails = 0
+
         period = 1.0 / max(fps, 0.1)
         self._timer = self.create_timer(period, self._tick)
+        self._arming_timer = self.create_timer(
+            self.arming_poll_seconds, self._poll_arming)
         self.get_logger().info(
             f"qr_reader_node started (source={self.source}, backend={self.backend_url})"
         )
@@ -212,6 +274,13 @@ class QrReaderNode(Node):
         if frame is None:
             return
 
+        # armed 가 아니면 미리보기 프레임만 갱신하고 디코드는 건너뛴다.
+        # CPU 를 아끼고, "지금 QR 이 안 먹히는 이유" 를 화면에서도 명확히 한다.
+        if not self._armed:
+            if self._preview is not None:
+                self._preview.update(frame, [])
+            return
+
         # QR 만 디코드한다. 다른 심볼로지(DataBar 등)까지 돌리면 라이브 카메라
         # 노이즈에서 zbar 가 시끄러운 경고를 쏟고 CPU 도 낭비한다.
         codes = pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
@@ -227,6 +296,43 @@ class QrReaderNode(Node):
             self._last = LastScan(value=value, ts=time.monotonic())
             self._post_scan(value)
             return
+
+    def _poll_arming(self) -> None:
+        """백엔드에 이 로봇이 armed 인지 물어본다.
+
+        성공 응답의 armed 값을 그대로 캐시한다. 실패가 연속되면 페일세이프로
+        disarmed 처리 — 통신 두절 상태에서 헛돌지 않게.
+        """
+        url = f"{self.backend_url}/robots/{self.robot_id}/arming"
+        try:
+            response = requests.get(url, timeout=self.http_timeout)
+        except requests.RequestException as exc:
+            self._arming_fails += 1
+            if self._armed and self._arming_fails >= self.arming_fail_disarm_after:
+                self.get_logger().warn(
+                    f"arming 폴링 {self._arming_fails}회 연속 실패 → disarmed (페일세이프): {exc}")
+                self._armed = False
+            return
+
+        if response.status_code != 200:
+            self._arming_fails += 1
+            if self._armed and self._arming_fails >= self.arming_fail_disarm_after:
+                self.get_logger().warn(
+                    f"arming 응답 이상 {self._arming_fails}회 → disarmed: "
+                    f"{response.status_code} {response.text[:120]}")
+                self._armed = False
+            return
+
+        self._arming_fails = 0
+        try:
+            armed = bool(response.json().get("armed"))
+        except (ValueError, AttributeError):
+            self.get_logger().error("arming 응답 파싱 실패")
+            return
+
+        if armed != self._armed:
+            self.get_logger().info(f"arming 상태 변경: {self._armed} → {armed}")
+            self._armed = armed
 
     def _is_debounced(self, value: str) -> bool:
         if self._last is None:

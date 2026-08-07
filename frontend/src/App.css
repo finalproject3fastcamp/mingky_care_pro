@@ -326,6 +326,198 @@
   font-size: 0.85em;
 }
 
+/* Robot picker (선택 대기 화면) */
+.picker-hint {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  margin: 0 0 14px;
+}
+
+.picker-error {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.88rem;
+  margin: 0 0 12px;
+}
+
+/* 로봇 카드 그리드. 후보 2대 (핑키 2대) 를 가로로 나란히, 3대 이상은
+   auto-fit 으로 자연스레 줄바꿈. minmax 하한이 좁은 폭에선 1열로 접히게 한다. */
+.robot-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+/* 카드 전체가 <button>. font/color 는 부모 상속 강제, 정렬은 텍스트 왼쪽. */
+.robot-card {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px 22px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.robot-card:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.robot-card:not(:disabled):active {
+  transform: translateY(0);
+}
+
+.robot-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+.robot-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.robot-card.pending {
+  opacity: 0.8;
+}
+
+.robot-card-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.robot-card-id {
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+.robot-card-battery {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.robot-card-battery-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.robot-card-battery-label {
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+.robot-card-reason {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.82rem;
+  align-self: flex-start;
+}
+
+/* 카드가 곧 버튼이라 <button> 태그는 없다. 하단에 라벨만 얹어 CTA 느낌을 준다.
+   hover 시 accent 색으로 강조. */
+.robot-card-cta {
+  margin-top: auto;
+  padding-top: 14px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+  text-align: right;
+  min-height: 1.4em;
+}
+
+.robot-card:disabled .robot-card-cta {
+  color: var(--text-subtle);
+}
+
+/* Armed waiting (스캔 대기 화면) */
+.armed-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.armed-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.armed-robot-name {
+  margin-top: 6px;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.armed-hint {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+
+/* 카드 안에 들어간 카메라. 가운데 정렬 + 상단 여백. */
+.armed-camera {
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.armed-camera-missing {
+  padding: 20px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.armed-camera-missing-hint {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+  line-height: 1.5;
+}
+
+.armed-camera-missing-hint code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* Session block wrapper — 세션이 여러 개 동시일 때 카드 그룹 간격을 준다. */
+.session-block {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 /* Notifications */
 .notifications {
   list-style: none;
@@ -608,4 +800,68 @@
   font-family: var(--font-mono);
   font-size: 0.78rem;
   overflow-x: auto;
+}
+
+/* QR 인식 직후 잠깐 뜨는 확인 화면. 스캔 대기와 안내 화면 사이에서
+   "인식됐다" 를 환자·의료진이 같은 순간에 확인하는 자리다. */
+.scan-confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 24px;
+  text-align: center;
+  animation: scanConfirmIn 0.25s ease-out;
+}
+
+.scan-confirm-mark {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--success-bg);
+  color: var(--success);
+  font-size: 2.4rem;
+  font-weight: 700;
+  line-height: 72px;
+}
+
+.scan-confirm-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.scan-confirm-patient {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.scan-confirm-id {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.scan-confirm-hint {
+  color: var(--text-muted);
+}
+
+@keyframes scanConfirmIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-confirm {
+    animation: none;
+  }
 }

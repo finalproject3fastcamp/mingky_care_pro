@@ -47,6 +47,9 @@ export interface ActiveSession {
  *
  * 배터리는 2분 주기 로그의 최신값이지 실시간이 아니다.
  * battery_recorded_at 을 함께 보여줘야 사용자가 stale 인지 알 수 있다.
+ *
+ * armed_at 은 DB 컬럼이 아니라 백엔드 인메모리 (app/arming.py) 다.
+ * 세션 시작 전 의료진이 "이 로봇 쓰겠다" 를 표시한 시각.
  */
 export interface Robot {
   robot_id: string
@@ -59,6 +62,7 @@ export interface Robot {
   battery_recorded_at: string | null
   active_session_id: number | null
   active_patient_id: string | null
+  armed_at: string | null
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error'
