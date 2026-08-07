@@ -22,8 +22,10 @@ const MIN_BATTERY_PERCENT = 40
 interface Candidate {
   robot: Robot
   eligible: boolean
-  /** 이미 활성화된 로봇으로 되돌아가는 선택. arm 이 idempotent 라 그대로 재진입한다. */
+  /** 이미 활성화됐거나 안내 중인 로봇으로 되돌아가는 선택. 새로 arm 하는 게 아니다. */
   resume?: boolean
+  /** resume 카드에 붙는 현재 상태 라벨. */
+  status?: string
   /** eligible=false 인 이유. 사용자에게 왜 못 고르는지 알린다. */
   reason?: string
 }
@@ -31,14 +33,14 @@ interface Candidate {
 function categorize(robot: Robot): Candidate {
   if (!robot.is_active) return { robot, eligible: false, reason: '비활성' }
   if (robot.robot_type !== 'mobile') return { robot, eligible: false, reason: '주행 로봇 아님' }
+  // 이미 활성화됐거나 안내 중인 로봇도 고를 수 있어야 한다. 막아두면 한 번
+  // 나온 뒤에는 되돌아갈 방법이 없어 취소조차 못 한다. 이 화면은 "새로 켜는
+  // 곳" 이 아니라 "담당할 로봇을 고르는 곳" 이다 — 여러 대를 번갈아 본다.
   if (robot.active_session_id != null) {
-    return { robot, eligible: false, reason: '안내 중' }
+    return { robot, eligible: true, resume: true, status: '안내 중' }
   }
-  // 이미 활성화된 로봇도 고를 수 있어야 한다. 탭을 닫았다 열거나 다른 자리에서
-  // 이어받는 경우, 막아두면 취소할 방법조차 없이 잠긴다. arm 은 idempotent 라
-  // 재요청해도 armed_at 과 이벤트가 새로 생기지 않는다.
   if (robot.armed_at != null) {
-    return { robot, eligible: true, resume: true }
+    return { robot, eligible: true, resume: true, status: '활성화됨' }
   }
   if (robot.battery_percent == null) {
     return { robot, eligible: false, reason: '배터리 정보 없음' }
@@ -64,11 +66,18 @@ export function RobotPicker({ robots, onArmed }: Props) {
     .filter((r) => r.robot_type === 'mobile')
     .map(categorize)
 
-  async function handleArm(robotId: string) {
-    setPending(robotId)
+  async function handlePick(robot: Robot) {
+    // 안내 중인 로봇은 arm 을 다시 부르면 안 된다 — 백엔드가 409 busy 로
+    // 막는다(정당한 방어다). 이 경우는 이미 켜져 있는 걸 열어보는 것뿐이라
+    // API 없이 선택만 넘긴다.
+    if (robot.active_session_id != null) {
+      onArmed?.(robot)
+      return
+    }
+    setPending(robot.robot_id)
     setError(null)
     try {
-      const armed = await armRobot(robotId)
+      const armed = await armRobot(robot.robot_id)
       onArmed?.(armed)
     } catch (err) {
       const message = err instanceof Error ? err.message : '활성화 실패'
@@ -82,14 +91,15 @@ export function RobotPicker({ robots, onArmed }: Props) {
     <div className="card robot-picker">
       <div className="card-title">로봇 선택</div>
       <p className="picker-hint">
-        안내를 시작할 핑키를 선택하세요. 선택한 로봇의 QR 스캔이 켜집니다.
+        담당할 핑키를 선택하세요. 대기 중인 로봇은 선택하면 QR 스캔이 켜지고,
+        이미 활성화됐거나 안내 중인 로봇은 그 화면으로 바로 들어갑니다.
       </p>
       {error && <p className="picker-error">{error}</p>}
       {candidates.length === 0 ? (
         <p className="empty">등록된 주행 로봇이 없습니다.</p>
       ) : (
         <ul className="robot-grid">
-          {candidates.map(({ robot, eligible, resume, reason }) => {
+          {candidates.map(({ robot, eligible, resume, status, reason }) => {
             const isPending = pending === robot.robot_id
             const clickable = eligible && !isPending
             // 버튼 대신 카드 전체를 <button> 으로 만든다. 표시는 카드지만
@@ -102,7 +112,7 @@ export function RobotPicker({ robots, onArmed }: Props) {
                     isPending ? ' pending' : ''
                   }`}
                   disabled={!clickable}
-                  onClick={() => handleArm(robot.robot_id)}
+                  onClick={() => handlePick(robot)}
                   aria-label={`${robot.display_name} 선택`}
                 >
                   <div className="robot-card-name">{robot.display_name}</div>
@@ -115,8 +125,10 @@ export function RobotPicker({ robots, onArmed }: Props) {
                     </span>
                     <span className="robot-card-battery-label">배터리</span>
                   </div>
-                  {!eligible && reason && (
-                    <div className="robot-card-reason">{reason}</div>
+                  {(reason || status) && (
+                    <div className={`robot-card-reason${status ? ' active' : ''}`}>
+                      {reason ?? status}
+                    </div>
                   )}
                   <div className="robot-card-cta">
                     {isPending

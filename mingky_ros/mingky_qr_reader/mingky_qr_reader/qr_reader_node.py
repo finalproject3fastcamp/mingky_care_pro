@@ -83,6 +83,18 @@ class _PreviewServer:
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
                        + buf + b"\r\n")
 
+    def clear(self) -> None:
+        """마지막 프레임을 버린다.
+
+        스캔이 끝난 뒤 남은 화면 — 대개 환자의 QR 카드와 손이 찍힌 프레임 —
+        이 다음 접속자에게 그대로 보이면 안 된다. 갱신이 멎은 동안 뒤늦게
+        붙은 뷰어에게도 아무것도 내보내지 않게 비운다.
+        """
+        with self._cond:
+            self._jpeg = None
+            self._seq += 1
+            self._cond.notify_all()
+
     def update(self, frame, codes) -> None:
         """최신 프레임에 인식된 QR 박스·라벨을 얹어 JPEG 버퍼로 갱신한다."""
         import numpy as np  # cv2 와 함께 항상 존재
@@ -270,15 +282,15 @@ class QrReaderNode(Node):
         return frame
 
     def _tick(self) -> None:
-        frame = self._read_frame()
-        if frame is None:
+        # armed 가 아니면 캡처조차 하지 않는다. 미리보기가 필요한 건 "QR 을
+        # 대주세요" 를 안내하는 순간뿐이고, 그 순간은 곧 armed 인 순간이다.
+        # 스캔이 끝나면 백엔드가 arming 을 소비하므로 여기서 자동으로 멎는다.
+        # 계속 흘리면 CPU 와 무선 대역폭만 먹는다.
+        if not self._armed:
             return
 
-        # armed 가 아니면 미리보기 프레임만 갱신하고 디코드는 건너뛴다.
-        # CPU 를 아끼고, "지금 QR 이 안 먹히는 이유" 를 화면에서도 명확히 한다.
-        if not self._armed:
-            if self._preview is not None:
-                self._preview.update(frame, [])
+        frame = self._read_frame()
+        if frame is None:
             return
 
         # QR 만 디코드한다. 다른 심볼로지(DataBar 등)까지 돌리면 라이브 카메라
@@ -311,7 +323,7 @@ class QrReaderNode(Node):
             if self._armed and self._arming_fails >= self.arming_fail_disarm_after:
                 self.get_logger().warn(
                     f"arming 폴링 {self._arming_fails}회 연속 실패 → disarmed (페일세이프): {exc}")
-                self._armed = False
+                self._disarm()
             return
 
         if response.status_code != 200:
@@ -320,7 +332,7 @@ class QrReaderNode(Node):
                 self.get_logger().warn(
                     f"arming 응답 이상 {self._arming_fails}회 → disarmed: "
                     f"{response.status_code} {response.text[:120]}")
-                self._armed = False
+                self._disarm()
             return
 
         self._arming_fails = 0
@@ -332,7 +344,20 @@ class QrReaderNode(Node):
 
         if armed != self._armed:
             self.get_logger().info(f"arming 상태 변경: {self._armed} → {armed}")
-            self._armed = armed
+            if armed:
+                self._armed = True
+            else:
+                self._disarm()
+
+    def _disarm(self) -> None:
+        """스캔을 끄고 미리보기에 남은 프레임을 버린다.
+
+        정상 해제(스캔 성공·의료진 취소)와 페일세이프 해제가 같은 뒷정리를
+        해야 해서 한곳에 모은다.
+        """
+        self._armed = False
+        if self._preview is not None:
+            self._preview.clear()
 
     def _is_debounced(self, value: str) -> bool:
         if self._last is None:

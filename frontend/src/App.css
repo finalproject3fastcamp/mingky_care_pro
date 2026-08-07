@@ -124,12 +124,6 @@
   object-fit: contain;
 }
 
-.camera-offline {
-  color: var(--text-subtle);
-  font-size: 0.9rem;
-  margin: 0;
-}
-
 /* Patient */
 .patient-name {
   font-size: 1.65rem;
@@ -864,4 +858,20 @@
   .scan-confirm {
     animation: none;
   }
+}
+
+/* 이미 활성화됐거나 안내 중인 로봇의 상태 배지. 못 고르는 이유(경고색)가
+   아니라 정상 상태이므로 강조색으로 구분한다. */
+.robot-card-reason.active {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+}
+
+/* 담당 로봇 화면에서 선택 화면으로 돌아가는 통로. 화면 전환 수단이지
+   주된 행동이 아니라서 왼쪽 위에 작게 둔다. */
+.back-to-picker {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font-size: 0.88rem;
+  color: var(--text-muted);
 }

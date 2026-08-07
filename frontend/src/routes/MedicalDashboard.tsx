@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
-import { CameraStream } from '../components/CameraStream'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -25,24 +25,13 @@ const SCAN_FLASH_MS = 2200
 // 로봇별 URL 매핑이 필요하다 (예: GET /robots 응답에 preview_url 추가).
 const CAMERA_STREAM_URL = import.meta.env.VITE_CAMERA_STREAM_URL as string | undefined
 
-// 브라우저 탭이 "지금 어떤 로봇을 담당하고 있는가" 를 기억한다. 새로고침해도
-// 잃지 않으려고 localStorage. 서버 상태가 아니라 클라이언트 시야다 —
-// 여러 의료진이 탭을 각자 열어 각자 다른 로봇을 골라 쓴다.
-const SELECTION_KEY = 'mingky.medical.selectedRobotId'
-
-function loadSelection(): string | null {
-  if (typeof window === 'undefined') return null
-  return window.localStorage.getItem(SELECTION_KEY)
-}
-
-function saveSelection(robotId: string | null) {
-  if (typeof window === 'undefined') return
-  if (robotId == null) window.localStorage.removeItem(SELECTION_KEY)
-  else window.localStorage.setItem(SELECTION_KEY, robotId)
-}
-
 export function MedicalDashboard() {
-  const [selectedRobotId, setSelectedRobotId] = useState<string | null>(loadSelection)
+  // "지금 어떤 로봇을 담당하고 있는가" 는 URL 이 갖는다 (/medical/:robotId).
+  // 서버 상태가 아니라 이 탭의 시야다 — 의료진이 탭을 각자 열어 각자 다른
+  // 로봇을 본다. URL 에 두면 새로고침·뒤로가기가 공짜로 따라온다.
+  const { robotId } = useParams()
+  const navigate = useNavigate()
+  const selectedRobotId = robotId ?? null
   // 방금 활성화한 로봇의 응답. 로봇 목록은 3초 폴링이라 arm 직후 한 tick 동안은
   // armed_at 이 아직 null 이다. 그 낡은 값을 그대로 믿으면 아래 orphan 판정이
   // 방금 한 선택을 무효로 보고 선택 화면으로 튕긴다. 폴링이 따라잡을 때까지
@@ -86,9 +75,10 @@ export function MedicalDashboard() {
 
   // 스캔 대기 → 세션 시작으로 넘어가는 순간을 잡아 확인 화면을 띄운다.
   // "같은 로봇을 계속 보고 있는데 세션이 없다가 생겼다" 일 때만이다:
-  //   - 첫 tick 은 prev 가 undefined 라 지나간다 (세션 도중 새로고침)
+  //   - 세션 목록이 아직 안 온 tick 은 지나간다. 로딩 중의 null 을 "세션 없음"
+  //     으로 읽으면, 응답이 도착하는 순간이 새 스캔으로 둔갑한다 (새로고침할
+  //     때마다 확인 화면이 뜨던 원인).
   //   - 로봇 선택이 막 바뀐 tick 도 지나간다 (이미 안내 중인 로봇을 이어받은 경우)
-  // 둘 다 방금 스캔한 게 아닌데 확인 화면이 뜨면 거짓 신호가 된다.
   const [scanFlash, setScanFlash] = useState<ActiveSession | null>(null)
   const prevSessionRef = useRef<{
     robotId: string | null
@@ -96,6 +86,7 @@ export function MedicalDashboard() {
   }>({ robotId: null, sessionId: undefined })
 
   useEffect(() => {
+    if (sessions.data == null) return
     const current = activeSession?.session_id ?? null
     const prev = prevSessionRef.current
     const sameRobot = prev.robotId === selectedRobotId
@@ -103,7 +94,7 @@ export function MedicalDashboard() {
     if (sameRobot && prev.sessionId === null && current != null && activeSession) {
       setScanFlash(activeSession)
     }
-  }, [activeSession, selectedRobotId])
+  }, [activeSession, selectedRobotId, sessions.data])
 
   useEffect(() => {
     if (scanFlash == null) return
@@ -113,10 +104,11 @@ export function MedicalDashboard() {
 
   useEffect(() => {
     if (selectionOrphaned) {
-      saveSelection(null)
-      setSelectedRobotId(null)
+      // replace: 무효해진 로봇 URL 을 히스토리에 남기지 않는다. 남기면
+      // 뒤로가기가 이미 사라진 화면으로 되돌아간다.
+      navigate('/medical', { replace: true })
     }
-  }, [selectionOrphaned])
+  }, [selectionOrphaned, navigate])
 
   // 폴링이 arm 을 따라잡으면 덮어쓰기를 걷어낸다. 이후로는 서버 상태만 보고
   // 판단하므로 다른 경로로 해제되면 정상적으로 선택 화면으로 돌아간다.
@@ -129,15 +121,22 @@ export function MedicalDashboard() {
   }, [robots.data, justArmed])
 
   function handleSelect(robot: Robot) {
-    saveSelection(robot.robot_id)
-    setSelectedRobotId(robot.robot_id)
     setJustArmed(robot)
+    navigate(`/medical/${robot.robot_id}`)
   }
 
   function handleDisarmed() {
-    saveSelection(null)
-    setSelectedRobotId(null)
     setJustArmed(null)
+    // replace: 해제된 로봇 화면으로 뒤로가기 하면 곧장 다시 튕겨나온다.
+    navigate('/medical', { replace: true })
+  }
+
+  // 활성화는 그대로 두고 선택 화면으로만 돌아간다. 로봇 여러 대를 차례로
+  // 켜려면 필요하다 — 2호를 살려둔 채 1호도 켜는 식이다. 선택은 이 탭의
+  // 시야일 뿐이라 URL 을 떠나도 로봇은 계속 armed 상태로 스캔을 기다린다.
+  function handleBackToPicker() {
+    setJustArmed(null)
+    navigate('/medical')
   }
 
   // 초회 로딩: robots 가 상태 전이의 뼈대다. 이것만 있으면 화면을 그릴 수 있다.
@@ -168,17 +167,24 @@ export function MedicalDashboard() {
   return (
     <div className="dashboard">
       {stale && <ErrorBanner />}
+      {/* 활성화·안내를 유지한 채 선택 화면으로. 다른 로봇을 추가로 켜는 통로다. */}
+      <button
+        type="button"
+        className="btn back-to-picker"
+        onClick={handleBackToPicker}
+        title="활성화는 유지된 채 선택 화면으로 돌아갑니다"
+      >
+        ← 로봇 선택으로
+      </button>
       {activeSession ? (
-        <>
-          <SessionView
-            session={activeSession}
-            robot={selectedRobot}
-            events={sessionEvents}
-          />
-          {/* 세션 진행 중엔 카메라를 별도 카드로 (환자·진행 상황·알림 사이에서
-              시선을 뺏지 않도록 하단에 붙인다). */}
-          {CAMERA_STREAM_URL && <CameraStream streamUrl={CAMERA_STREAM_URL} />}
-        </>
+        // 환자가 확인된 뒤로는 카메라를 보여주지 않는다. QR 을 대는 순간을
+        // 안내하려고 띄우는 화면이라 그 순간이 지나면 쓸모가 없고, 로봇도
+        // arming 이 소비되면서 송출을 멈춘다.
+        <SessionView
+          session={activeSession}
+          robot={selectedRobot}
+          events={sessionEvents}
+        />
       ) : (
         // 스캔 대기 순간엔 카메라가 카드 안에 들어가 있어야 "여기에 QR 을
         // 대세요" 안내와 시선이 한 곳에 모인다.

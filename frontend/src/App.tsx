@@ -11,6 +11,9 @@ function App() {
         <Route element={<Layout />}>
           <Route index element={<Navigate to="/medical" replace />} />
           <Route path="medical" element={<MedicalDashboard />} />
+          {/* 담당 로봇 화면은 별도 URL 을 갖는다. 새로고침·뒤로가기가 그대로
+              동작하고, 로봇별로 탭을 따로 띄워둘 수 있다. */}
+          <Route path="medical/:robotId" element={<MedicalDashboard />} />
           <Route path="engineer" element={<EngineerDashboard />} />
         </Route>
       </Routes>
