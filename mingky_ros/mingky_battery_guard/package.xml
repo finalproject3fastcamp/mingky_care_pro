@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mingky_battery_guard</name>
+  <version>0.0.1</version>
+  <description>배터리 저전압 감시 후 robot.battery_low 발행 및 Nav2 충전소 복귀</description>
+  <maintainer email="wjddn007658@gmail.com">jw</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>pinky_interfaces</depend>
+  <depend>mingky_interfaces</depend>
+  <!-- EventPublisher 헬퍼를 쓴다. 이벤트 발행 방식이 패키지마다 갈리지
+       않도록 복사하지 않고 그대로 가져다 쓴다. -->
+  <depend>mingky_guide_manager</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
