@@ -1,7 +1,48 @@
 # 관제 서버 수동 배포
 
 Docker가 설치된 Linux PC에서 PostgreSQL, FastAPI, React 대시보드를 함께
-실행합니다. CI/CD, HTTPS, 인증은 이 구성의 범위에 포함하지 않습니다.
+실행합니다.
+
+## Docker 설치 — Ubuntu 22.04/24.04
+
+Docker 공식 APT 저장소를 등록하고 Engine과 Compose 플러그인을 설치합니다.
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install -y \
+  docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+```
+
+현재 사용자가 `sudo` 없이 배포 스크립트를 실행할 수 있도록 Docker 그룹에
+추가합니다. 이 그룹에는 관리자 수준 권한이 있으므로 관제 서버 운영 사용자만
+추가합니다.
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker run --rm hello-world
+docker compose version
+```
+
+설치 문제가 있으면 [Docker Engine Ubuntu 공식 문서](https://docs.docker.com/engine/install/ubuntu/)를
+확인합니다.
 
 ## 최초 실행
 
