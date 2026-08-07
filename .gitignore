@@ -100,3 +100,6 @@ database/.env
 database/data/
 database/*.dump
 database/*.backup
+
+# Local deployment secrets
+/deploy/.env
