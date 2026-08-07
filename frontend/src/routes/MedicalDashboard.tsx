@@ -144,6 +144,9 @@ export function MedicalDashboard() {
     return <p>불러오는 중…</p>
   }
 
+  // 어느 소스든 최신 tick 이 실패하면 배너를 띄우고, 카드는 마지막 성공값으로
+  // 계속 그린다. 다음 tick 이 성공하면 usePolling 이 error 를 null 로 지워
+  // 배너는 자동으로 사라진다.
   const stale = Boolean(sessions.error || events.error || robots.error)
   const sessionEvents = events.data ?? []
 

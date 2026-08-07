@@ -6,9 +6,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from .. import arming
+from .. import arming, heartbeat
 from ..db import get_pool
 from ..schemas import RobotArmingOut, RobotOut
 
@@ -80,10 +80,22 @@ async def _insert_activation_event(
     )
 
 
-def _row_to_out(row, armed_map: dict[str, datetime]) -> RobotOut:
+def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -> RobotOut:
+    """DB 행에 메모리에만 있는 두 가지(활성화·생존)를 얹는다.
+
+    seen 을 넘기지 않으면 link_state 는 unknown 으로 나간다. arm/disarm 응답처럼
+    그 순간의 생존 여부가 관심사가 아닌 경로에서 굳이 조회하지 않기 위해서다.
+    """
+    last_seen, offline = (seen or {}).get(row["robot_id"], (None, False))
     return RobotOut(
         **dict(row),
         armed_at=armed_map.get(row["robot_id"]),
+        last_seen_at=last_seen,
+        # 한 번도 신호를 안 보낸 로봇은 offline 이 아니라 unknown 이다.
+        # OMX 는 관제 PC 에 USB 직결된 LeRobot 프로세스라 잃을 네트워크
+        # 링크가 없다. 이걸 두절로 표시하면 타임라인이 오탐으로 덮인다.
+        link_state=("unknown" if last_seen is None
+                    else "offline" if offline else "online"),
     )
 
 
@@ -93,8 +105,10 @@ async def list_robots() -> list[RobotOut]:
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(_SQL)
+    # 활성화·생존 둘 다 DB 가 아니라 메모리에 있다 (arming.py / heartbeat.py).
     armed_map = arming.snapshot()
-    return [_row_to_out(row, armed_map) for row in rows]
+    seen = heartbeat.snapshot()
+    return [_row_to_out(row, armed_map, seen) for row in rows]
 
 
 @router.post("/{robot_id}/arm", response_model=RobotOut)
@@ -168,3 +182,27 @@ async def get_arming(robot_id: str) -> RobotArmingOut:
     """로봇 QR 노드가 주기 폴링. 최소 페이로드로 유지한다."""
     at = arming.armed_at(robot_id)
     return RobotArmingOut(robot_id=robot_id, armed=at is not None, armed_at=at)
+
+
+@router.post("/{robot_id}/heartbeat", status_code=204)
+async def post_heartbeat(robot_id: str) -> Response:
+    """로봇 생존 신호.
+
+    게이트웨이의 이벤트 큐를 타지 않는 별도 경로다. 실패하면 로봇 쪽에서
+    그냥 버린다 — 재전송하면 두절 중 쌓였다가 몰려와 신호의 의미가 사라진다.
+
+    본문이 없다. 지금 필요한 정보는 '언제 왔는가' 뿐이고, 그건 서버가 안다.
+    로봇 시계를 믿지 않아도 되므로 시계 어긋남의 영향도 받지 않는다.
+    """
+    if not heartbeat.is_tracked(robot_id):
+        # 첫 신호일 때만 확인한다. 오타난 robot_id 로 유령 로봇이 감시 목록에
+        # 쌓이면, 존재하지 않는 로봇에 대해 comm_lost 가 계속 발행된다.
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            known = await conn.fetchval(
+                "SELECT 1 FROM robots WHERE robot_id = $1 AND is_active", robot_id)
+        if not known:
+            raise HTTPException(status_code=404, detail="unknown or inactive robot")
+
+    heartbeat.touch(robot_id)
+    return Response(status_code=204)

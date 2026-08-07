@@ -1,9 +1,10 @@
 # mingky_event_gateway
 
-로봇 이벤트를 관제 서버로 전달합니다.
+로봇 이벤트를 관제 서버로 전달하고, 생존 신호를 보냅니다.
 
 ```
-/events 토픽 → 로컬 큐(SQLite) → HTTP POST /events → 성공 시 큐에서 제거
+/events 토픽 → 로컬 큐(SQLite) → HTTP POST /events        → 성공 시 큐에서 제거
+(주기)       → 큐 없음          → HTTP POST .../heartbeat  → 실패하면 버림
 ```
 
 ## 왜 상태머신과 분리했나
@@ -46,9 +47,35 @@ ros2 run mingky_event_gateway event_gateway --ros-args \
 | `http_timeout_sec` | `5.0` | HTTP 타임아웃 |
 | `max_queue_rows` | `50000` | 큐 상한. 넘으면 오래된 것부터 버림 |
 | `max_backoff_sec` | `60.0` | 재시도 백오프 상한 |
+| `robot_id` | `pinky-01` | heartbeat 대상. `robots` 테이블에 있어야 함 |
+| `heartbeat_interval_sec` | `5.0` | 생존 신호 주기. `0` 이면 보내지 않음 |
+| `heartbeat_timeout_sec` | `2.0` | heartbeat HTTP 타임아웃 |
 
 `max_queue_rows` 는 디스크가 차서 로봇이 멈추는 것보다 오래된 이벤트를
 버리는 쪽이 낫다는 판단입니다.
+
+## heartbeat 는 왜 큐를 안 타나
+
+이벤트와 요구가 정반대이기 때문입니다.
+
+| | 이벤트 | heartbeat |
+| --- | --- | --- |
+| 잃으면 | 기록이 사라짐 | 다음 주기가 곧 재시도 |
+| 늦게 도착하면 | 문제없음 (`occurred_at` 이 있음) | **거짓말이 됨** |
+| 그래서 | 큐에 쌓고 될 때까지 재전송 | 큐 없이 보내고 실패하면 버림 |
+
+heartbeat 를 큐에 넣으면 두절 동안 쌓였다가 복구 순간 "10분 전 나
+살아있었음" 이 한꺼번에 도착합니다. 서버가 두절을 판정할 수 없게 됩니다.
+
+전송 스레드와도 분리되어 있습니다. 큐가 밀려 백오프 중일 때도 생존 신호는
+계속 나가야 합니다.
+
+`robot_id` 가 서버에 없으면 `404` 가 오고, 재시도해도 결과가 같으므로
+ERROR 로그를 남깁니다. 그 경우 `robot_id` 파라미터와
+`database/seeds/002_robots.sql` 을 확인하세요.
+
+판정 임계값은 서버 쪽 설정입니다 (`backend/README.md`). 기본 15초라
+5초 주기면 3회 연속 유실에 두절로 잡힙니다.
 
 ## 실패 처리
 
