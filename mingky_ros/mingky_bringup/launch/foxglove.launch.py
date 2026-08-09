@@ -24,7 +24,7 @@ Foxglove Studio 접속 주소
     Costmap        /global_costmap/costmap, /local_costmap/costmap
     Path           /plan, /local_plan
     LaserScan      /scan
-    Pose           /amcl_pose, /particlecloud
+    Pose           /amcl_pose, /particle_cloud
     Plot           /cmd_vel  linear.x, angular.z
     Parameters     controller_server, global_costmap, local_costmap
 """

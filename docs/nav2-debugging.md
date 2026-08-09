@@ -40,7 +40,7 @@ ros2 interface show nav2_msgs/action/NavigateToPose | grep -A40 error_code
 | **`reached` 만 반복, 안 움직임** | **목표가 이미 tolerance 안**. 즉시 성공 반환 | goal 전후 `/amcl_pose` 비교 |
 | **엉뚱한 방 앞에서 도착** | `xy_goal_tolerance` 가 방 폭보다 큼 | `check_waypoints.py` 간격 검사 |
 | **커브를 크게 돌아 벽에 붙음** | `lookahead` 가 맵 크기에 비해 큼 | `/local_plan` 모양 |
-| **위치가 갑자기 튐** | 가속도 과다로 휠 슬립 → odom 오차 | `/particlecloud` 퍼짐 |
+| **위치가 갑자기 튐** | 가속도 과다로 휠 슬립 → odom 오차 | `/particle_cloud` 퍼짐 |
 | **첫 주행만 이상함** | `initial_pose` 가 실제 출발 위치와 다름 | 시작 직후 `/amcl_pose` |
 | **무선·BLE 가 불안정, AP 모드로 폴백** | **저전압.** Pi 5 는 전압이 처지면 무선부터 죽는다 | 배터리 전압 |
 
@@ -60,7 +60,13 @@ ros2 run tf2_tools view_frames
 
 ### AMCL — Nav2 문제의 절반
 
-Foxglove 에서 `/particlecloud` 와 `/amcl_pose` 를 봅니다.
+Foxglove 에서 `/particle_cloud` 와 `/amcl_pose` 를 봅니다.
+
+> **토픽 이름 주의.** Nav2 Jazzy 는 `nav2_msgs/ParticleCloud` 타입으로
+> `/particle_cloud` 에 냅니다. 옛 이름 `/particlecloud`
+> (`geometry_msgs/PoseArray`) 도 `ros2 topic list` 에는 보이지만
+> **발행자가 0** 입니다. 그쪽을 열면 아무것도 안 나와 AMCL 이 죽은
+> 것처럼 보입니다.
 
 | 보이는 것 | 판단 |
 | --- | --- |
@@ -219,7 +225,7 @@ ros2 run mingky_bringup check_waypoints.py
 
 ```bash
 ros2 bag record -o fail_$(date +%H%M%S) \
-  /scan /tf /tf_static /odom /amcl_pose /particlecloud \
+  /scan /tf /tf_static /odom /amcl_pose /particle_cloud \
   /plan /local_plan /cmd_vel /rosout \
   /global_costmap/costmap /local_costmap/costmap
 ```
