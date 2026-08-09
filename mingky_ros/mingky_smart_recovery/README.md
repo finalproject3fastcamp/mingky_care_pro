@@ -23,6 +23,17 @@ Nav2가 기존 목표에 도달하지 못했을 때 주변 LiDAR 공간에서 �
 ros2 launch mingky_bringup mingky_system.launch.xml recovery_mode:=adaptive
 ```
 
+전역 경로 계획기는 독립적으로 선택할 수 있습니다. `navfn`이 기본이며,
+복도 모서리에서 더 자연스러운 경로를 시험할 때만 `smac2d`를 선택합니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  recovery_mode:=adaptive planner_mode:=smac2d
+```
+
+적응형 모드의 첫 주행에는 Spin·Backup이 없는 behavior tree를 사용합니다.
+탈출 후보를 모두 소진한 뒤에만 기존 Nav2 복구 트리를 마지막으로 실행합니다.
+
 LiDAR나 Nav2 위치 피드백이 1초 이상 오래됐거나, 저전압·비상정지 상태이면
 적응형 복구를 시작하지 않습니다. 기본 최대 복구 횟수는 3회입니다.
 

@@ -70,6 +70,7 @@ class GuideManager(Node):
         # default 는 기존 Nav2 동작을 그대로 유지한다. adaptive 를 명시한 로봇만
         # LiDAR 후보 생성 -> 경로 검증 -> 임시 탈출 지점 이동을 사용한다.
         self.declare_parameter('recovery_mode', 'default')
+        self.declare_parameter('planner_mode', 'navfn')
         self.declare_parameter('recovery_scan_topic', '/scan')
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
         self.declare_parameter('recovery_max_attempts', 3)
@@ -87,6 +88,21 @@ class GuideManager(Node):
             self.get_logger().warn(
                 f'알 수 없는 recovery_mode={self.recovery_mode!r}; default 를 사용합니다.')
             self.recovery_mode = 'default'
+        self.planner_mode = str(self.get_parameter('planner_mode').value).lower()
+        if self.planner_mode not in ('navfn', 'smac2d'):
+            self.get_logger().warn(
+                f'알 수 없는 planner_mode={self.planner_mode!r}; navfn 을 사용합니다.')
+            self.planner_mode = 'navfn'
+        self._behavior_tree_dir = self._find_behavior_tree_dir()
+        if self._behavior_tree_dir is None:
+            if self.recovery_mode == 'adaptive':
+                self.get_logger().error(
+                    '적응형 복구 파일이 없어 recovery_mode=default 로 전환합니다.')
+                self.recovery_mode = 'default'
+            if self.planner_mode == 'smac2d':
+                self.get_logger().error(
+                    'Smac2D 선택 파일이 없어 planner_mode=navfn 으로 전환합니다.')
+                self.planner_mode = 'navfn'
         self.recovery_scan_stale_sec = max(
             0.1, float(self.get_parameter('recovery_scan_stale_sec').value))
         self.recovery_max_attempts = max(
@@ -171,9 +187,37 @@ class GuideManager(Node):
         self.get_logger().info(
             f'guide_manager 시작 (robot_id={self.robot_id}, '
             f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint}, '
-            f'recovery={self.recovery_mode})')
+            f'recovery={self.recovery_mode}, planner={self.planner_mode})')
 
     # ------------------------------------------------------------------ 설정
+
+    def _find_behavior_tree_dir(self) -> Path | None:
+        try:
+            directory = Path(get_package_share_directory(
+                'mingky_smart_recovery')) / 'behavior_trees'
+            if directory.is_dir():
+                return directory
+        except PackageNotFoundError:
+            pass
+        for parent in Path(__file__).resolve().parents:
+            directory = parent / 'mingky_smart_recovery' / 'behavior_trees'
+            if directory.is_dir():
+                return directory
+        self.get_logger().error('적응형 복구 behavior tree 디렉터리를 찾지 못했습니다.')
+        return None
+
+    def _behavior_tree_file(self, *, fallback: bool) -> str:
+        if self._behavior_tree_dir is None:
+            return ''
+        if fallback and self.planner_mode == 'navfn':
+            # 빈 값은 Nav2의 기존 기본 recovery tree를 뜻한다.
+            return ''
+        phase = 'recovery' if fallback else 'no_recovery'
+        path = self._behavior_tree_dir / f'navigate_{phase}_{self.planner_mode}.xml'
+        if path.is_file():
+            return str(path)
+        self.get_logger().error(f'behavior tree 파일이 없습니다: {path}')
+        return ''
 
     def _waypoint_candidates(self, map_name: str) -> list[Path]:
         """좌표 파일 후보를 우선순위대로 돌려준다.
@@ -429,7 +473,7 @@ class GuideManager(Node):
             self, waypoint_name: str, *, is_dock: bool, session_id: int,
             recovery_attempt: int = 0,
             recovery_failures: Mapping[str, int] | None = None,
-            announce: bool = True) -> None:
+            announce: bool = True, fallback: bool = False) -> None:
         wp = self.waypoints.get(waypoint_name)
         if wp is None:
             self.get_logger().error(f'알 수 없는 waypoint: {waypoint_name}')
@@ -451,6 +495,10 @@ class GuideManager(Node):
         z, w = _yaw_to_quat(float(wp['yaw']))
         goal.pose.pose.orientation.z = z
         goal.pose.pose.orientation.w = w
+        if not is_dock and (self.recovery_mode == 'adaptive'
+                            or self.planner_mode == 'smac2d'):
+            goal.behavior_tree = self._behavior_tree_file(
+                fallback=fallback or self.recovery_mode == 'default')
 
         self._nav_generation += 1
         generation = self._nav_generation
@@ -474,12 +522,13 @@ class GuideManager(Node):
         future.add_done_callback(
             lambda done: self._on_goal_response(
                 done, generation, waypoint_name, is_dock, session_id,
-                recovery_attempt, dict(recovery_failures or {})))
+                recovery_attempt, dict(recovery_failures or {}), fallback))
 
     def _on_goal_response(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, recovery_attempt: int = 0,
-            recovery_failures: Mapping[str, int] | None = None):
+            recovery_failures: Mapping[str, int] | None = None,
+            fallback: bool = False):
         try:
             handle = future.result()
         except Exception as exc:  # noqa: BLE001 - Nav2 오류를 이벤트로 보고
@@ -504,12 +553,13 @@ class GuideManager(Node):
         result.add_done_callback(
             lambda done: self._on_goal_result(
                 done, generation, waypoint_name, is_dock, session_id,
-                recovery_attempt, dict(recovery_failures or {})))
+                recovery_attempt, dict(recovery_failures or {}), fallback))
 
     def _on_goal_result(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, recovery_attempt: int = 0,
-            recovery_failures: Mapping[str, int] | None = None):
+            recovery_failures: Mapping[str, int] | None = None,
+            fallback: bool = False):
         if generation != self._nav_generation:
             return
         try:
@@ -536,10 +586,16 @@ class GuideManager(Node):
                     'nav.goal_succeeded', {'visit_name': waypoint_name}, session_id)
                 self.get_logger().info(f'도착: {waypoint_name}')
         else:
-            if (not is_dock and status == 6
+            if (not is_dock and not fallback and status == 6
                     and self._start_adaptive_recovery(
                         waypoint_name, session_id, recovery_attempt,
                         dict(recovery_failures or {}))):
+                return
+            if (not is_dock and not fallback and status == 6
+                    and self.recovery_mode == 'adaptive'):
+                self._send_fallback_goal(
+                    waypoint_name, session_id, recovery_attempt,
+                    dict(recovery_failures or {}))
                 return
             self._goal_failed(
                 waypoint_name, is_dock, session_id, int(status),
@@ -637,14 +693,19 @@ class GuideManager(Node):
             return
         index = context['index']
         if index >= len(context['candidates']):
-            self._goal_failed(
-                context['waypoint_name'], False, context['session_id'], 208,
-                '검증 가능한 적응형 탈출 경로가 없습니다.')
+            self.get_logger().warn('검증 가능한 적응형 탈출 경로가 없습니다.')
+            self._send_fallback_goal(
+                context['waypoint_name'],
+                context['session_id'],
+                context['recovery_attempt'],
+                context['failures'],
+            )
             return
         candidate = context['candidates'][index]
         context['index'] += 1
         goal = ComputePathToPose.Goal()
         goal.goal = self._candidate_pose(context, candidate)
+        goal.planner_id = 'Smac2D' if self.planner_mode == 'smac2d' else 'GridBased'
         goal.use_start = False
         future = self.path_planner.send_goal_async(goal)
         future.add_done_callback(
@@ -703,6 +764,7 @@ class GuideManager(Node):
         context['active_candidate'] = candidate
         goal = NavigateToPose.Goal()
         goal.pose = self._candidate_pose(context, candidate)
+        goal.behavior_tree = self._behavior_tree_file(fallback=False)
         future = self.nav.send_goal_async(
             goal,
             feedback_callback=lambda feedback: self._on_nav_feedback(
@@ -758,9 +820,28 @@ class GuideManager(Node):
                 context['waypoint_name'], context['session_id'],
                 next_attempt, failures):
             return
-        self._goal_failed(
-            context['waypoint_name'], False, context['session_id'], 6,
-            f'탈출 이동 실패 ({candidate.name})')
+        self._send_fallback_goal(
+            context['waypoint_name'], context['session_id'], next_attempt, failures)
+
+    def _send_fallback_goal(
+            self, waypoint_name: str, session_id: int, recovery_attempt: int,
+            failures: Mapping[str, int]) -> None:
+        if self._battery_alarm or self._emergency_engaged:
+            self._goal_failed(
+                waypoint_name, False, session_id, 6,
+                '안전 상태 변경으로 최종 Nav2 복구를 시작하지 않습니다.')
+            return
+        self.get_logger().warn(
+            '적응형 탈출을 완료하지 못해 기존 Spin/Wait/Backup 복구를 실행합니다.')
+        self._send_nav_goal(
+            waypoint_name,
+            is_dock=False,
+            session_id=session_id,
+            recovery_attempt=recovery_attempt,
+            recovery_failures=failures,
+            announce=False,
+            fallback=True,
+        )
 
     def _goal_failed(
             self, waypoint_name: str, is_dock: bool, session_id: int,
