@@ -56,6 +56,10 @@
 
             <remap from="/tf" to="tf"/>
             <remap from="/tf_static" to="tf_static"/>
+            <!-- 복구 동작(spin·backup)도 중재를 거치게 한다. 이 리맵이 없으면
+                 cmd_vel 로 직행해 텔레옵보다 우선순위가 없는 채로 모터에 닿는다.
+                 Nav2 공식 navigation_launch.py 에는 있는 리맵이다. -->
+            <remap from="cmd_vel" to="cmd_vel_nav"/>
         </composable_node>  
 
         <composable_node pkg="nav2_bt_navigator" plugin="nav2_bt_navigator::BtNavigator" name="bt_navigator">            
@@ -140,6 +144,10 @@
 
             <remap from="/tf" to="tf"/>
             <remap from="/tf_static" to="tf_static"/>
+            <!-- 복구 동작(spin·backup)도 중재를 거치게 한다. 이 리맵이 없으면
+                 cmd_vel 로 직행해 텔레옵보다 우선순위가 없는 채로 모터에 닿는다.
+                 Nav2 공식 navigation_launch.py 에는 있는 리맵이다. -->
+            <remap from="cmd_vel" to="cmd_vel_nav"/>
         </node>
 
         <node pkg="nav2_bt_navigator" exec="bt_navigator" name="bt_navigator" output="screen">
