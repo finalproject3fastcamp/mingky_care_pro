@@ -6,12 +6,16 @@ import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotPicker } from '../components/RobotPicker'
+import { RobotMap } from '../components/RobotMap'
+import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
+import { TeleopPad } from '../components/TeleopPad'
 import { getActiveSessions, getRobots } from '../lib/api'
-import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
+import { deriveCurrentDestination, deriveRobotMode, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
 import { usePolling } from '../lib/usePolling'
+import { useTeleopSocket } from '../lib/useTeleopSocket'
 import type { EventOut } from '../types/events'
 import type { ActiveSession, Robot } from '../types/monitoring'
 
@@ -44,6 +48,10 @@ export function MedicalDashboard() {
     async (signal) => (await listEvents({ limit: 30 }, { signal })).items,
     POLL_MS,
   )
+
+  // 조작과 위치는 폴링이 아니라 소켓이다. 방향키를 누른 뒤 3초 뒤에 움직이면
+  // 조작이라 할 수 없고, 위치도 지도 위에서 끊겨 보인다.
+  const teleop = useTeleopSocket(selectedRobotId)
 
   // 선택한 로봇이 실제 목록에 있고 armed 이거나 세션이 있는 동안만 유효 선택이다.
   // 세션이 끝나거나 다른 경로로 disarmed 되면 선택을 자동으로 해제해서
@@ -179,6 +187,35 @@ export function MedicalDashboard() {
       >
         ← 로봇 선택으로
       </button>
+      {/* 안내 중이든 대기 중이든 항상 보여야 한다. 급할 때 찾는 것이
+          화면 상태에 따라 사라지면 안 된다. */}
+      {selectedRobotId && (() => {
+        const mode = deriveRobotMode(events.data ?? [], selectedRobotId)
+        return (
+          <div className="control-deck">
+            <RobotModeControl robotId={selectedRobotId} mode={mode} />
+            <RobotMap
+              pose={teleop.pose}
+              live={teleop.robotConnected}
+              scan={teleop.scan}
+              particles={teleop.particles}
+              plan={teleop.plan}
+              onSetPose={teleop.setPose}
+            />
+            <TeleopPad
+              drive={teleop.drive}
+              enabled={mode === 'manual' && teleop.robotConnected}
+              disabledReason={
+                !teleop.robotConnected
+                  ? '로봇이 관제에 연결되어 있지 않습니다.'
+                  : mode === 'estop'
+                    ? '비상정지가 걸려 있습니다. 해제해야 움직입니다.'
+                    : '수동 조작 모드로 전환해야 움직입니다.'
+              }
+            />
+          </div>
+        )
+      })()}
       {activeSession ? (
         // 환자가 확인된 뒤로는 카메라를 보여주지 않는다. QR 을 대는 순간을
         // 안내하려고 띄우는 화면이라 그 순간이 지나면 쓸모가 없고, 로봇도
