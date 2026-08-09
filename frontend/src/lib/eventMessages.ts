@@ -22,6 +22,12 @@ function messageFor(code: string, payload: Record<string, unknown>): string {
       return `${p.visit_name ?? '목적지'} 이동 실패 (코드 ${p.error_code ?? '?'})`
     case 'nav.stuck':
       return '경로 이탈 감지'
+    case 'dock.return_started':
+      return `${p.station_name ?? '충전소'} 복귀 시작`
+    case 'dock.return_succeeded':
+      return `${p.station_name ?? '충전소'} 복귀 완료`
+    case 'dock.return_failed':
+      return `${p.station_name ?? '충전소'} 복귀 실패 (코드 ${p.error_code ?? '?'})`
     case 'session.started':
       return `안내 시작: ${p.patient_id ?? ''}`
     case 'session.step_completed':
@@ -30,10 +36,16 @@ function messageFor(code: string, payload: Record<string, unknown>): string {
       return `안내 종료: ${p.end_reason ?? ''}`
     case 'robot.battery_low':
       return `배터리 부족 (${p.percent ?? '?'}%)`
+    case 'robot.battery_recovered':
+      return `배터리 회복 (${p.percent ?? '?'}%)`
     case 'robot.comm_lost':
       return '통신 두절'
+    case 'robot.comm_restored':
+      return `통신 복구 (${p.offline_sec ?? '?'}초 중단)`
     case 'robot.paused':
       return `일시정지: ${p.reason ?? ''}`
+    case 'robot.resumed':
+      return `운행 재개: ${p.reason ?? ''}`
     case 'system.unknown_event_code':
       return `미등록 이벤트 코드: ${p.received_code ?? ''}`
     default:

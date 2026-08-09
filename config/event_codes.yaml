@@ -91,6 +91,25 @@ nav.stuck:
   # progress checker 발동.
 
 
+# === 충전소 복귀 ============================================================
+#
+# 충전소 복귀는 진료 안내 단계가 아니므로 nav.goal_* 로 기록하지 않는다.
+# 특히 nav.goal_succeeded 는 session_steps.arrived_at 을 갱신하므로 재사용하면
+# 충전소 도착이 다음 진료실 도착으로 잘못 처리될 수 있다.
+
+dock.return_started:
+  level: warning
+  payload: { station_name: string }
+
+dock.return_succeeded:
+  level: info
+  payload: { station_name: string }
+
+dock.return_failed:
+  level: error
+  payload: { station_name: string, error_code: int }
+
+
 # === 세션 ===================================================================
 
 session.started:
@@ -146,6 +165,11 @@ robot.battery_low:
   # 배터리 추이는 robot_battery_log 에 2분 주기로 따로 쌓는다.
   # 정기 샘플이 이벤트에 섞이면 타임라인 필터가 쓸모없어진다.
 
+robot.battery_recovered:
+  level: info
+  payload: { percent: int }
+  # battery_low 의 짝. 재충전되어 저전압 상태를 벗어난 순간만 남긴다.
+
 robot.comm_lost:
   level: error
   payload: { last_seen_sec: float }
@@ -172,6 +196,11 @@ robot.comm_restored:
 robot.paused:
   level: warning
   payload: { reason: string }
+
+robot.resumed:
+  level: info
+  payload: { reason: string }
+  # paused 의 짝. 안전 정지 원인이 해소되고 명시적으로 재개된 뒤 발행한다.
 
 
 # === 시스템 =================================================================
