@@ -34,3 +34,24 @@ export async function disarmRobot(robotId: string): Promise<Robot> {
   const { data } = await api.delete<Robot>(`/robots/${robotId}/arm`)
   return data
 }
+
+/** 로봇에 내리는 명령. schemas.py 의 OrderIn 과 같은 목록이다. */
+export type RobotCommand = 'goto' | 'start_session' | 'set_mode'
+
+/** mode_manager 가 인정하는 값. 그 외는 로봇이 무시한다. */
+export type RobotMode = 'auto' | 'manual' | 'estop'
+
+/**
+ * 명령을 큐에 넣는다. **응답은 "로봇이 실행했다" 가 아니라 "적재했다" 다.**
+ *
+ * 로봇은 몇 초 주기로 폴링해 가져가고, 실행 결과는 이벤트로 돌아온다.
+ * 특히 set_mode 는 로봇이 정본을 갖는 요청이므로, 화면은 응답이 아니라
+ * robot.mode_changed 이벤트를 보고 상태를 갱신해야 한다.
+ */
+export async function sendOrder(
+  robotId: string,
+  command: RobotCommand,
+  argument: string,
+): Promise<void> {
+  await api.post(`/robots/${robotId}/orders`, { command, argument })
+}
