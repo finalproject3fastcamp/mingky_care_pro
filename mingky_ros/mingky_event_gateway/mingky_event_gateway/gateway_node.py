@@ -119,6 +119,8 @@ class EventGateway(Node):
             "goto": self.create_publisher(String, "/guide_manager/goto", 10),
             "start_session": self.create_publisher(
                 String, "/guide_manager/start_session", 10),
+            # 모드는 mode_manager 가 정본을 들고 있다. 여기서는 요청만 넘긴다.
+            "set_mode": self.create_publisher(String, "/mode/set", 10),
         }
 
         self._wake = threading.Event()
