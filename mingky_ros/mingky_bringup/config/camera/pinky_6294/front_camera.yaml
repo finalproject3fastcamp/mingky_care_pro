@@ -1,0 +1,20 @@
+image_width: 640
+image_height: 480
+camera_name: pinky_front_camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [549.967542670274, 0.0, 321.6182690711409, 0.0, 548.8869417658486, 227.09055977306664, 0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.13292919367767314, -1.0557696833341776, -0.005534409024675511, 0.002261142616259169, 2.0841630569582414]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [549.967542670274, 0.0, 321.6182690711409, 0.0, 0.0, 548.8869417658486, 227.09055977306664, 0.0, 0.0, 0.0, 1.0, 0.0]

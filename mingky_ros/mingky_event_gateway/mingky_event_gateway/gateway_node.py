@@ -1,6 +1,7 @@
 """로봇 이벤트를 관제 서버로 전달하는 게이트웨이.
 
-    /events 토픽 → 로컬 큐 → HTTP POST /events → 성공 시 큐에서 제거
+    /events 토픽 → 로컬 큐 → HTTP POST /events        → 성공 시 큐에서 제거
+    (주기)       → 큐 없음 → HTTP POST .../heartbeat  → 실패하면 버림
 
 상태머신(mingky_guide_manager)과 분리한 이유는, 서버가 느리거나 죽었을 때
 재시도 루프가 상태 전이를 지연시키면 안 되기 때문이다. 로봇이 서버 때문에
@@ -8,6 +9,14 @@
 
 같은 이유로 HTTP 호출을 ROS 콜백 안에서 하지 않는다. 콜백은 큐에 쓰기만
 하고(수 ms), 별도 스레드가 전송한다.
+
+이벤트와 heartbeat 는 요구가 정반대다.
+
+    이벤트     하나도 잃으면 안 된다 → 큐에 쌓고 될 때까지 재전송
+    heartbeat  늦게 도착하면 거짓말이 된다 → 큐를 안 타고 실패하면 버림
+
+그래서 두 경로를 한 노드에 두되 스레드와 큐를 분리했다. 노드를 더 늘리지
+않은 것은, 노드가 늘면 그 노드가 살아있는지도 감시해야 하기 때문이다.
 """
 
 import json
@@ -51,8 +60,23 @@ class EventGateway(Node):
         self.declare_parameter("http_timeout_sec", 5.0)
         self.declare_parameter("max_queue_rows", 50_000)
         self.declare_parameter("max_backoff_sec", 60.0)
+        # guide_manager 와 같은 기본값을 쓴다. heartbeat 는 이벤트와 달리
+        # 메시지에 robot_id 가 실려 오지 않으므로 노드가 알고 있어야 한다.
+        self.declare_parameter("robot_id", "pinky-01")
+        # 0 이면 heartbeat 를 보내지 않는다. 백엔드 기본 판정이 15초라
+        # 5초 주기면 3회 연속 유실에 두절로 잡힌다.
+        self.declare_parameter("heartbeat_interval_sec", 5.0)
+        # 주기보다 짧아야 한다. 길면 응답을 기다리는 사이 다음 차례가 밀린다.
+        self.declare_parameter("heartbeat_timeout_sec", 2.0)
 
-        self.url = self.get_parameter("backend_url").value.rstrip("/") + "/events"
+        base = self.get_parameter("backend_url").value.rstrip("/")
+        self.url = base + "/events"
+        self.robot_id = self.get_parameter("robot_id").value
+        self.heartbeat_url = f"{base}/robots/{self.robot_id}/heartbeat"
+        self.heartbeat_interval = float(
+            self.get_parameter("heartbeat_interval_sec").value)
+        self.heartbeat_timeout = float(
+            self.get_parameter("heartbeat_timeout_sec").value)
         self.batch_size = int(self.get_parameter("batch_size").value)
         self.flush_interval = float(self.get_parameter("flush_interval_sec").value)
         self.timeout = float(self.get_parameter("http_timeout_sec").value)
@@ -68,6 +92,12 @@ class EventGateway(Node):
         self._stop = threading.Event()
         self._sender = threading.Thread(target=self._send_loop, daemon=True)
         self._sender.start()
+
+        self._heartbeat = None
+        if self.heartbeat_interval > 0:
+            self._heartbeat = threading.Thread(
+                target=self._heartbeat_loop, daemon=True)
+            self._heartbeat.start()
 
         self.get_logger().info(
             f"event_gateway 시작 (대상={self.url}, 대기 {self.queue.count()}건)")
@@ -148,12 +178,70 @@ class EventGateway(Node):
         self.get_logger().debug(f"서버 오류 {response.status_code}, 재시도")
         return False
 
+    # -------------------------------------------------------------- heartbeat
+
+    def _heartbeat_loop(self) -> None:
+        """생존 신호. 큐를 타지 않고 곧바로 보내고, 실패하면 버린다.
+
+        큐에 넣으면 안 되는 이유가 이 노드의 존재 이유와 정반대다. 이벤트는
+        두절 동안 쌓아뒀다 나중에 보내야 기록이 안 사라진다. heartbeat 는
+        그러면 안 된다 — 복구 순간 "10분 전 나 살아있었음" 이 한꺼번에
+        도착하면 서버가 두절을 판정할 수 없다.
+
+        재시도도 하지 않는다. 다음 주기가 곧 재시도다.
+
+        별도 스레드인 이유는 ROS 타이머로 돌리면 HTTP 대기 동안 실행기가
+        묶여 _on_event 콜백이 밀리기 때문이다. 전송 스레드와도 분리한다 —
+        큐가 밀려 백오프 중일 때도 생존 신호는 계속 나가야 한다.
+        """
+        # 커넥션을 재사용한다. 5초마다 TCP 핸드셰이크를 다시 하면 무선
+        # 구간에서 낭비가 크다. 전송 스레드와 Session 을 공유하지 않는다.
+        session = requests.Session()
+        self.get_logger().info(
+            f"heartbeat 시작 ({self.heartbeat_url}, {self.heartbeat_interval:.0f}초 주기)")
+
+        failing = False
+        while not self._stop.wait(self.heartbeat_interval):
+            try:
+                response = session.post(
+                    self.heartbeat_url, timeout=self.heartbeat_timeout)
+            except requests.RequestException as exc:
+                if not failing:
+                    # 두절 중에는 매 주기 찍히면 로그가 도배된다. 전이할 때만.
+                    self.get_logger().warn(f"heartbeat 실패: {exc}")
+                    failing = True
+                continue
+
+            if response.status_code == 404:
+                # robot_id 오타이거나 robots 테이블에 없는 로봇이다.
+                # 재시도해도 결과가 같으므로 크게 남긴다.
+                self.get_logger().error(
+                    f"heartbeat 거부: {self.robot_id} 가 서버에 등록되지 않았습니다. "
+                    "robot_id 파라미터와 robots 시드를 확인하세요.")
+                failing = True
+                continue
+
+            if not response.ok:
+                if not failing:
+                    self.get_logger().warn(
+                        f"heartbeat 실패: HTTP {response.status_code}")
+                    failing = True
+                continue
+
+            if failing:
+                self.get_logger().info("heartbeat 복구")
+                failing = False
+
+        session.close()
+
     # ------------------------------------------------------------------ 종료
 
     def destroy_node(self):
         self._stop.set()
         self._wake.set()
         self._sender.join(timeout=2.0)
+        if self._heartbeat is not None:
+            self._heartbeat.join(timeout=2.0)
         self.queue.close()
         return super().destroy_node()
 

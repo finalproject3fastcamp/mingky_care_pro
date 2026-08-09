@@ -31,8 +31,42 @@ uvicorn app.main:app --reload
 - `GET /events` — 이벤트 타임라인 (필터 · 페이지네이션)
 - `GET /sessions/active` — 진행 중인 안내 목록
 - `GET /sessions/{id}` — 세션 상세 (끝난 세션 포함)
-- `GET /robots` — 로봇 목록 + 최근 배터리 + 활성 세션
+- `GET /robots` — 로봇 목록 + 최근 배터리 + 활성 세션 + 통신 상태
+- `POST /robots/{id}/heartbeat` — 로봇 생존 신호 (본문 없음, 204)
+- `GET /patients/{patient_id}/photo` — 환자 프로필 사진 (`image/*`, private 캐시)
 - `GET /docs` — OpenAPI 문서
+
+## 로봇 생존 감시
+
+`POST /robots/{id}/heartbeat` 를 받아 마지막 수신 시각을 **백엔드 메모리**에 두고,
+주기 태스크가 무응답을 판정해 `robot.comm_lost` / `robot.comm_restored` 를
+`events` 에 적재한다. 구현은 [`app/heartbeat.py`](app/heartbeat.py).
+
+| 환경 변수 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `HEARTBEAT_OFFLINE_AFTER_SEC` | `15` | 이 시간 무응답이면 두절로 판정 |
+| `HEARTBEAT_CHECK_INTERVAL_SEC` | `5` | 판정 주기. 감지가 최대 이만큼 늦어진다 |
+
+기본값은 실측 전 잠정값이다. 주행 실측이 나오면 Nav2 목표 하나 소요 시간의
+절반 이하로 다시 잡는다.
+
+> **단일 프로세스 전제.**
+> 워커나 레플리카를 2개 이상으로 늘리면 로봇 상태가 프로세스마다 갈라진다.
+> 로봇이 A 에 heartbeat 를 보내면 B 의 메모리는 비어 있고, B 의 판정 태스크가
+> 멀쩡한 로봇에 `comm_lost` 를 찍는다. 에러 없이 오탐만 쌓인다.
+> 늘려야 하면 `app/heartbeat.py` 의 저장소를 PostgreSQL 로 옮길 것.
+
+`link_state` 는 세 값이다. `unknown` 은 **한 번도 heartbeat 를 보낸 적 없는
+로봇**이며 `offline` 과 다르다.
+
+OMX 는 계속 `unknown` 이고 그게 맞다. 관제 PC 에 USB 직결된 LeRobot 프로세스
+(`/dev/omx_follower`)라서 **잃을 네트워크 링크가 없다.** 이 감시는 무선 구간이
+끊기는 것을 잡는 장치이므로 OMX 에는 적용 대상이 아니다.
+
+OMX 의 실패는 성격이 다르다 — 텔레옵 프로세스 종료, USB 장치 탈락,
+캘리브레이션 이상. 이건 프로세스·장치 수준 지표로 따로 봐야 하고,
+`config/event_codes.yaml` 의 `omx.*` 접두사가 아직 비어 있는 것과 같은
+맥락이다. heartbeat 로 억지로 묶지 않는다.
 
 ### 예시
 
@@ -65,6 +99,7 @@ app/
 ├── event_codes.py config/event_codes.yaml 로드와 검증
 ├── registry.py    이벤트 코드 정본을 앱 전체에서 공유
 ├── ingest.py      이벤트 적재와 상태 갱신
+├── heartbeat.py   로봇 생존 감시 (메모리 · 단일 프로세스 전제)
 └── routers/       엔드포인트별 라우터
 ```
 

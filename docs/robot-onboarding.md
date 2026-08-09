@@ -132,7 +132,7 @@ ssh-copy-id pinky2
 ```bash
 cd ~/mingky_care_pro
 source /opt/ros/jazzy/setup.bash && source install/setup.bash
-export ROS_DOMAIN_ID=21          # pinky1. pinky2 는 22
+export ROS_DOMAIN_ID=21          # pinky1. pinky2 는 20
 ```
 
 **도메인이 다르면 서로 안 보입니다.** 같은 네트워크여도 그렇습니다.
@@ -140,7 +140,7 @@ export ROS_DOMAIN_ID=21          # pinky1. pinky2 는 22
 | 기기 | 도메인 |
 | --- | --- |
 | pinky1 | **21** |
-| pinky2 | **22** |
+| pinky2 | **20** |
 | 관제컴퓨터 | 25 |
 
 여러 터미널을 쓸 때 **전부 같은 값**이어야 합니다. 가장 흔한 실수입니다.
@@ -265,8 +265,8 @@ ros2 run mingky_bringup check_waypoints.py
 도메인과 IP 를 바꿔서 넘깁니다.
 
 ```bash
-export ROS_DOMAIN_ID=22
-PINKY_IP=192.168.0.22 PINKY_DOMAIN_ID=22 \
+export ROS_DOMAIN_ID=20
+PINKY_IP=192.168.0.22 PINKY_DOMAIN_ID=20 \
   ros2 run mingky_bringup run_waypoint_teleop.sh
 ```
 

@@ -63,15 +63,38 @@ def generate_launch_description() -> LaunchDescription:
         default_value='0',
         description='>0 이면 그 포트로 MJPEG 미리보기 송출 (대시보드 임베드용)',
     )
+    # Pinky 의 CSI 카메라는 180° 뒤집혀 장착돼 있다. 좌우·상하를 함께 뒤집어야
+    # 화면이 바로 선다 (한쪽만 켜면 글자가 거울처럼 보인다).
+    # 정방향으로 단 기체에서는 둘 다 false 로 넘기면 된다.
     csi_hflip_arg = DeclareLaunchArgument(
         'csi_hflip',
-        default_value='false',
+        default_value='true',
         description='source=csi 좌우 반전 (뒤집혀 장착된 카메라 보정)',
     )
     csi_vflip_arg = DeclareLaunchArgument(
         'csi_vflip',
-        default_value='false',
+        default_value='true',
         description='source=csi 상하 반전 (뒤집혀 장착된 카메라 보정)',
+    )
+    preview_max_width_arg = DeclareLaunchArgument(
+        'preview_max_width',
+        default_value='640',
+        description='미리보기 전송 전 축소할 가로 폭 (0 이면 원본 그대로)',
+    )
+    preview_jpeg_quality_arg = DeclareLaunchArgument(
+        'preview_jpeg_quality',
+        default_value='60',
+        description='미리보기 JPEG 품질 (낮출수록 지연·대역폭 감소)',
+    )
+    arming_poll_seconds_arg = DeclareLaunchArgument(
+        'arming_poll_seconds',
+        default_value='2.0',
+        description='백엔드에 arming 여부를 물어보는 주기(초)',
+    )
+    arming_fail_disarm_after_arg = DeclareLaunchArgument(
+        'arming_fail_disarm_after',
+        default_value='5',
+        description='폴링이 이 횟수 연속 실패하면 disarmed 로 떨어뜨린다 (페일세이프)',
     )
 
     qr_node = Node(
@@ -92,6 +115,11 @@ def generate_launch_description() -> LaunchDescription:
                 'csi_hflip': LaunchConfiguration('csi_hflip'),
                 'csi_vflip': LaunchConfiguration('csi_vflip'),
                 'preview_port': LaunchConfiguration('preview_port'),
+                'preview_max_width': LaunchConfiguration('preview_max_width'),
+                'preview_jpeg_quality': LaunchConfiguration('preview_jpeg_quality'),
+                'arming_poll_seconds': LaunchConfiguration('arming_poll_seconds'),
+                'arming_fail_disarm_after': LaunchConfiguration(
+                    'arming_fail_disarm_after'),
             },
         ],
     )
@@ -107,5 +135,9 @@ def generate_launch_description() -> LaunchDescription:
         csi_hflip_arg,
         csi_vflip_arg,
         preview_port_arg,
+        preview_max_width_arg,
+        preview_jpeg_quality_arg,
+        arming_poll_seconds_arg,
+        arming_fail_disarm_after_arg,
         qr_node,
     ])
