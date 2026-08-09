@@ -18,6 +18,7 @@ interface Props {
 // 백엔드 MIN_BATTERY_PERCENT 와 같은 값이어야 한다. 프론트에서 미리 걸러
 // 버튼 자체를 비활성화하고, 백엔드가 마지막 안전망이다.
 const MIN_BATTERY_PERCENT = 40
+const MAX_BATTERY_AGE_MS = 5 * 60 * 1000
 
 interface Candidate {
   robot: Robot
@@ -42,6 +43,9 @@ function categorize(robot: Robot): Candidate {
   if (robot.armed_at != null) {
     return { robot, eligible: true, resume: true, status: '활성화됨' }
   }
+  if (robot.link_state === 'offline') {
+    return { robot, eligible: false, reason: '통신 두절' }
+  }
   if (robot.battery_percent == null) {
     return { robot, eligible: false, reason: '배터리 정보 없음' }
   }
@@ -51,6 +55,12 @@ function categorize(robot: Robot): Candidate {
       eligible: false,
       reason: `배터리 ${robot.battery_percent}% (${MIN_BATTERY_PERCENT}% 미만)`,
     }
+  }
+  if (
+    robot.battery_recorded_at == null ||
+    Date.now() - new Date(robot.battery_recorded_at).getTime() > MAX_BATTERY_AGE_MS
+  ) {
+    return { robot, eligible: false, reason: '배터리 정보가 오래됨' }
   }
   return { robot, eligible: true }
 }

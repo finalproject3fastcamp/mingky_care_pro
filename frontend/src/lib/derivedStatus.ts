@@ -8,8 +8,7 @@
  *
  * 파생은 근사값이다.
  *   - 이벤트 배치 전송 지연이 있으면 반영이 몇 초 늦는다.
- *   - config/event_codes.yaml 에 회복 이벤트가 없는 상태 (battery_low,
- *     paused 등) 는 한 번 발생하면 세션 끝날 때까지 계속 "그 상태" 로 잡힌다.
+ *   - 상태/회복 이벤트 쌍 중 최신 이벤트를 기준으로 현재 상태를 판정한다.
  * 실시간 상태 push 채널이 붙기 전까지의 임시 계층이다.
  */
 
@@ -21,6 +20,18 @@ export interface DerivedDestination {
   visitName: string
   /** 해당 목적지에 도달했는지 (같은 세션에서 이후 nav.goal_succeeded 가 있음). */
   arrived: boolean
+}
+
+/** DESC 정렬된 이벤트에서 상태/회복 쌍의 현재 활성 여부를 판정한다. */
+function isTransitionActive(
+  events: EventOut[],
+  activeCode: string,
+  clearedCode: string,
+): boolean {
+  const latest = events.find(
+    (event) => event.event_code === activeCode || event.event_code === clearedCode,
+  )
+  return latest?.event_code === activeCode
 }
 
 /**
@@ -55,9 +66,9 @@ export function deriveCurrentDestination(
  *
  * 우선순위 (앞에서 걸리면 그걸로 확정):
  *   1. session.ended_at 이 세팅됨              → '완료'
- *   2. robot.comm_lost 이벤트 있음             → '통신 두절'
- *   3. robot.battery_low 이벤트 있음           → '배터리 부족'
- *   4. robot.paused 이벤트 있음                → '일시정지'
+ *   2. 최신 통신 전이가 robot.comm_lost         → '통신 두절'
+ *   3. 최신 배터리 전이가 robot.battery_low     → '배터리 부족'
+ *   4. 최신 정지 전이가 robot.paused            → '일시정지'
  *   5. 세션의 최신 nav.* 이벤트로 판정
  *        goal_sent      → '안내중'
  *        goal_succeeded → '도착'
@@ -65,22 +76,31 @@ export function deriveCurrentDestination(
  *        stuck          → '경로 이탈'
  *   6. session.started 있음                    → '환자 확인'
  *   7. 그 외                                   → '대기'
- *
- * 2~4 는 sticky 하다. event_codes.yaml 에 회복 이벤트가 없어서, 한 번
- * 튀면 세션 끝날 때까지 그 상태로 잡힌다. 회복 이벤트가 정의되면 여기도
- * 함께 확장한다.
  */
 export function deriveRobotState(
   events: EventOut[],
-  session: { session_id: number; ended_at: string | null },
+  session: { session_id: number; robot_id?: string; ended_at: string | null },
 ): RobotState {
   if (session.ended_at) return '완료'
 
   const sessionEvents = events.filter((e) => e.session_id === session.session_id)
+  // 통신 복구와 배터리 회복처럼 세션과 무관한 robot.* 이벤트도 있다.
+  // robot_id가 있으면 해당 로봇의 전체 상태 전이를 함께 본다.
+  const robotEvents = session.robot_id
+    ? events.filter(
+        (e) => e.robot_id === session.robot_id && e.event_code.startsWith('robot.'),
+      )
+    : sessionEvents
 
-  if (sessionEvents.some((e) => e.event_code === 'robot.comm_lost')) return '통신 두절'
-  if (sessionEvents.some((e) => e.event_code === 'robot.battery_low')) return '배터리 부족'
-  if (sessionEvents.some((e) => e.event_code === 'robot.paused')) return '일시정지'
+  if (isTransitionActive(robotEvents, 'robot.comm_lost', 'robot.comm_restored')) {
+    return '통신 두절'
+  }
+  if (isTransitionActive(robotEvents, 'robot.battery_low', 'robot.battery_recovered')) {
+    return '배터리 부족'
+  }
+  if (isTransitionActive(robotEvents, 'robot.paused', 'robot.resumed')) {
+    return '일시정지'
+  }
 
   // DESC 정렬 가정. 최신 nav.* 하나만 본다.
   const latestNav = sessionEvents.find((e) => e.event_code.startsWith('nav.'))

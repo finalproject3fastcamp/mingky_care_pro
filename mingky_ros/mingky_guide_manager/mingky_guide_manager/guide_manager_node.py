@@ -11,7 +11,7 @@
 
 현재 범위
     - 상태 소유와 GuideState 발행
-    - 배터리 감시 (히스테리시스 포함) 와 관련 이벤트
+    - BatteryGuard 판정에 따른 세션 종료와 충전소 복귀
     - Nav2 NavigateToPose 액션 클라이언트, waypoint 로드
     - 세션 시작/단계 완료를 토픽으로 수동 트리거 (QR·마커 노드가 붙기 전까지)
 """
@@ -27,8 +27,7 @@ from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import BatteryState
-from std_msgs.msg import Float32, String
+from std_msgs.msg import Bool, Float32, String
 
 from mingky_interfaces.msg import GuideState, SessionStart
 
@@ -41,8 +40,9 @@ def _yaw_to_quat(yaw: float):
 
 class GuideManager(Node):
 
-    def __init__(self):
-        super().__init__('guide_manager')
+    def __init__(self, **kwargs):
+        # kwargs 는 테스트에서 parameter_overrides 를 넣기 위한 통로다.
+        super().__init__('guide_manager', **kwargs)
 
         self.declare_parameter('robot_id', 'pinky-01')
         self.declare_parameter('event_codes_file', '')
@@ -51,13 +51,19 @@ class GuideManager(Node):
         # 같은 좌표가 전혀 다른 물리 위치를 가리키기 때문이다.
         # Nav2 가 띄운 맵과 반드시 같은 이름을 줘야 한다.
         self.declare_parameter('map_name', 'yun_map_highres_clean')
-        # 로봇의 ap/battery_buzzer.py 와 같은 임계값을 쓴다.
-        self.declare_parameter('battery_warn_v', 6.9)
-        self.declare_parameter('battery_clear_v', 6.95)
+        # 비우면 robot_id 의 숫자 접미사를 사용한다.
+        # pinky-01 -> charging_station_1, pinky-02 -> charging_station_2
+        self.declare_parameter('charging_waypoint', '')
+        self.declare_parameter('dock_max_attempts', 3)
+        self.declare_parameter('dock_retry_delay_sec', 5.0)
 
         self.robot_id = self.get_parameter('robot_id').value
-        self.warn_v = self.get_parameter('battery_warn_v').value
-        self.clear_v = self.get_parameter('battery_clear_v').value
+        configured_dock = self.get_parameter('charging_waypoint').value.strip()
+        self.charging_waypoint = configured_dock or self._default_charging_waypoint()
+        self.dock_max_attempts = max(
+            1, int(self.get_parameter('dock_max_attempts').value))
+        self.dock_retry_delay = max(
+            0.1, float(self.get_parameter('dock_retry_delay_sec').value))
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -74,7 +80,15 @@ class GuideManager(Node):
         self.current_visit = ''
         self.voltage = float('nan')
         self.percent = -1
-        self._battery_alarm = False   # 히스테리시스용
+        self._battery_alarm = False
+        self._emergency_engaged = False
+        self._emergency_reason = 'emergency_stop'
+        self._dock_pending = False
+        self._dock_attempt = 0
+        self._dock_retry_timer = None
+        # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
+        # 못하도록 세대 번호를 붙인다.
+        self._nav_generation = 0
 
         # 상태 토픽은 늦게 뜬 구독자(LCD, 게이트웨이)도 마지막 값을 받아야 한다.
         state_qos = QoSProfile(
@@ -84,8 +98,18 @@ class GuideManager(Node):
         )
         self.state_pub = self.create_publisher(GuideState, '~/state', state_qos)
 
-        self.create_subscription(BatteryState, '/batt_state', self._on_battery, 10)
+        self.create_subscription(Float32, '/battery/voltage', self._on_voltage, 10)
         self.create_subscription(Float32, '/battery/percent', self._on_percent, 10)
+        battery_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.create_subscription(Bool, '/battery/low', self._on_battery_low, battery_qos)
+        self.create_subscription(
+            String, '/emergency_stop/reason', self._on_emergency_reason, state_qos)
+        self.create_subscription(
+            Bool, '/emergency_stop/state', self._on_emergency_state, state_qos)
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
@@ -105,7 +129,7 @@ class GuideManager(Node):
         self.create_timer(1.0, self._publish_state)
         self.get_logger().info(
             f'guide_manager 시작 (robot_id={self.robot_id}, '
-            f'waypoint {len(self.waypoints)}개)')
+            f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint})')
 
     # ------------------------------------------------------------------ 설정
 
@@ -166,40 +190,109 @@ class GuideManager(Node):
             self.get_logger().info(f'waypoints 로드: {path} ({len(waypoints)}개)')
         return waypoints
 
+    def _default_charging_waypoint(self) -> str:
+        suffix = self.robot_id.rsplit('-', 1)[-1]
+        try:
+            number = int(suffix)
+        except ValueError:
+            self.get_logger().warn(
+                f'robot_id={self.robot_id!r} 에 숫자 접미사가 없어 '
+                'charging_station_1 을 사용합니다.')
+            number = 1
+        return f'charging_station_{number}'
+
     # ------------------------------------------------------------------ 배터리
 
-    def _on_battery(self, msg: BatteryState):
-        """전압만 신뢰한다.
-
-        pinky_sensor_adc 는 percentage 를 NaN 으로 발행한다.
-        퍼센트는 별도 변환 노드가 /battery/percent 로 내보낸다.
-        """
-        if math.isnan(msg.voltage):
+    def _on_voltage(self, msg: Float32):
+        if math.isnan(msg.data):
             return
-        self.voltage = msg.voltage
-
-        # 히스테리시스가 없으면 임계값 근처에서 이벤트가 계속 튄다.
-        # 모터가 돌 때 전압이 순간 처지는 것만으로도 왔다갔다 한다.
-        if not self._battery_alarm and self.voltage <= self.warn_v:
-            self._battery_alarm = True
-            self.robot_state = GuideState.ROBOT_BATTERY_LOW
-            self.events.publish(
-                'robot.battery_low',
-                {'percent': self.percent if self.percent >= 0 else None},
-                self.session_id)
-            self.get_logger().warn(f'배터리 부족 {self.voltage:.2f}V')
-        elif self._battery_alarm and self.voltage >= self.clear_v:
-            self._battery_alarm = False
-            self.robot_state = GuideState.ROBOT_IDLE
-            self.get_logger().info(f'배터리 회복 {self.voltage:.2f}V')
+        self.voltage = msg.data
+        if self.percent < 0:
+            self.percent = int(round(max(
+                0.0, min(100.0, (self.voltage - 6.8) / (7.6 - 6.8) * 100.0))))
 
     def _on_percent(self, msg: Float32):
         self.percent = int(round(msg.data))
+
+    def _on_battery_low(self, msg: Bool):
+        """BatteryGuard 의 필터링된 상태 변화를 시스템 상태로 해석한다."""
+        if msg.data == self._battery_alarm:
+            return
+        self._battery_alarm = msg.data
+
+        if not msg.data:
+            self._cancel_dock_retry()
+            self.events.publish(
+                'robot.battery_recovered', {'percent': max(self.percent, 0)})
+            if self.robot_state == GuideState.ROBOT_BATTERY_LOW:
+                self.robot_state = GuideState.ROBOT_IDLE
+            self.get_logger().info(f'배터리 저전압 상태 해제 ({self.percent}%)')
+            return
+
+        active_session_id = self.session_id
+        self.robot_state = GuideState.ROBOT_BATTERY_LOW
+        self.events.publish(
+            'robot.battery_low', {'percent': max(self.percent, 0)}, active_session_id)
+
+        if active_session_id > 0 and self.session_state not in (
+                GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+            self.events.publish(
+                'session.ended', {'end_reason': 'battery'}, active_session_id)
+            self.session_state = GuideState.SESSION_COMPLETED
+            self.get_logger().warn(
+                f'배터리 부족으로 세션 {active_session_id} 종료')
+
+        # 이후 충전소 주행 이벤트는 환자 안내 세션과 분리한다.
+        self.session_id = 0
+        self.session_state = GuideState.SESSION_NONE
+        self.patient_id = ''
+        self._dock_attempt = 0
+        if self._emergency_engaged:
+            self._dock_pending = True
+            self.get_logger().warn('비상정지 해제 뒤 충전소 복귀를 시작합니다.')
+        else:
+            self._return_to_dock()
+
+    # --------------------------------------------------------------- 비상정지
+
+    def _on_emergency_reason(self, msg: String):
+        if msg.data:
+            self._emergency_reason = msg.data
+
+    def _on_emergency_state(self, msg: Bool):
+        if msg.data == self._emergency_engaged:
+            return
+        self._emergency_engaged = msg.data
+
+        if msg.data:
+            # 진행 중인 Nav2 콜백은 EmergencyStop 이 취소한 뒤 늦게 도착할 수 있다.
+            # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
+            self._nav_generation += 1
+            self._cancel_dock_retry()
+            self._dock_pending = self._battery_alarm
+            self.robot_state = GuideState.ROBOT_PAUSED
+            self.events.publish(
+                'robot.paused', {'reason': self._emergency_reason}, self.session_id)
+            return
+
+        self.events.publish(
+            'robot.resumed', {'reason': self._emergency_reason}, self.session_id)
+        if self._battery_alarm:
+            self.robot_state = GuideState.ROBOT_BATTERY_LOW
+            self._dock_pending = False
+            self._return_to_dock()
+        else:
+            # 취소된 안내 목표는 안전상 자동 재개하지 않는다.
+            self.robot_state = GuideState.ROBOT_IDLE
+        self._emergency_reason = 'emergency_stop'
 
     # ------------------------------------------------------------------ 세션
 
     def _on_start_session(self, msg: String):
         """임시 입구. 나중에 QR 노드가 대체한다."""
+        if self._battery_alarm:
+            self.get_logger().warn('배터리 부족 상태에서는 세션을 시작할 수 없습니다.')
+            return
         self.patient_id = msg.data.strip()
         self.session_state = GuideState.SESSION_CONFIRMED
         self.events.publish(
@@ -213,6 +306,13 @@ class GuideManager(Node):
 
     def _on_session_start(self, msg: SessionStart):
         """QR 노드에서 세션 정보가 들어왔을 때. 저장만 하고 주행은 아직 트리거하지 않는다."""
+        if self._battery_alarm:
+            # QR API가 이미 DB 세션을 만들었으므로 무시만 하면 활성 세션이 남는다.
+            self.events.publish(
+                'session.ended', {'end_reason': 'battery'}, int(msg.session_id))
+            self.get_logger().warn(
+                f'배터리 부족으로 새 세션 {msg.session_id} 을 즉시 종료합니다.')
+            return
         self.session_id = int(msg.session_id)
         self.patient_id = str(msg.patient_id)
         self.session_visits = list(msg.visit_names)
@@ -230,12 +330,61 @@ class GuideManager(Node):
     # ------------------------------------------------------------------ 주행
 
     def send_goal(self, waypoint_name: str) -> None:
+        """환자 안내 목적지로 이동한다."""
+        if self._battery_alarm:
+            self.get_logger().warn('배터리 부족 상태에서는 안내 목표를 보낼 수 없습니다.')
+            return
+        self._send_nav_goal(waypoint_name, is_dock=False, session_id=self.session_id)
+
+    def _return_to_dock(self) -> None:
+        """현재 안내 목표를 선점하고 이 로봇에 배정된 충전소로 복귀한다."""
+        if not self._battery_alarm:
+            return
+        if self._emergency_engaged:
+            self._dock_pending = True
+            return
+        self._dock_pending = False
+        self._dock_attempt += 1
+        self.get_logger().warn(
+            f'충전소 복귀 시도 {self._dock_attempt}/{self.dock_max_attempts}')
+        self._send_nav_goal(self.charging_waypoint, is_dock=True, session_id=0)
+
+    def _cancel_dock_retry(self) -> None:
+        if self._dock_retry_timer is not None:
+            self._dock_retry_timer.cancel()
+            self.destroy_timer(self._dock_retry_timer)
+            self._dock_retry_timer = None
+
+    def _retry_dock(self) -> None:
+        self._cancel_dock_retry()
+        self._return_to_dock()
+
+    def _dock_failed(
+            self, waypoint_name: str, error_code: int, *, retryable: bool) -> None:
+        self.robot_state = GuideState.ROBOT_BATTERY_LOW
+        if (retryable and self._battery_alarm and not self._emergency_engaged
+                and self._dock_attempt < self.dock_max_attempts):
+            self.get_logger().warn(
+                f'{self.dock_retry_delay:.1f}초 뒤 충전소 복귀를 재시도합니다.')
+            self._dock_retry_timer = self.create_timer(
+                self.dock_retry_delay, self._retry_dock)
+            return
+        self.events.publish(
+            'dock.return_failed',
+            {'station_name': waypoint_name, 'error_code': int(error_code)})
+
+    def _send_nav_goal(
+            self, waypoint_name: str, *, is_dock: bool, session_id: int) -> None:
         wp = self.waypoints.get(waypoint_name)
         if wp is None:
             self.get_logger().error(f'알 수 없는 waypoint: {waypoint_name}')
+            if is_dock:
+                self._dock_failed(waypoint_name, -2, retryable=False)
             return
         if not self.nav.wait_for_server(timeout_sec=3.0):
             self.get_logger().error('navigate_to_pose 액션 서버가 없습니다.')
+            if is_dock:
+                self._dock_failed(waypoint_name, -3, retryable=True)
             return
 
         goal = NavigateToPose.Goal()
@@ -248,41 +397,97 @@ class GuideManager(Node):
         goal.pose.pose.orientation.z = z
         goal.pose.pose.orientation.w = w
 
+        self._nav_generation += 1
+        generation = self._nav_generation
         self.current_visit = waypoint_name
-        self.robot_state = GuideState.ROBOT_MOVING
-        self.session_state = GuideState.SESSION_GUIDING
-        self.events.publish('nav.goal_sent', {'visit_name': waypoint_name}, self.session_id)
-
-        self.nav.send_goal_async(goal).add_done_callback(self._on_goal_response)
-
-    def _on_goal_response(self, future):
-        handle = future.result()
-        if not handle.accepted:
-            self.get_logger().error('Nav2 가 목표를 거부했습니다.')
+        if is_dock:
+            self.robot_state = GuideState.ROBOT_BATTERY_LOW
             self.events.publish(
-                'nav.goal_aborted',
-                {'visit_name': self.current_visit, 'error_code': -1},
-                self.session_id)
-            self.robot_state = GuideState.ROBOT_IDLE
-            return
-        handle.get_result_async().add_done_callback(self._on_goal_result)
+                'dock.return_started', {'station_name': waypoint_name})
+        else:
+            self.robot_state = GuideState.ROBOT_MOVING
+            self.session_state = GuideState.SESSION_GUIDING
+            self.events.publish(
+                'nav.goal_sent', {'visit_name': waypoint_name}, session_id)
 
-    def _on_goal_result(self, future):
-        status = future.result().status
+        future = self.nav.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_goal_response(
+                done, generation, waypoint_name, is_dock, session_id))
+
+    def _on_goal_response(
+            self, future, generation: int, waypoint_name: str,
+            is_dock: bool, session_id: int):
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001 - Nav2 오류를 이벤트로 보고
+            if generation != self._nav_generation:
+                return
+            self._goal_failed(
+                waypoint_name, is_dock, session_id, -4,
+                f'목표 전송 중 예외: {exc}')
+            return
+
+        # 충전 복귀 등 새 목표가 이미 생겼다면 이전 목표 결과는 상태에 반영하지
+        # 않는다. 서버가 아직 이전 목표를 잡고 있으면 명시적으로 취소한다.
+        if generation != self._nav_generation:
+            if handle.accepted:
+                handle.cancel_goal_async()
+            return
+        if not handle.accepted:
+            self._goal_failed(
+                waypoint_name, is_dock, session_id, -1, 'Nav2 가 목표를 거부했습니다.')
+            return
+        result = handle.get_result_async()
+        result.add_done_callback(
+            lambda done: self._on_goal_result(
+                done, generation, waypoint_name, is_dock, session_id))
+
+    def _on_goal_result(
+            self, future, generation: int, waypoint_name: str,
+            is_dock: bool, session_id: int):
+        if generation != self._nav_generation:
+            return
+        try:
+            status = future.result().status
+        except Exception as exc:  # noqa: BLE001
+            self._goal_failed(
+                waypoint_name, is_dock, session_id, -4,
+                f'결과 수신 중 예외: {exc}')
+            return
+
         # action_msgs/GoalStatus.STATUS_SUCCEEDED == 4
         if status == 4:
-            self.robot_state = GuideState.ROBOT_WAITING
-            self.session_state = GuideState.SESSION_ARRIVED
-            self.events.publish(
-                'nav.goal_succeeded', {'visit_name': self.current_visit}, self.session_id)
-            self.get_logger().info(f'도착: {self.current_visit}')
+            if is_dock:
+                self._cancel_dock_retry()
+                # 좌표 도착만으로 충전 전류가 흐른다고 단정할 수는 없다.
+                self.robot_state = GuideState.ROBOT_WAITING
+                self.events.publish(
+                    'dock.return_succeeded', {'station_name': waypoint_name})
+                self.get_logger().info(f'충전소 도착: {waypoint_name}')
+            else:
+                self.robot_state = GuideState.ROBOT_WAITING
+                self.session_state = GuideState.SESSION_ARRIVED
+                self.events.publish(
+                    'nav.goal_succeeded', {'visit_name': waypoint_name}, session_id)
+                self.get_logger().info(f'도착: {waypoint_name}')
+        else:
+            self._goal_failed(
+                waypoint_name, is_dock, session_id, int(status),
+                f'주행 실패 (status={status})')
+
+    def _goal_failed(
+            self, waypoint_name: str, is_dock: bool, session_id: int,
+            error_code: int, message: str) -> None:
+        self.get_logger().error(message)
+        if is_dock:
+            self._dock_failed(waypoint_name, error_code, retryable=True)
         else:
             self.robot_state = GuideState.ROBOT_IDLE
             self.events.publish(
                 'nav.goal_aborted',
-                {'visit_name': self.current_visit, 'error_code': int(status)},
-                self.session_id)
-            self.get_logger().error(f'주행 실패 (status={status})')
+                {'visit_name': waypoint_name, 'error_code': int(error_code)},
+                session_id)
 
     # ------------------------------------------------------------------ 발행
 

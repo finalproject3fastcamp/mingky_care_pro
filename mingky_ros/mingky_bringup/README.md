@@ -2,6 +2,28 @@
 
 Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하는 ROS 2 패키지입니다.
 
+## 운영 통합 실행
+
+실제 로봇 베이스, Nav2, 배터리 감시, 비상정지 안전 게이트, Guide Manager,
+이벤트 게이트웨이를 한 번에 실행합니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  robot_id:=pinky-01 backend_url:=http://192.168.0.10:8000
+```
+
+`robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
+`charging_station_2`를 사용합니다. 명시적으로 바꾸려면
+`charging_waypoint:=charging_station_1`을 전달합니다.
+
+로봇 베이스가 다른 장치에서 이미 실행 중이면 `start_robot_base:=false`, 백엔드
+없이 주행만 시험하면 `start_event_gateway:=false`를 사용합니다. 다른 맵을 쓸
+때는 같은 맵에 대응하는 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
+
+Nav2 속도 출력은 `cmd_vel_safety_input`으로 연결되며, 실제 `/cmd_vel`은 안전
+게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
+실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
+
 ## 후방 USB 카메라
 
 Pinky에 V4L2 드라이버를 설치합니다.

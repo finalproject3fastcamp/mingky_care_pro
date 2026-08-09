@@ -1,0 +1,52 @@
+<?xml version='1.0'?>
+
+<!-- 실제 로봇의 Nav2, 안전 게이트, 상태 관리자, 이벤트 게이트웨이를 한 번에
+     연결한다. Nav2는 모터 cmd_vel로 직접 발행하지 않는다. -->
+<launch>
+    <arg name="robot_id" default="pinky-01"/>
+    <arg name="map_name" default="yun_map_highres_clean"/>
+    <arg name="map" default="$(find-pkg-share mingky_bringup)/map/yun_map_highres_clean.yaml"/>
+    <arg name="nav2_params" default="$(find-pkg-share pinky_navigation)/params/nav2_params.yaml"/>
+    <arg name="charging_waypoint" default=""/>
+    <arg name="backend_url" default="http://192.168.0.10:8000"/>
+
+    <arg name="start_robot_base" default="true"/>
+    <arg name="start_event_gateway" default="true"/>
+    <arg name="use_buzzer" default="true"/>
+    <arg name="use_led" default="true"/>
+
+    <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"
+             if="$(var start_robot_base)"/>
+
+    <include file="$(find-pkg-share pinky_navigation)/launch/bringup_launch.xml">
+        <arg name="map" value="$(var map)"/>
+        <arg name="params_file" value="$(var nav2_params)"/>
+        <arg name="cmd_vel_output" value="cmd_vel_safety_input"/>
+    </include>
+
+    <!-- 실제 /cmd_vel 의 유일한 발행자. Nav2/teleop 입력과 모터 출력을 분리한다. -->
+    <node pkg="mingky_battery_guard" exec="emergency_stop"
+          name="emergency_stop" output="screen">
+        <param name="input_topic" value="cmd_vel_safety_input"/>
+        <param name="output_topic" value="cmd_vel"/>
+        <param name="use_led" value="$(var use_led)"/>
+    </node>
+
+    <node pkg="mingky_battery_guard" exec="battery_guard"
+          name="battery_guard" output="screen">
+        <param name="use_buzzer" value="$(var use_buzzer)"/>
+    </node>
+
+    <node pkg="mingky_guide_manager" exec="guide_manager"
+          name="guide_manager" output="screen">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="map_name" value="$(var map_name)"/>
+        <param name="charging_waypoint" value="$(var charging_waypoint)" type="str"/>
+    </node>
+
+    <node pkg="mingky_event_gateway" exec="event_gateway"
+          name="event_gateway" output="screen" if="$(var start_event_gateway)">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="backend_url" value="$(var backend_url)"/>
+    </node>
+</launch>

@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class QrScanRequest(BaseModel):
@@ -181,3 +181,17 @@ class RobotArmingOut(BaseModel):
     robot_id: str
     armed: bool
     armed_at: datetime | None = None
+
+
+class BatterySampleIn(BaseModel):
+    """로봇 게이트웨이가 주기적으로 보내는 최신 배터리 표본."""
+
+    voltage: float | None = Field(
+        default=None, ge=0, le=12, allow_inf_nan=False)
+    battery_percent: int | None = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def has_reading(self):
+        if self.voltage is None and self.battery_percent is None:
+            raise ValueError("voltage or battery_percent is required")
+        return self

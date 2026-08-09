@@ -63,6 +63,8 @@ export interface Robot {
   active_session_id: number | null
   active_patient_id: string | null
   armed_at: string | null
+  last_seen_at: string | null
+  link_state: 'online' | 'offline' | 'unknown'
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error'

@@ -19,6 +19,7 @@ setup(
     maintainer_email='mingky-care@example.com',
     description='Patient guidance manager package for the Mingky Care project.',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'guide_manager = mingky_guide_manager.guide_manager_node:main',

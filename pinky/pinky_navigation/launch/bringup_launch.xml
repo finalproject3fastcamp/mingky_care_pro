@@ -11,6 +11,7 @@
     <arg name="use_composition" default="True"/>
     <arg name="use_respawn" default="False"/>
     <arg name="log_level" default="info"/>
+    <arg name="cmd_vel_output" default="cmd_vel"/>
     <arg name="lifecycle_nodes_local" default="['map_server', 'amcl']"/>
     <arg name="lifecycle_nodes_nav" default="['controller_server',
                        'planner_server',
@@ -50,6 +51,7 @@
             <arg name="use_respawn" value="$(var use_respawn)"/>
             <arg name="container_name" value="$(var container_name)"/>
             <arg name='lifecycle_nodes' value="$(var lifecycle_nodes_nav)"/>
+            <arg name="cmd_vel_output" value="$(var cmd_vel_output)"/>
         </include>
     </group>
 

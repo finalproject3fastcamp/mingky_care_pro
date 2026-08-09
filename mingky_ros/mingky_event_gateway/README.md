@@ -5,6 +5,7 @@
 ```
 /events 토픽 → 로컬 큐(SQLite) → HTTP POST /events        → 성공 시 큐에서 제거
 (주기)       → 큐 없음          → HTTP POST .../heartbeat  → 실패하면 버림
+/battery/*   → 최신 표본         → HTTP POST .../battery    → 2분 주기
 ```
 
 ## 왜 상태머신과 분리했나
@@ -47,9 +48,10 @@ ros2 run mingky_event_gateway event_gateway --ros-args \
 | `http_timeout_sec` | `5.0` | HTTP 타임아웃 |
 | `max_queue_rows` | `50000` | 큐 상한. 넘으면 오래된 것부터 버림 |
 | `max_backoff_sec` | `60.0` | 재시도 백오프 상한 |
-| `robot_id` | `pinky-01` | heartbeat 대상. `robots` 테이블에 있어야 함 |
+| `robot_id` | `pinky-01` | heartbeat·배터리 대상. `robots` 테이블에 있어야 함 |
 | `heartbeat_interval_sec` | `5.0` | 생존 신호 주기. `0` 이면 보내지 않음 |
 | `heartbeat_timeout_sec` | `2.0` | heartbeat HTTP 타임아웃 |
+| `battery_interval_sec` | `120.0` | 배터리 저장 주기. 첫 표본은 즉시 전송, `0`이면 끔 |
 
 `max_queue_rows` 는 디스크가 차서 로봇이 멈추는 것보다 오래된 이벤트를
 버리는 쪽이 낫다는 판단입니다.

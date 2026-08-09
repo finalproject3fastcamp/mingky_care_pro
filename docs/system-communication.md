@@ -13,6 +13,7 @@
 | -------------------- | ------------ | ---------------------------------------- | --------- | ----------------- |
 | 로봇 (QR 노드)       | 백엔드       | HTTP POST `/qr/scan`                     | 요청·응답 | 수백 ms           |
 | 로봇 (event_gateway) | 백엔드       | HTTP POST `/events` (배치)               | 발행      | 배치 주기 (수 초) |
+| 로봇 (event_gateway) | 백엔드       | HTTP POST `/robots/{id}/battery`          | 발행      | 2분 주기          |
 | 프론트               | 백엔드       | HTTP GET                                 | 폴링      | 최대 3초          |
 | 로봇 (qr_reader)     | 프론트       | HTTP `multipart/x-mixed-replace` (MJPEG) | 스트림    | 실시간            |
 | 로봇 노드 간         | 로봇 노드 간 | DDS / UDP                                | pub/sub   | 밀리초            |
@@ -46,6 +47,10 @@
 큐를 거치는 이유는 네트워크가 끊긴 상태에서 로봇이 발행한 이벤트를 잃지
 않기 위함이다. 복구 후 몰아 보내며 `event_id` (UUID) 로 중복 배제한다.
 
+배터리 표본은 첫 측정값을 즉시 보내고 이후 2분 주기로 PostgreSQL
+`robot_battery_log`에 저장한다. 최신값만 의미가 있으므로 이벤트 SQLite 큐에는
+넣지 않고, 전송 실패 시 다음 주기의 최신 표본으로 대체한다.
+
 ## 채널 2 · 프론트 → 백엔드 (폴링)
 
 의료진 대시보드가 [`usePolling`](../frontend/src/lib/usePolling.ts) 훅으로
@@ -61,10 +66,9 @@
 - `deriveCurrentDestination` — 세션의 최신 `nav.goal_sent.payload.visit_name`
 - `deriveRobotState` — 우선순위 규칙 (완료 → 통신두절 → 배터리부족 → 일시정지 → 최신 `nav.*` → 환자 확인 → 대기)
 
-한계: 이벤트 배치 전송 지연으로 몇 초 늦게 반영되고,
-[`config/event_codes.yaml`](../config/event_codes.yaml) 에 회복 이벤트가
-정의되지 않은 상태(`battery_low`, `paused`) 는 세션 끝날 때까지 sticky 로
-잡힌다. 실시간 push 채널(SSE 등) 이 붙기 전까지의 임시 계층이다.
+한계: 이벤트 배치 전송 지연으로 몇 초 늦게 반영된다. 통신·배터리·정지는 각각
+`comm_restored`, `battery_recovered`, `resumed`와 짝을 이루며 최신 상태 전이를
+기준으로 해제된다. 실시간 push 채널(SSE 등)이 붙기 전까지의 임시 계층이다.
 
 Vite dev 는 `/api` 접두사를 프록시로 벗겨 백엔드에 전달한다
 ([`frontend/vite.config.ts`](../frontend/vite.config.ts)).
@@ -74,8 +78,8 @@ Vite dev 는 `/api` 접두사를 프록시로 벗겨 백엔드에 전달한다
 WebSocket / SSE 는 MVP 오버엔지니어링이라 판단했고, 관제 화면은 사람 반응
 속도(초 단위)면 충분하다. 실시간 요구가 커지면 SSE 로 전환 예정.
 
-**지금 프론트에서 백엔드로의 쓰기 요청은 없다.** 대시보드는 순수 조회다.
-세션 종료 · 단계 수동 완료 같은 쓰기 액션은 아직 UI 가 없다.
+의료진 화면은 `POST/DELETE /api/robots/{id}/arm`으로 로봇을 활성화하거나
+취소한다. 세션 종료 · 단계 수동 완료 같은 쓰기 액션은 아직 UI가 없다.
 
 ## 채널 3 · 로봇 → 프론트 (MJPEG 직접)
 
