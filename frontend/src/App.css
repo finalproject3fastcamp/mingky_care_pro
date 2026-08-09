@@ -875,3 +875,116 @@
   font-size: 0.88rem;
   color: var(--text-muted);
 }
+
+/* Map */
+.robot-map {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.robot-map__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.robot-map__label { font-size: 0.82rem; color: var(--text-subtle); }
+.robot-map__coord { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-muted); }
+.robot-map__coord--none { color: var(--text-subtle); font-style: italic; }
+
+.robot-map__canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, #f8f8f8);
+  /* 지도가 192x147 이라 그대로 늘리면 뭉갠다. 픽셀을 살린다. */
+  image-rendering: pixelated;
+}
+
+.robot-map__empty {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+
+/* Map legend — 레이어를 켜고 끈다. 진단할 때 하나씩 지워 보는 게 빠르다. */
+.robot-map__legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.robot-map__toggle {
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.robot-map__toggle::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.robot-map__toggle--scan::before { background: #ef4444; }
+.robot-map__toggle--particles::before { background: #10b981; }
+.robot-map__toggle--plan::before { background: #2563eb; }
+
+.robot-map__toggle.off {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+/* 퍼짐이 크면 AMCL 이 발산한 것이다. 숫자만 보고도 알아채야 한다. */
+.robot-map__spread {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+}
+
+.robot-map__spread--wide {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+
+/* 위치 지정 — 실수로 눌리면 로봇 위치가 틀어지므로 한 번 켜야 찍힌다. */
+.robot-map__place {
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.robot-map__place.on {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: #92400e;
+  font-weight: 600;
+}
+
+.robot-map__canvas--placing {
+  cursor: crosshair;
+  outline: 2px solid var(--warning);
+}

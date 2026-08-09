@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import db, heartbeat, registry
-from .routers import events, orders, patients, qr, robots, sessions, teleop
+from .routers import events, maps, orders, patients, qr, robots, sessions, teleop
 
 log = logging.getLogger("mingky")
 
@@ -42,6 +42,7 @@ app.include_router(robots.router)
 app.include_router(patients.router)
 # robots.router 보다 뒤에 둔다. 경로 접두사가 같아 등록 순서가 매칭에 영향을 준다.
 app.include_router(orders.router)
+app.include_router(maps.router)
 app.include_router(teleop.router)
 
 

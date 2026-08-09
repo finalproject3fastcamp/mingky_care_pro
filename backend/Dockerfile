@@ -13,6 +13,8 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend/app backend/app
 COPY config/event_codes.yaml config/event_codes.yaml
 COPY database/seeds database/seeds
+# 대시보드가 로봇 위치를 그릴 바탕 지도. Nav2 가 쓰는 것과 같은 파일이다.
+COPY mingky_ros/mingky_bringup/map map
 
 EXPOSE 8000
 

@@ -8,6 +8,9 @@ log
 artifacts
 docs
 mingky_ros
+# 대시보드가 로봇 위치를 그릴 바탕 지도만 예외로 넣는다.
+# Nav2 가 쓰는 것과 같은 파일이라 복사본을 두지 않는다.
+!mingky_ros/mingky_bringup/map
 omx
 pinky
 tools
