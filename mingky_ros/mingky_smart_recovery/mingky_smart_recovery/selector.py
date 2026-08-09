@@ -20,7 +20,7 @@ class SelectorConfig:
     nominal_distance_m: float = 0.35
     minimum_distance_m: float = 0.15
     safety_margin_m: float = 0.14
-    sector_half_width_rad: float = math.radians(15.0)
+    sector_half_width_rad: float = math.radians(10.0)
     clearance_cap_m: float = 2.0
     clearance_weight: float = 1.0
     goal_alignment_weight: float = 0.45
@@ -55,16 +55,38 @@ class EscapeCandidate:
     score: float
 
 
-# 앞쪽 후보를 먼저 두는 것은 점수가 완전히 같을 때 불필요한 후진을 피하기 위함이다.
+_DIRECTION_NAMES = {
+    0: 'forward',
+    45: 'forward_left',
+    -45: 'forward_right',
+    90: 'left',
+    -90: 'right',
+    135: 'rear_left',
+    -135: 'rear_right',
+    180: 'rear',
+}
+
+
+def _direction_name(degrees: int) -> str:
+    if degrees in _DIRECTION_NAMES:
+        return _DIRECTION_NAMES[degrees]
+    side = 'left' if degrees > 0 else 'right'
+    return f'{side}_{abs(degrees):03d}'
+
+
+# 앞쪽에서 시작해 좌우를 번갈아 배치한다. 점수가 같을 때 작은 회전과 전진을
+# 우선하면서도 15도 간격으로 전체 360도를 검사한다.
 _DIRECTIONS: tuple[tuple[str, float], ...] = (
-    ('forward', 0.0),
-    ('forward_left', math.radians(45.0)),
-    ('forward_right', math.radians(-45.0)),
-    ('left', math.radians(90.0)),
-    ('right', math.radians(-90.0)),
-    ('rear_left', math.radians(135.0)),
-    ('rear_right', math.radians(-135.0)),
-    ('rear', math.pi),
+    (('forward', 0.0),)
+    + tuple(
+        item
+        for degrees in range(15, 180, 15)
+        for item in (
+            (_direction_name(degrees), math.radians(degrees)),
+            (_direction_name(-degrees), math.radians(-degrees)),
+        )
+    )
+    + (('rear', math.pi),)
 )
 
 
@@ -160,6 +182,31 @@ def select_escape_candidates(
         ))
 
     return sorted(candidates, key=lambda candidate: candidate.score, reverse=True)
+
+
+def select_diverse_candidates(
+    candidates: Sequence[EscapeCandidate],
+    *,
+    limit: int,
+    minimum_separation_rad: float = math.radians(30.0),
+) -> list[EscapeCandidate]:
+    """점수 순서를 유지하면서 서로 충분히 다른 방향의 후보만 선택한다."""
+    if limit <= 0:
+        return []
+    if not 0.0 <= minimum_separation_rad <= math.pi:
+        raise ValueError('minimum_separation_rad 범위가 잘못되었습니다.')
+
+    selected: list[EscapeCandidate] = []
+    for candidate in candidates:
+        if all(
+            abs(_angle_delta(candidate.bearing_rad, chosen.bearing_rad))
+            >= minimum_separation_rad
+            for chosen in selected
+        ):
+            selected.append(candidate)
+            if len(selected) >= limit:
+                break
+    return selected
 
 
 def candidate_to_map(

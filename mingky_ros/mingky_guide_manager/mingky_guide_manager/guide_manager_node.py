@@ -35,6 +35,7 @@ from mingky_interfaces.msg import GuideState, SessionStart
 from mingky_smart_recovery.selector import (
     EscapeCandidate,
     candidate_to_map,
+    select_diverse_candidates,
     select_escape_candidates,
 )
 
@@ -74,6 +75,7 @@ class GuideManager(Node):
         self.declare_parameter('recovery_scan_topic', '/scan')
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
         self.declare_parameter('recovery_candidate_limit', 4)
+        self.declare_parameter('recovery_candidate_separation_deg', 30.0)
         self.declare_parameter('recovery_retry_delay_sec', 5.0)
 
         self.robot_id = self.get_parameter('robot_id').value
@@ -107,6 +109,11 @@ class GuideManager(Node):
             0.1, float(self.get_parameter('recovery_scan_stale_sec').value))
         self.recovery_candidate_limit = max(
             1, int(self.get_parameter('recovery_candidate_limit').value))
+        self.recovery_candidate_separation_rad = math.radians(max(
+            0.0,
+            min(180.0, float(self.get_parameter(
+                'recovery_candidate_separation_deg').value)),
+        ))
         self.recovery_retry_delay_sec = max(
             0.5, float(self.get_parameter('recovery_retry_delay_sec').value))
 
@@ -641,18 +648,22 @@ class GuideManager(Node):
             float(wp['x']) - pose.position.x,
         )
         scan = self._latest_scan
-        candidates = select_escape_candidates(
-            scan.ranges,
-            angle_min=float(scan.angle_min),
-            angle_increment=float(scan.angle_increment),
-            range_min=float(scan.range_min),
-            range_max=float(scan.range_max),
-            goal_bearing_rad=math.atan2(
-                math.sin(map_goal_angle - robot_yaw),
-                math.cos(map_goal_angle - robot_yaw),
+        candidates = select_diverse_candidates(
+            select_escape_candidates(
+                scan.ranges,
+                angle_min=float(scan.angle_min),
+                angle_increment=float(scan.angle_increment),
+                range_min=float(scan.range_min),
+                range_max=float(scan.range_max),
+                goal_bearing_rad=math.atan2(
+                    math.sin(map_goal_angle - robot_yaw),
+                    math.cos(map_goal_angle - robot_yaw),
+                ),
+                failures=failures,
             ),
-            failures=failures,
-        )[:self.recovery_candidate_limit]
+            limit=self.recovery_candidate_limit,
+            minimum_separation_rad=self.recovery_candidate_separation_rad,
+        )
         if not candidates:
             self.get_logger().warn('안전 여유를 만족하는 탈출 후보가 없습니다.')
             return False

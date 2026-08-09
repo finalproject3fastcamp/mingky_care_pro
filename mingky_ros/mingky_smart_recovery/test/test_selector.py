@@ -6,6 +6,7 @@ from mingky_smart_recovery.selector import (
     EscapeCandidate,
     SelectorConfig,
     candidate_to_map,
+    select_diverse_candidates,
     select_escape_candidates,
 )
 
@@ -87,7 +88,8 @@ def test_ignores_invalid_scan_values() -> None:
 
     result = candidates(ranges)
 
-    assert result[0].name == 'left'
+    assert result[0].clearance_m == pytest.approx(0.8)
+    assert math.radians(75) <= result[0].bearing_rad <= math.radians(105)
 
 
 @pytest.mark.parametrize(
@@ -144,3 +146,35 @@ def test_candidate_map_yaw_is_normalized() -> None:
     )
 
     assert yaw == pytest.approx(-math.pi / 2.0)
+
+
+def test_full_open_scan_creates_24_directions() -> None:
+    result = candidates(scan(default=1.0))
+
+    assert len(result) == 24
+    assert {candidate.name for candidate in result} >= {
+        'forward', 'left_015', 'right_015', 'left_030', 'right_030', 'rear'}
+
+
+def test_finds_escape_between_old_45_degree_directions() -> None:
+    ranges = scan()
+    open_sector(ranges, 30, 1.0)
+
+    result = candidates(ranges)
+
+    assert result[0].name == 'left_030'
+
+
+def test_diverse_selection_avoids_nearly_identical_directions() -> None:
+    ranked = [
+        EscapeCandidate('forward', math.radians(0), 0.3, 0.3, 0.0, 1.0, 4.0),
+        EscapeCandidate('left_015', math.radians(15), 0.3, 0.29, 0.08, 1.0, 3.0),
+        EscapeCandidate('left_030', math.radians(30), 0.3, 0.26, 0.15, 1.0, 2.0),
+        EscapeCandidate('forward_right', math.radians(-45), 0.3, 0.21, -0.21, 1.0, 1.0),
+    ]
+
+    result = select_diverse_candidates(
+        ranked, limit=3, minimum_separation_rad=math.radians(30))
+
+    assert [candidate.name for candidate in result] == [
+        'forward', 'left_030', 'forward_right']
