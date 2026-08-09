@@ -197,6 +197,15 @@ robot.paused:
   level: warning
   payload: { reason: string }
 
+# 주행 제어권이 누구에게 있는지. 로봇이 정본을 들고 있고 서버는 보고를 받는다.
+# 통신이 끊겨도 로봇이 스스로 안전한 상태를 지켜야 하므로 서버가 소유하지 않는다.
+#
+# estop 은 mingky_battery_guard 의 안전 게이트가 실제 주체다. 이 이벤트는
+# 게이트 상태를 모드 어휘로 옮겨 타임라인에 남기는 것이다.
+robot.mode_changed:
+  level: info
+  payload: { mode: [auto, manual, estop], previous: [auto, manual, estop], source: string }
+
 robot.resumed:
   level: info
   payload: { reason: string }
