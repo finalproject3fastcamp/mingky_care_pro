@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""배터리가 낮으면 부저를 울리고 Nav2로 충전소에 복귀시킨다.
+"""배터리 측정값을 필터링해 저전압 상태 변화를 발행한다.
 
-    battery/voltage 구독 → 기준치 이하 → 부저 3번 → 충전소로 이동
+    battery/voltage 구독 → 기준치 이하 → 부저 3번 → battery/low=True
     (battery/percent 는 전압을 한 번도 못 받았을 때 쓰는 예비 경로)
 
-경보는 팀 표준대로 /events 에 mingky_interfaces/msg/Event 로 나간다.
-event_code 는 config/event_codes.yaml 에 등록된 것만 쓴다.
-    robot.battery_low   기준치 도달
-    nav.goal_aborted    충전소 복귀 실패 (visit_name='charging_dock')
-
-guide_manager 도 robot.battery_low 를 발행하는 코드를 갖고 있으나, 그쪽은
-/batt_state(pinky_sensor_adc) 를 구독하는데 그 노드를 띄우는 launch 가 없어
-현재는 동작하지 않는다. 임계값도 6.9V(방전 직전 안전선)로 이 노드의
-40%(7.12V, 여유 있게 복귀시키는 운영선)와 계층이 다르다.
+이 노드는 측정과 판정만 담당한다. 세션 종료, 이벤트 발행, Nav2 충전소 복귀는
+프로젝트 상태를 소유한 mingky_guide_manager 가 battery/low 를 받아 처리한다.
 
 충전 중이면 울리지 않는다. 이미 충전되고 있는데 경보를 내거나,
 충전소에 있는 로봇을 충전소로 또 보내는 것을 막기 위함이다.
@@ -24,23 +17,16 @@ guide_manager 도 robot.battery_low 를 발행하는 코드를 갖고 있으나,
 """
 
 from collections import deque
-import math
 import statistics
 import subprocess
 import threading
 
-from action_msgs.msg import GoalStatus
-from mingky_guide_manager.event_publisher import EventPublisher
-from nav2_msgs.action import NavigateToPose
 import rclpy
-from rclpy.action import ActionClient
 from rclpy.node import Node
-from std_msgs.msg import Float32
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, Float32
 
 BUSY_EXIT = 3   # battery_buzzer.py 가 "부저 사용 중"일 때 주는 종료코드
-
-# nav.goal_aborted 의 visit_name. 안내 목적지들과 구분되는 이름이어야 한다.
-DOCK_VISIT_NAME = 'charging_dock'
 
 # pinkylib/battery.py 와 같은 변환식. 2셀 리튬이온.
 EMPTY_V = 6.8   # 0%
@@ -71,15 +57,6 @@ class BatteryGuard(Node):
         self.declare_parameter('trend_rise', 2.0)           # 이만큼(%p) 올라야 충전 중
         self.declare_parameter('median_samples', 3)         # 중앙값 필터 창 (1이면 끔)
 
-        self.declare_parameter('dock_x', 0.0)               # 충전소 좌표
-        self.declare_parameter('dock_y', 0.0)               # (맵마다 다름. 꼭 바꿀 것)
-        self.declare_parameter('dock_yaw', 0.0)
-        self.declare_parameter('dock_frame', 'map')
-
-        self.declare_parameter('robot_id', 'pinky-01')      # Event.robot_id
-        self.declare_parameter('event_codes_file', '')      # 비우면 자동 탐색
-
-        self.declare_parameter('use_nav2', True)
         self.declare_parameter('use_buzzer', True)
         self.declare_parameter('buzzer_script', '/home/pinky/ap/battery_buzzer.py')
         self.declare_parameter('buzzer_level', 'danger')    # danger=784Hz 3번, warn=550Hz 2번
@@ -89,7 +66,6 @@ class BatteryGuard(Node):
         self.rearm = g('rearm_percent').value
         self.confirm = int(g('confirm_count').value)
         self.trend_rise = g('trend_rise').value
-        self.use_nav2 = g('use_nav2').value
         self.use_buzzer = g('use_buzzer').value
         self.buzzer_script = g('buzzer_script').value
         self.buzzer_level = g('buzzer_level').value
@@ -111,13 +87,13 @@ class BatteryGuard(Node):
         # 중앙값은 평균과 달리 튄 값 하나에 끌려가지 않아서 여기에 맞다.
         self.raw = deque(maxlen=max(1, int(g('median_samples').value)))
 
-        # ---- 통신 ----
-        # 이벤트는 게이트웨이가 받아 관제 서버로 넘긴다. 큐·재시도는 그쪽 몫이라
-        # 여기서는 표준 헬퍼로 발행만 한다. 미등록 코드는 헬퍼가 막아준다.
-        self.events = EventPublisher(
-            self,
-            self.get_parameter('robot_id').value,
-            self.get_parameter('event_codes_file').value)
+        # 상태 변경은 늦게 뜬 GuideManager 도 마지막 값을 받도록 latched QoS 를 쓴다.
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.low_pub = self.create_publisher(Bool, 'battery/low', state_qos)
 
         # 전압이 1차 소스다. 퍼센트는 전압을 선형 변환한 파생값이라
         # 6.8V 아래·7.6V 위가 전부 0%/100% 로 뭉개진다.
@@ -127,9 +103,6 @@ class BatteryGuard(Node):
         self.saw_voltage = False
         self.create_subscription(Float32, 'battery/voltage', self.on_voltage, 10)
         self.create_subscription(Float32, 'battery/percent', self.on_percent, 10)
-
-        self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose') \
-            if self.use_nav2 else None
 
         self.get_logger().info(
             f'배터리 감시 시작 | 발동 {self.threshold}% (연속 {self.confirm}회) '
@@ -196,6 +169,7 @@ class BatteryGuard(Node):
         if self.fired and pct >= self.rearm:
             self.fired = False
             self.low_count = 0
+            self.publish_low_state(False)
             self.get_logger().info(f'{pct:.1f}% 회복 — 감시를 다시 시작합니다.')
 
         # 2) 충전 중이면 경보하지 않는다.
@@ -232,18 +206,13 @@ class BatteryGuard(Node):
         self.fired = True
         self.get_logger().warn(f'배터리 {pct:.1f}%{volt} — 기준 도달')
 
-        # 퍼센트와 전압을 함께 실어 보낸다. 전압이 원본이고 퍼센트는 파생값이라,
-        # 나중에 변환식을 실측으로 보정하면 전압으로 다시 계산할 수 있다.
-        # (DB 의 robot_battery_log 는 두 컬럼을 모두 갖고 있고, 전압 컬럼은
-        #  값이 없으면 NULL 을 허용한다.)
-        # payload 형태는 event_codes.yaml 이 정본이고 percent 는 int 다.
-        # 전압을 같이 싣고 싶으면 yaml 부터 고쳐야 한다.
-        self.events.publish('robot.battery_low', {'percent': int(round(pct))})
-
-        self.beep()          # Nav2가 없어도 경고는 나가야 하므로 부저가 먼저
-        self.go_to_dock()
+        self.publish_low_state(True)
+        self.beep()
 
     # ===================================================================
+
+    def publish_low_state(self, is_low: bool):
+        self.low_pub.publish(Bool(data=is_low))
 
     def beep(self):
         """로봇의 기존 부저 스크립트를 호출한다 (기본 danger = 784Hz 3번).
@@ -271,73 +240,6 @@ class BatteryGuard(Node):
                 self.get_logger().info(f'부저 울림 ({self.buzzer_level})')
 
         threading.Thread(target=run, daemon=True).start()   # spin 을 막지 않도록
-
-    def dock_failed(self, why, error_code=0):
-        """복귀 실패는 반드시 관제로 올린다.
-
-        배터리가 낮은데 스스로 충전소로 못 가는 상황이라, 로그만 남기고 끝내면
-        아무도 모르는 채로 로봇이 그 자리에서 방전된다.
-
-        전용 코드가 event_codes.yaml 에 없어서 nav.goal_aborted 를 쓴다.
-        실제로 복귀 목표가 중단된 것이라 의미도 맞는다. 충전소로 간 것임은
-        visit_name 으로 구분한다. (전용 코드가 필요하면 yaml 부터 고칠 것)
-        """
-        self.get_logger().error(f'충전소 복귀 실패 — {why}')
-        self.events.publish('nav.goal_aborted', {
-            'visit_name': DOCK_VISIT_NAME,
-            'error_code': int(error_code),
-        })
-
-    def go_to_dock(self):
-        if self.nav is None:
-            self.get_logger().info('use_nav2=false — 복귀 명령 생략')
-            return
-        if not self.nav.wait_for_server(timeout_sec=5.0):
-            self.dock_failed('navigate_to_pose 액션 서버 없음 (Nav2 미실행?)')
-            return
-
-        x = float(self.get_parameter('dock_x').value)
-        y = float(self.get_parameter('dock_y').value)
-        yaw = float(self.get_parameter('dock_yaw').value)
-
-        goal = NavigateToPose.Goal()
-        goal.pose.header.frame_id = self.get_parameter('dock_frame').value
-        goal.pose.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.pose.position.x = x
-        goal.pose.pose.position.y = y
-        goal.pose.pose.orientation.z = math.sin(yaw / 2.0)
-        goal.pose.pose.orientation.w = math.cos(yaw / 2.0)
-
-        self.get_logger().info(f'충전소로 복귀: x={x:.2f}, y={y:.2f}')
-        self.events.publish('nav.goal_sent', {'visit_name': DOCK_VISIT_NAME})
-        self.nav.send_goal_async(goal).add_done_callback(self.on_goal)
-
-    def on_goal(self, future):
-        try:
-            handle = future.result()
-        except Exception as e:                       # noqa: BLE001 - 원인 무관하게 보고
-            self.dock_failed(f'목표 전송 중 예외: {e}')
-            return
-        if not handle.accepted:
-            self.dock_failed('Nav2가 복귀 목표를 거부함')
-            return
-        self.get_logger().info('Nav2가 복귀 목표를 수락했습니다.')
-        handle.get_result_async().add_done_callback(self.on_result)
-
-    def on_result(self, future):
-        """수락됐다고 도착한 것은 아니다. 끝까지 확인해야 한다."""
-        try:
-            status = future.result().status
-        except Exception as e:                       # noqa: BLE001
-            self.dock_failed(f'결과 수신 중 예외: {e}')
-            return
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info('충전소 도착.')
-            self.events.publish('nav.goal_succeeded',
-                                {'visit_name': DOCK_VISIT_NAME})
-        else:
-            self.dock_failed(f'복귀 중단 (status={status})', error_code=status)
-
 
 def main(args=None):
     rclpy.init(args=args)

@@ -23,7 +23,7 @@ setup(
     zip_safe=True,
     maintainer='jw',
     maintainer_email='wjddn007658@gmail.com',
-    description='배터리 잔량 감시 후 경고 1회 발행 및 충전소 복귀 전환',
+    description='배터리 측정값을 필터링해 저전압 상태 변화를 발행',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

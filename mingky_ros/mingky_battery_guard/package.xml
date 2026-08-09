@@ -3,7 +3,7 @@
 <package format="3">
   <name>mingky_battery_guard</name>
   <version>0.0.1</version>
-  <description>배터리 저전압 감시 후 robot.battery_low 발행 및 Nav2 충전소 복귀</description>
+  <description>배터리 측정값을 필터링해 저전압 상태 변화를 발행</description>
   <maintainer email="wjddn007658@gmail.com">jw</maintainer>
   <license>Apache-2.0</license>
 

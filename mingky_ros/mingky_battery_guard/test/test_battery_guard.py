@@ -10,15 +10,10 @@ import rclpy
 from rclpy.parameter import Parameter
 from std_msgs.msg import Float32
 
-# event_codes.yaml 에 등록된 코드. 여기가 바뀌면 yaml 도 같이 바뀐 것이다.
-LOW_BATTERY = 'robot.battery_low'
-
-
 def make_guard(**overrides):
-    """부저와 Nav2 를 끈 guard 를 만든다. 발행된 경보를 리스트로 같이 준다."""
+    """부저를 끈 guard 를 만든다. 발행된 상태 변화를 리스트로 같이 준다."""
     params = {
         'use_buzzer': False,
-        'use_nav2': False,
         'threshold_percent': 40.0,
         'rearm_percent': 60.0,
         'confirm_count': 3,
@@ -30,17 +25,9 @@ def make_guard(**overrides):
     node = BatteryGuard(
         parameter_overrides=[Parameter(k, value=v) for k, v in params.items()])
 
-    # 발행된 이벤트를 가로챈다. 실제 발행도 그대로 통과시켜서
-    # event_codes.yaml 미등록 코드는 EventPublisher 가 잡아내게 둔다.
+    # GuideManager 로 전달되는 latched 상태 토픽을 가로챈다.
     alerts = []
-    original = node.events.publish
-
-    def spy(event_code, payload=None, session_id=0, level=None):
-        if event_code == LOW_BATTERY:
-            alerts.append(payload or {})
-        return original(event_code, payload, session_id, level)
-
-    node.events.publish = spy
+    node.publish_low_state = alerts.append
     return node, alerts
 
 
@@ -144,15 +131,10 @@ def test_median_still_follows_a_real_drop(guard):
     assert len(alerts) == 1
 
 
-def test_payload_matches_event_codes_yaml(guard):
-    """robot.battery_low 의 payload 는 {percent: int} 다.
-
-    yaml 이 정본이라 float 을 넣으면 수집 서버 쪽에서 어긋난다.
-    """
+def test_low_state_is_published_as_boolean(guard):
     node, alerts = guard
     feed_percents(node, [70, 65, 60, 55, 50, 38, 37, 36, 35])
-    assert set(alerts[0]) == {'percent'}
-    assert isinstance(alerts[0]['percent'], int)
+    assert alerts == [True]
 
 
 # ---------------------------------------------------------------- 충전 감지
@@ -192,7 +174,7 @@ def test_rearms_after_recovery_and_can_fire_again(guard):
     feed_percents(node, [45, 55, 65, 70, 75])     # 충전
     assert node.fired is False
     feed_percents(node, [39, 38, 37, 36])         # 다시 떨어짐
-    assert len(alerts) == 2
+    assert alerts == [True, False, True]
 
 
 def test_rearms_even_when_charging_has_finished():
