@@ -73,8 +73,8 @@ class GuideManager(Node):
         self.declare_parameter('planner_mode', 'navfn')
         self.declare_parameter('recovery_scan_topic', '/scan')
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
-        self.declare_parameter('recovery_max_attempts', 3)
         self.declare_parameter('recovery_candidate_limit', 4)
+        self.declare_parameter('recovery_retry_delay_sec', 5.0)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
@@ -105,10 +105,10 @@ class GuideManager(Node):
                 self.planner_mode = 'navfn'
         self.recovery_scan_stale_sec = max(
             0.1, float(self.get_parameter('recovery_scan_stale_sec').value))
-        self.recovery_max_attempts = max(
-            1, int(self.get_parameter('recovery_max_attempts').value))
         self.recovery_candidate_limit = max(
             1, int(self.get_parameter('recovery_candidate_limit').value))
+        self.recovery_retry_delay_sec = max(
+            0.5, float(self.get_parameter('recovery_retry_delay_sec').value))
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -135,6 +135,7 @@ class GuideManager(Node):
         self._latest_scan_received_ns = 0
         self._latest_nav_pose = None
         self._latest_nav_pose_received_ns = 0
+        self._adaptive_retry_timer = None
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -315,6 +316,7 @@ class GuideManager(Node):
             self.get_logger().info(f'배터리 저전압 상태 해제 ({self.percent}%)')
             return
 
+        self._cancel_adaptive_retry()
         active_session_id = self.session_id
         self.robot_state = GuideState.ROBOT_BATTERY_LOW
         self.events.publish(
@@ -354,6 +356,7 @@ class GuideManager(Node):
             # 진행 중인 Nav2 콜백은 EmergencyStop 이 취소한 뒤 늦게 도착할 수 있다.
             # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
             self._nav_generation += 1
+            self._cancel_adaptive_retry()
             self._cancel_dock_retry()
             self._dock_pending = self._battery_alarm
             self.robot_state = GuideState.ROBOT_PAUSED
@@ -430,7 +433,14 @@ class GuideManager(Node):
         if self._battery_alarm:
             self.get_logger().warn('배터리 부족 상태에서는 안내 목표를 보낼 수 없습니다.')
             return
+        self._cancel_adaptive_retry()
         self._send_nav_goal(waypoint_name, is_dock=False, session_id=self.session_id)
+
+    def _cancel_adaptive_retry(self) -> None:
+        if self._adaptive_retry_timer is not None:
+            self._adaptive_retry_timer.cancel()
+            self.destroy_timer(self._adaptive_retry_timer)
+            self._adaptive_retry_timer = None
 
     def _return_to_dock(self) -> None:
         """현재 안내 목표를 선점하고 이 로봇에 배정된 충전소로 복귀한다."""
@@ -473,7 +483,7 @@ class GuideManager(Node):
             self, waypoint_name: str, *, is_dock: bool, session_id: int,
             recovery_attempt: int = 0,
             recovery_failures: Mapping[str, int] | None = None,
-            announce: bool = True, fallback: bool = False) -> None:
+            announce: bool = True) -> None:
         wp = self.waypoints.get(waypoint_name)
         if wp is None:
             self.get_logger().error(f'알 수 없는 waypoint: {waypoint_name}')
@@ -498,7 +508,7 @@ class GuideManager(Node):
         if not is_dock and (self.recovery_mode == 'adaptive'
                             or self.planner_mode == 'smac2d'):
             goal.behavior_tree = self._behavior_tree_file(
-                fallback=fallback or self.recovery_mode == 'default')
+                fallback=self.recovery_mode == 'default')
 
         self._nav_generation += 1
         generation = self._nav_generation
@@ -522,13 +532,12 @@ class GuideManager(Node):
         future.add_done_callback(
             lambda done: self._on_goal_response(
                 done, generation, waypoint_name, is_dock, session_id,
-                recovery_attempt, dict(recovery_failures or {}), fallback))
+                recovery_attempt, dict(recovery_failures or {})))
 
     def _on_goal_response(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, recovery_attempt: int = 0,
-            recovery_failures: Mapping[str, int] | None = None,
-            fallback: bool = False):
+            recovery_failures: Mapping[str, int] | None = None):
         try:
             handle = future.result()
         except Exception as exc:  # noqa: BLE001 - Nav2 오류를 이벤트로 보고
@@ -553,13 +562,12 @@ class GuideManager(Node):
         result.add_done_callback(
             lambda done: self._on_goal_result(
                 done, generation, waypoint_name, is_dock, session_id,
-                recovery_attempt, dict(recovery_failures or {}), fallback))
+                recovery_attempt, dict(recovery_failures or {})))
 
     def _on_goal_result(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, recovery_attempt: int = 0,
-            recovery_failures: Mapping[str, int] | None = None,
-            fallback: bool = False):
+            recovery_failures: Mapping[str, int] | None = None):
         if generation != self._nav_generation:
             return
         try:
@@ -580,20 +588,21 @@ class GuideManager(Node):
                     'dock.return_succeeded', {'station_name': waypoint_name})
                 self.get_logger().info(f'충전소 도착: {waypoint_name}')
             else:
+                self._cancel_adaptive_retry()
                 self.robot_state = GuideState.ROBOT_WAITING
                 self.session_state = GuideState.SESSION_ARRIVED
                 self.events.publish(
                     'nav.goal_succeeded', {'visit_name': waypoint_name}, session_id)
                 self.get_logger().info(f'도착: {waypoint_name}')
         else:
-            if (not is_dock and not fallback and status == 6
+            if (not is_dock and status == 6
                     and self._start_adaptive_recovery(
                         waypoint_name, session_id, recovery_attempt,
                         dict(recovery_failures or {}))):
                 return
-            if (not is_dock and not fallback and status == 6
+            if (not is_dock and status == 6
                     and self.recovery_mode == 'adaptive'):
-                self._send_fallback_goal(
+                self._schedule_adaptive_retry(
                     waypoint_name, session_id, recovery_attempt,
                     dict(recovery_failures or {}))
                 return
@@ -608,10 +617,6 @@ class GuideManager(Node):
         if self.recovery_mode != 'adaptive':
             return False
         if self._battery_alarm or self._emergency_engaged:
-            return False
-        if recovery_attempt >= self.recovery_max_attempts:
-            self.get_logger().error(
-                f'적응형 복구 최대 횟수({self.recovery_max_attempts})에 도달했습니다.')
             return False
         now_ns = self.get_clock().now().nanoseconds
         stale_ns = int(self.recovery_scan_stale_sec * 1_000_000_000)
@@ -666,7 +671,7 @@ class GuideManager(Node):
         }
         self.robot_state = GuideState.ROBOT_MOVING
         self.get_logger().warn(
-            f'적응형 복구 {recovery_attempt + 1}/{self.recovery_max_attempts}: '
+            f'적응형 복구 주기 {recovery_attempt + 1}: '
             f'{len(candidates)}개 후보 경로를 검증합니다.')
         self._validate_next_recovery_candidate(context)
         return True
@@ -694,10 +699,10 @@ class GuideManager(Node):
         index = context['index']
         if index >= len(context['candidates']):
             self.get_logger().warn('검증 가능한 적응형 탈출 경로가 없습니다.')
-            self._send_fallback_goal(
+            self._schedule_adaptive_retry(
                 context['waypoint_name'],
                 context['session_id'],
-                context['recovery_attempt'],
+                context['recovery_attempt'] + 1,
                 context['failures'],
             )
             return
@@ -820,19 +825,37 @@ class GuideManager(Node):
                 context['waypoint_name'], context['session_id'],
                 next_attempt, failures):
             return
-        self._send_fallback_goal(
+        self._schedule_adaptive_retry(
             context['waypoint_name'], context['session_id'], next_attempt, failures)
 
-    def _send_fallback_goal(
+    def _schedule_adaptive_retry(
             self, waypoint_name: str, session_id: int, recovery_attempt: int,
             failures: Mapping[str, int]) -> None:
         if self._battery_alarm or self._emergency_engaged:
-            self._goal_failed(
-                waypoint_name, False, session_id, 6,
-                '안전 상태 변경으로 최종 Nav2 복구를 시작하지 않습니다.')
             return
+        self._cancel_adaptive_retry()
+        self._nav_generation += 1
+        generation = self._nav_generation
+        self.robot_state = GuideState.ROBOT_WAITING
         self.get_logger().warn(
-            '적응형 탈출을 완료하지 못해 기존 Spin/Wait/Backup 복구를 실행합니다.')
+            f'탈출하지 못해 {self.recovery_retry_delay_sec:.1f}초 정지 후 '
+            '최신 LiDAR로 다시 판단합니다.')
+        retry_failures = dict(failures)
+        self._adaptive_retry_timer = self.create_timer(
+            self.recovery_retry_delay_sec,
+            lambda: self._retry_adaptive_goal(
+                generation, waypoint_name, session_id,
+                recovery_attempt, retry_failures),
+        )
+
+    def _retry_adaptive_goal(
+            self, generation: int, waypoint_name: str, session_id: int,
+            recovery_attempt: int, failures: Mapping[str, int]) -> None:
+        self._cancel_adaptive_retry()
+        if generation != self._nav_generation:
+            return
+        if self._battery_alarm or self._emergency_engaged:
+            return
         self._send_nav_goal(
             waypoint_name,
             is_dock=False,
@@ -840,7 +863,6 @@ class GuideManager(Node):
             recovery_attempt=recovery_attempt,
             recovery_failures=failures,
             announce=False,
-            fallback=True,
         )
 
     def _goal_failed(

@@ -140,7 +140,7 @@ def test_default_navigation_keeps_nav2_default_behavior_tree(manager):
     assert node.nav.sent[-1].behavior_tree == ''
 
 
-def test_adaptive_smac_failure_falls_back_to_existing_recovery_tree():
+def test_adaptive_smac_failure_waits_and_keeps_original_goal():
     node = GuideManager(parameter_overrides=[
         Parameter('robot_id', value='pinky-01'),
         Parameter('recovery_mode', value='adaptive'),
@@ -161,9 +161,19 @@ def test_adaptive_smac_failure_falls_back_to_existing_recovery_tree():
         aborted = SimpleNamespace(result=lambda: SimpleNamespace(status=6))
         node._on_goal_result(aborted, first_generation, 'target', False, 0)
 
+        assert len(node.nav.sent) == 1
+        assert node._adaptive_retry_timer is not None
+        assert node.robot_state == GuideState.ROBOT_WAITING
+        assert not any(code == 'nav.goal_aborted' for code, _, _ in published)
+
+        retry_generation = node._nav_generation
+        node._retry_adaptive_goal(
+            retry_generation, 'target', 0, 1, {'forward': 1})
+
         assert len(node.nav.sent) == 2
         assert node.nav.sent[-1].behavior_tree.endswith(
-            'navigate_recovery_smac2d.xml')
-        assert not any(code == 'nav.goal_aborted' for code, _, _ in published)
+            'navigate_no_recovery_smac2d.xml')
+        assert node._adaptive_retry_timer is None
     finally:
+        node._cancel_adaptive_retry()
         node.destroy_node()

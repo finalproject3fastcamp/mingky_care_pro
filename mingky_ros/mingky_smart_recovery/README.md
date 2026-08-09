@@ -31,11 +31,13 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
   recovery_mode:=adaptive planner_mode:=smac2d
 ```
 
-적응형 모드의 첫 주행에는 Spin·Backup이 없는 behavior tree를 사용합니다.
-탈출 후보를 모두 소진한 뒤에만 기존 Nav2 복구 트리를 마지막으로 실행합니다.
+적응형 모드는 Spin·Wait·Backup이 없는 behavior tree만 사용합니다. 탈출 후보를
+모두 소진하면 5초 동안 정지한 뒤 최신 LiDAR로 후보를 다시 만들며, 원래 안내
+목표를 횟수 제한 없이 유지합니다.
 
-LiDAR나 Nav2 위치 피드백이 1초 이상 오래됐거나, 저전압·비상정지 상태이면
-적응형 복구를 시작하지 않습니다. 기본 최대 복구 횟수는 3회입니다.
+LiDAR나 Nav2 위치 피드백이 1초 이상 오래되면 정지 상태로 기다렸다가 다시
+확인합니다. 저전압·비상정지 또는 새 안내 목표가 들어오면 기존 목표의 반복을
+중단합니다.
 
 ```bash
 cd mingky_ros/mingky_smart_recovery
