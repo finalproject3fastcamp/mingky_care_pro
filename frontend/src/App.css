@@ -875,3 +875,323 @@
   font-size: 0.88rem;
   color: var(--text-muted);
 }
+
+/* Map */
+.robot-map {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.robot-map__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.robot-map__label { font-size: 0.82rem; color: var(--text-subtle); }
+.robot-map__coord { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-muted); }
+.robot-map__coord--none { color: var(--text-subtle); font-style: italic; }
+
+.robot-map__canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, #f8f8f8);
+  /* 지도가 192x147 이라 그대로 늘리면 뭉갠다. 픽셀을 살린다. */
+  image-rendering: pixelated;
+}
+
+.robot-map__empty {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+
+/* Map legend — 레이어를 켜고 끈다. 진단할 때 하나씩 지워 보는 게 빠르다. */
+.robot-map__legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.robot-map__toggle {
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.robot-map__toggle::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.robot-map__toggle--scan::before { background: #ef4444; }
+.robot-map__toggle--particles::before { background: #10b981; }
+.robot-map__toggle--plan::before { background: #2563eb; }
+
+.robot-map__toggle.off {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+/* 퍼짐이 크면 AMCL 이 발산한 것이다. 숫자만 보고도 알아채야 한다. */
+.robot-map__spread {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+}
+
+.robot-map__spread--wide {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+
+/* 위치 지정 — 실수로 눌리면 로봇 위치가 틀어지므로 한 번 켜야 찍힌다. */
+.robot-map__place {
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.robot-map__place.on {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: #92400e;
+  font-weight: 600;
+}
+
+.robot-map__canvas--placing {
+  cursor: crosshair;
+  outline: 2px solid var(--warning);
+}
+
+/* Mode control ------------------------------------------------------------
+   급할 때 찾는 비상정지가 다른 버튼과 같은 크기로 섞여 있으면 안 된다.
+   그래서 폭을 채우고 색을 따로 준다. */
+.mode-control {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.mode-control__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mode-control__label {
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+.mode-control__value {
+  font-size: 1.05rem;
+}
+
+.mode-control__value--auto { color: var(--accent-strong); }
+.mode-control__value--manual { color: var(--warning); }
+.mode-control__value--estop { color: var(--danger); }
+.mode-control__value--unknown { color: var(--text-subtle); }
+
+/* 요청은 보냈지만 로봇이 아직 확인해 주지 않은 상태.
+   "눌렀으니 됐다" 로 읽히면 안 되므로 눈에 띄되 완료처럼 보이지 않게 둔다. */
+.mode-control__pending {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--warning);
+}
+
+.mode-control__note {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--danger);
+}
+
+.mode-control__buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-control__buttons .btn {
+  flex: 1;
+}
+
+.btn--estop,
+.btn--estop-release {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.btn--estop {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn--estop:hover:not(:disabled) {
+  background: #dc2626;
+  color: #fff;
+}
+
+.btn--estop-release {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Control deck ------------------------------------------------------------
+   지도가 가장 크고, 모드와 조작이 옆에 붙는다. 의료진이 가장 먼저 보는 것은
+   "로봇이 지금 어디 있나" 이고, 조작은 그 다음이다. */
+.control-deck {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 280px;
+  grid-template-areas:
+    'map mode'
+    'map pad';
+  gap: 14px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.control-deck > .robot-map { grid-area: map; }
+.control-deck > .mode-control { grid-area: mode; margin-top: 0; }
+.control-deck > .teleop-pad { grid-area: pad; }
+
+/* 좁은 화면에서는 한 줄로 쌓는다. 병실 태블릿을 가로로만 쓰지 않는다. */
+@media (max-width: 900px) {
+  .control-deck {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'mode' 'map' 'pad';
+  }
+}
+
+/* Map */
+.robot-map {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.robot-map__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.robot-map__label { font-size: 0.82rem; color: var(--text-subtle); }
+.robot-map__coord { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-muted); }
+.robot-map__coord--none { color: var(--text-subtle); font-style: italic; }
+
+.robot-map__canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, #f8f8f8);
+  /* 지도가 192x147 이라 그대로 늘리면 뭉갠다. 픽셀을 살린다. */
+  image-rendering: pixelated;
+}
+
+.robot-map__empty {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+/* Teleop pad */
+.teleop-pad {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.teleop-pad__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.teleop-pad__label { font-size: 0.82rem; color: var(--text-subtle); }
+.teleop-pad__hint { font-size: 0.76rem; color: var(--text-subtle); }
+
+.teleop-pad__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas:
+    '.    up    .'
+    'left stop  right'
+    '.    down  .';
+  gap: 6px;
+  max-width: 240px;
+}
+
+.teleop-pad__btn {
+  font: inherit;
+  font-size: 1.3rem;
+  padding: 14px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  /* 길게 누르는 조작이라 텍스트 선택·확대가 끼면 방해된다. */
+  user-select: none;
+  touch-action: none;
+}
+
+.teleop-pad__btn:active:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.teleop-pad__btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.teleop-pad__btn--stop {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.teleop-pad__disabled {
+  margin: 10px 0 0;
+  font-size: 0.8rem;
+  color: var(--warning);
+}
+

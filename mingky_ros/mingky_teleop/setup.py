@@ -20,6 +20,7 @@ setup(
         'console_scripts': [
             'teleop_limiter = mingky_teleop.teleop_limiter:main',
             'mode_manager = mingky_teleop.mode_manager:main',
+            'teleop_bridge = mingky_teleop.teleop_bridge:main',
         ],
     },
 )
