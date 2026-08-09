@@ -42,9 +42,13 @@ class Pinky(Node):
         
         self.declare_parameter('wheel_radius', 0.027)
         self.declare_parameter('wheel_separation', 0.0961)
+        # 상위 안전 게이트가 죽어도 마지막 RPM으로 계속 달리지 않게 한다.
+        self.declare_parameter('command_timeout', 0.5)
         
         self.wheel_radius = self.get_parameter('wheel_radius').get_parameter_value().double_value
         self.wheel_separation = self.get_parameter('wheel_separation').get_parameter_value().double_value
+        self.command_timeout = self.get_parameter(
+            'command_timeout').get_parameter_value().double_value
         
         self.get_logger().info(f'Wheel radius: {self.wheel_radius}')
         self.get_logger().info(f'Wheel separation: {self.wheel_separation}')
@@ -98,6 +102,8 @@ class Pinky(Node):
         self.y = 0.0
         self.theta = 0.0
         self.last_time = self.get_clock().now()
+        self.last_cmd_time = self.last_time
+        self.motor_command_active = False
         self.is_initialized = True
         self.get_logger().info('Pinky Bringup with Dynamixel has been started successfully.')
 
@@ -123,9 +129,13 @@ class Pinky(Node):
 
         if not self.driver.set_double_rpm(rpm_l, rpm_r):
             self.get_logger().warn("Failed to send motor command.")
+            return
+        self.last_cmd_time = self.get_clock().now()
+        self.motor_command_active = abs(rpm_l) > 0.01 or abs(rpm_r) > 0.01
 
     def update_and_publish(self):
         current_time = self.get_clock().now()
+        self._enforce_command_timeout(current_time)
         dt = (current_time - self.last_time).nanoseconds / 1e9
         if dt <= 0: return
 
@@ -159,6 +169,20 @@ class Pinky(Node):
         self._publish_joint_states(current_time, rpm_l, rpm_r)
 
         self.last_time = current_time
+
+    def _enforce_command_timeout(self, current_time):
+        """속도 명령이 끊기면 하드웨어의 마지막 RPM을 0으로 덮어쓴다."""
+        if not self.motor_command_active:
+            return
+        age = (current_time - self.last_cmd_time).nanoseconds / 1e9
+        if age < self.command_timeout:
+            return
+        if self.driver.set_double_rpm(0, 0):
+            self.motor_command_active = False
+            self.get_logger().warn(
+                f'cmd_vel {age:.2f}초 두절 — 모터 워치독 정지')
+        else:
+            self.get_logger().error('모터 워치독 정지 명령 실패')
 
     def _publish_tf(self, current_time):
         t = TransformStamped()

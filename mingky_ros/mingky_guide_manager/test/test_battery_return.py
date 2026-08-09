@@ -7,7 +7,7 @@ from mingky_interfaces.msg import GuideState, SessionStart
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 
 class PendingFuture:
@@ -95,3 +95,19 @@ def test_session_created_while_low_is_closed_immediately(manager):
 
     assert published == [('session.ended', {'end_reason': 'battery'}, 51)]
     assert node.session_id == 0
+
+
+def test_emergency_state_is_mirrored_with_recovery_event(manager):
+    node, published = manager
+    node.session_id = 63
+    node._on_emergency_reason(String(data='obstacle'))
+
+    node._on_emergency_state(Bool(data=True))
+    node._on_emergency_reason(String(data='operator_release'))
+    node._on_emergency_state(Bool(data=False))
+
+    assert published == [
+        ('robot.paused', {'reason': 'obstacle'}, 63),
+        ('robot.resumed', {'reason': 'operator_release'}, 63),
+    ]
+    assert node.robot_state == GuideState.ROBOT_IDLE

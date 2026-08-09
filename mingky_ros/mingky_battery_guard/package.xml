@@ -3,7 +3,7 @@
 <package format="3">
   <name>mingky_battery_guard</name>
   <version>0.0.1</version>
-  <description>배터리 측정값을 필터링해 저전압 상태 변화를 발행</description>
+  <description>배터리 저전압 감시와 cmd_vel 비상정지 안전 게이트</description>
   <maintainer email="wjddn007658@gmail.com">jw</maintainer>
   <license>Apache-2.0</license>
 
@@ -12,12 +12,8 @@
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>action_msgs</depend>
-  <depend>nav2_msgs</depend>
   <depend>pinky_interfaces</depend>
   <depend>mingky_interfaces</depend>
-  <!-- EventPublisher 헬퍼를 쓴다. 이벤트 발행 방식이 패키지마다 갈리지
-       않도록 복사하지 않고 그대로 가져다 쓴다. -->
-  <depend>mingky_guide_manager</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

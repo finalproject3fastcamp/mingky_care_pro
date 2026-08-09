@@ -75,6 +75,9 @@ class GuideManager(Node):
         self.voltage = float('nan')
         self.percent = -1
         self._battery_alarm = False
+        self._emergency_engaged = False
+        self._emergency_reason = 'emergency_stop'
+        self._dock_pending = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -95,6 +98,10 @@ class GuideManager(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
         self.create_subscription(Bool, '/battery/low', self._on_battery_low, battery_qos)
+        self.create_subscription(
+            String, '/emergency_stop/reason', self._on_emergency_reason, state_qos)
+        self.create_subscription(
+            Bool, '/emergency_stop/state', self._on_emergency_state, state_qos)
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
@@ -230,7 +237,43 @@ class GuideManager(Node):
         self.session_id = 0
         self.session_state = GuideState.SESSION_NONE
         self.patient_id = ''
-        self._return_to_dock()
+        if self._emergency_engaged:
+            self._dock_pending = True
+            self.get_logger().warn('비상정지 해제 뒤 충전소 복귀를 시작합니다.')
+        else:
+            self._return_to_dock()
+
+    # --------------------------------------------------------------- 비상정지
+
+    def _on_emergency_reason(self, msg: String):
+        if msg.data:
+            self._emergency_reason = msg.data
+
+    def _on_emergency_state(self, msg: Bool):
+        if msg.data == self._emergency_engaged:
+            return
+        self._emergency_engaged = msg.data
+
+        if msg.data:
+            # 진행 중인 Nav2 콜백은 EmergencyStop 이 취소한 뒤 늦게 도착할 수 있다.
+            # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
+            self._nav_generation += 1
+            self._dock_pending = self._battery_alarm
+            self.robot_state = GuideState.ROBOT_PAUSED
+            self.events.publish(
+                'robot.paused', {'reason': self._emergency_reason}, self.session_id)
+            return
+
+        self.events.publish(
+            'robot.resumed', {'reason': self._emergency_reason}, self.session_id)
+        if self._battery_alarm:
+            self.robot_state = GuideState.ROBOT_BATTERY_LOW
+            self._dock_pending = False
+            self._return_to_dock()
+        else:
+            # 취소된 안내 목표는 안전상 자동 재개하지 않는다.
+            self.robot_state = GuideState.ROBOT_IDLE
+        self._emergency_reason = 'emergency_stop'
 
     # ------------------------------------------------------------------ 세션
 

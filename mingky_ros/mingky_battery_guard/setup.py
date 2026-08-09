@@ -23,7 +23,7 @@ setup(
     zip_safe=True,
     maintainer='jw',
     maintainer_email='wjddn007658@gmail.com',
-    description='배터리 측정값을 필터링해 저전압 상태 변화를 발행',
+    description='배터리 저전압 감시와 cmd_vel 비상정지 안전 게이트',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
