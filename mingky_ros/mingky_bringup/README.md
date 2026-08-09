@@ -313,7 +313,7 @@ ros2 launch mingky_bringup foxglove.launch.py
 | Costmap | `/global_costmap/costmap` | **팽창이 통로를 막나** |
 | Path | `/plan`, `/local_plan` | 경로가 목표까지 그려지나 |
 | LaserScan | `/scan` | 라이다가 맵과 겹치나 |
-| Pose | `/amcl_pose`, `/particlecloud` | **위치추정이 발산하나** |
+| Pose | `/amcl_pose`, `/particle_cloud` | **위치추정이 발산하나** |
 | Plot | `/cmd_vel` | 직진이 0 인데 회전만 있나 |
 | Parameters | `controller_server` 등 | 재시작 없이 튜닝 |
 
