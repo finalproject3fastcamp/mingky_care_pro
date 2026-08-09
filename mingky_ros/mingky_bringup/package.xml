@@ -20,6 +20,7 @@
   <exec_depend>ros2cli</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>twist_mux</exec_depend>
   <exec_depend>v4l2_camera</exec_depend>
 
   <export>
