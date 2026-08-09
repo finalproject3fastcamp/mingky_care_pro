@@ -110,6 +110,30 @@ class SessionOut(BaseModel):
     current_visit: str | None = None
 
 
+class OrderIn(BaseModel):
+    """대시보드가 로봇에 내리는 명령.
+
+    command 를 문자열로 열어두지 않고 좁힌 이유는, 로봇이 모르는 명령을
+    받았을 때 조용히 무시하는 상황을 만들지 않기 위해서다.
+    """
+
+    command: Literal["goto", "start_session"]
+    # goto 면 waypoint 이름, start_session 이면 patient_id.
+    argument: str = Field(min_length=1, max_length=100)
+
+
+class OrderOut(BaseModel):
+    order_id: UUID
+    robot_id: str
+    command: str
+    argument: str
+    created_at: datetime
+
+
+class OrderAck(BaseModel):
+    order_id: UUID
+
+
 class EventOut(BaseModel):
     event_id: UUID
     robot_id: str | None = None

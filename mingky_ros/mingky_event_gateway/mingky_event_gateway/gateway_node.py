@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 import rclpy
 import requests
 from rclpy.node import Node
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 
 from mingky_interfaces.msg import Event
 
@@ -73,6 +73,11 @@ class EventGateway(Node):
         # 배터리 추이는 이벤트가 아니라 별도 로그에 저빈도로 저장한다.
         # 0 이면 전송하지 않는다. 첫 표본은 즉시, 이후에는 이 주기로 보낸다.
         self.declare_parameter("battery_interval_sec", 120.0)
+        # 관제에서 내려오는 명령을 물어보는 주기. 0 이면 물어보지 않는다.
+        # 서버가 밀어넣지 않고 로봇이 물어보는 이유는, 로봇이 NAT 안에 있거나
+        # 네트워크를 옮겨도 나가는 연결만 만들면 되기 때문이다.
+        self.declare_parameter("order_interval_sec", 3.0)
+        self.declare_parameter("order_timeout_sec", 2.0)
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -85,6 +90,9 @@ class EventGateway(Node):
         self.battery_url = f"{base}/robots/{self.robot_id}/battery"
         self.battery_interval = float(
             self.get_parameter("battery_interval_sec").value)
+        self.orders_url = f"{base}/robots/{self.robot_id}/orders"
+        self.order_interval = float(self.get_parameter("order_interval_sec").value)
+        self.order_timeout = float(self.get_parameter("order_timeout_sec").value)
         self.batch_size = int(self.get_parameter("batch_size").value)
         self.flush_interval = float(self.get_parameter("flush_interval_sec").value)
         self.timeout = float(self.get_parameter("http_timeout_sec").value)
@@ -105,6 +113,14 @@ class EventGateway(Node):
         self._battery_percent = None
         self._battery_wake = threading.Event()
 
+        # 관제 명령을 상태머신에 넘기는 통로. guide_manager 의 기존 수동 트리거
+        # 토픽을 그대로 쓴다 — 상태머신은 명령의 출처를 알 필요가 없다.
+        self._order_pubs = {
+            "goto": self.create_publisher(String, "/guide_manager/goto", 10),
+            "start_session": self.create_publisher(
+                String, "/guide_manager/start_session", 10),
+        }
+
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._sender = threading.Thread(target=self._send_loop, daemon=True)
@@ -121,6 +137,10 @@ class EventGateway(Node):
             self._battery = threading.Thread(
                 target=self._battery_loop, daemon=True)
             self._battery.start()
+        self._orders = None
+        if self.order_interval > 0:
+            self._orders = threading.Thread(target=self._order_loop, daemon=True)
+            self._orders.start()
 
         self.get_logger().info(
             f"event_gateway 시작 (대상={self.url}, 대기 {self.queue.count()}건)")
@@ -319,6 +339,85 @@ class EventGateway(Node):
                     f"배터리 표본 거부: HTTP {response.status_code}")
         session.close()
 
+    # ----------------------------------------------------------------- 명령 수신
+
+    def _order_loop(self) -> None:
+        """관제에서 내려온 명령을 물어보고 상태머신에 넘긴다.
+
+            GET  .../orders/next            대기 명령 조회 (서버가 지우지 않음)
+            발행  guide_manager 토픽
+            POST .../orders/{id}/ack        받았음을 알림. 서버가 여기서 지움
+
+        조회와 삭제를 나눈 이유는 무선 때문이다. 응답이 유실되면 로봇은 못
+        받았는데 서버는 보냈다고 믿게 되고 명령이 증발한다. ack 를 보낸
+        것만 지우면 최악의 경우가 '같은 명령을 두 번 받는 것' 이 된다.
+
+        같은 order_id 를 두 번 처리하지 않도록 마지막 처리분을 기억한다.
+        ack 가 유실되면 다음 폴링에 같은 명령이 다시 오기 때문이다.
+        """
+        session = requests.Session()
+        self.get_logger().info(
+            f"명령 수신 시작 ({self.orders_url}/next, {self.order_interval:.0f}초 주기)")
+
+        last_id = None
+        failing = False
+        while not self._stop.wait(self.order_interval):
+            try:
+                response = session.get(
+                    f"{self.orders_url}/next", timeout=self.order_timeout)
+                response.raise_for_status()
+                order = response.json()
+            except (requests.RequestException, ValueError) as exc:
+                if not failing:
+                    self.get_logger().warn(f"명령 조회 실패: {exc}")
+                    failing = True
+                continue
+
+            if failing:
+                self.get_logger().info("명령 조회 복구")
+                failing = False
+
+            if not order:
+                continue
+
+            order_id = order.get("order_id")
+            if order_id != last_id:
+                if self._dispatch(order):
+                    last_id = order_id
+                else:
+                    # 모르는 명령은 ack 하지 않는다. 서버에 남겨두면
+                    # 대시보드에서 미처리 상태가 보인다.
+                    continue
+
+            # ack 는 매번 시도한다. 앞서 유실됐을 수 있다.
+            try:
+                session.post(f"{self.orders_url}/{order_id}/ack",
+                             json={"order_id": order_id},
+                             timeout=self.order_timeout)
+            except requests.RequestException:
+                # 실패해도 버린다. 다음 폴링에 같은 명령이 오면 다시 ack 한다.
+                pass
+
+        session.close()
+
+    def _dispatch(self, order: dict) -> bool:
+        """명령을 해당 토픽으로 발행한다. 처리했으면 True.
+
+        guide_manager 의 기존 수동 트리거 토픽을 그대로 쓴다. 상태머신은
+        명령이 사람에게서 왔는지 관제에서 왔는지 알 필요가 없다.
+        """
+        command = order.get("command")
+        argument = order.get("argument", "")
+        publisher = self._order_pubs.get(command)
+        if publisher is None:
+            self.get_logger().error(
+                f"모르는 명령: {command} (order_id={order.get('order_id')})")
+            return False
+
+        publisher.publish(String(data=argument))
+        self.get_logger().info(f"명령 실행: {command}({argument})")
+        return True
+
     # ------------------------------------------------------------------ 종료
 
     def destroy_node(self):
@@ -330,6 +429,8 @@ class EventGateway(Node):
             self._heartbeat.join(timeout=2.0)
         if self._battery is not None:
             self._battery.join(timeout=2.0)
+        if self._orders is not None:
+            self._orders.join(timeout=2.0)
         self.queue.close()
         return super().destroy_node()
 
