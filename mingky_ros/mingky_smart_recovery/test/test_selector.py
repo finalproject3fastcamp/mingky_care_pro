@@ -2,7 +2,12 @@ import math
 
 import pytest
 
-from mingky_smart_recovery.selector import SelectorConfig, select_escape_candidates
+from mingky_smart_recovery.selector import (
+    EscapeCandidate,
+    SelectorConfig,
+    candidate_to_map,
+    select_escape_candidates,
+)
 
 
 def scan(default: float = 0.20) -> list[float]:
@@ -95,3 +100,47 @@ def test_ignores_invalid_scan_values() -> None:
 )
 def test_configuration_accepts_quantile_edges(config: SelectorConfig) -> None:
     assert config.minimum_distance_m > 0.0
+
+
+def test_candidate_is_rotated_from_robot_frame_into_map_frame() -> None:
+    candidate = EscapeCandidate(
+        name='forward',
+        bearing_rad=0.0,
+        distance_m=0.35,
+        x_m=0.35,
+        y_m=0.0,
+        clearance_m=1.0,
+        score=1.0,
+    )
+
+    x, y, yaw = candidate_to_map(
+        candidate,
+        robot_x=2.0,
+        robot_y=3.0,
+        robot_yaw=math.pi / 2.0,
+    )
+
+    assert x == pytest.approx(2.0)
+    assert y == pytest.approx(3.35)
+    assert yaw == pytest.approx(math.pi / 2.0)
+
+
+def test_candidate_map_yaw_is_normalized() -> None:
+    candidate = EscapeCandidate(
+        name='left',
+        bearing_rad=math.pi / 2.0,
+        distance_m=0.2,
+        x_m=0.0,
+        y_m=0.2,
+        clearance_m=1.0,
+        score=1.0,
+    )
+
+    _, _, yaw = candidate_to_map(
+        candidate,
+        robot_x=0.0,
+        robot_y=0.0,
+        robot_yaw=math.pi,
+    )
+
+    assert yaw == pytest.approx(-math.pi / 2.0)

@@ -25,7 +25,7 @@ class FakeNav:
     def wait_for_server(self, timeout_sec):
         return True
 
-    def send_goal_async(self, goal):
+    def send_goal_async(self, goal, feedback_callback=None):
         self.sent.append(goal)
         return PendingFuture()
 

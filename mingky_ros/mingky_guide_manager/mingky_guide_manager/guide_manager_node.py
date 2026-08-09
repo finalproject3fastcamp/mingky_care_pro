@@ -18,24 +18,35 @@
 
 import math
 from pathlib import Path
+from typing import Mapping
 
 import rclpy
 import yaml
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32, String
 
 from mingky_interfaces.msg import GuideState, SessionStart
+from mingky_smart_recovery.selector import (
+    EscapeCandidate,
+    candidate_to_map,
+    select_escape_candidates,
+)
 
 from .event_publisher import EventPublisher
 
 
 def _yaw_to_quat(yaw: float):
     return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+
+
+def _quat_to_yaw(z: float, w: float) -> float:
+    return math.atan2(2.0 * w * z, 1.0 - 2.0 * z * z)
 
 
 class GuideManager(Node):
@@ -56,6 +67,13 @@ class GuideManager(Node):
         self.declare_parameter('charging_waypoint', '')
         self.declare_parameter('dock_max_attempts', 3)
         self.declare_parameter('dock_retry_delay_sec', 5.0)
+        # default 는 기존 Nav2 동작을 그대로 유지한다. adaptive 를 명시한 로봇만
+        # LiDAR 후보 생성 -> 경로 검증 -> 임시 탈출 지점 이동을 사용한다.
+        self.declare_parameter('recovery_mode', 'default')
+        self.declare_parameter('recovery_scan_topic', '/scan')
+        self.declare_parameter('recovery_scan_stale_sec', 1.0)
+        self.declare_parameter('recovery_max_attempts', 3)
+        self.declare_parameter('recovery_candidate_limit', 4)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
@@ -64,6 +82,17 @@ class GuideManager(Node):
             1, int(self.get_parameter('dock_max_attempts').value))
         self.dock_retry_delay = max(
             0.1, float(self.get_parameter('dock_retry_delay_sec').value))
+        self.recovery_mode = str(self.get_parameter('recovery_mode').value).lower()
+        if self.recovery_mode not in ('default', 'adaptive'):
+            self.get_logger().warn(
+                f'알 수 없는 recovery_mode={self.recovery_mode!r}; default 를 사용합니다.')
+            self.recovery_mode = 'default'
+        self.recovery_scan_stale_sec = max(
+            0.1, float(self.get_parameter('recovery_scan_stale_sec').value))
+        self.recovery_max_attempts = max(
+            1, int(self.get_parameter('recovery_max_attempts').value))
+        self.recovery_candidate_limit = max(
+            1, int(self.get_parameter('recovery_candidate_limit').value))
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -86,6 +115,10 @@ class GuideManager(Node):
         self._dock_pending = False
         self._dock_attempt = 0
         self._dock_retry_timer = None
+        self._latest_scan = None
+        self._latest_scan_received_ns = 0
+        self._latest_nav_pose = None
+        self._latest_nav_pose_received_ns = 0
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -110,6 +143,12 @@ class GuideManager(Node):
             String, '/emergency_stop/reason', self._on_emergency_reason, state_qos)
         self.create_subscription(
             Bool, '/emergency_stop/state', self._on_emergency_state, state_qos)
+        self.create_subscription(
+            LaserScan,
+            str(self.get_parameter('recovery_scan_topic').value),
+            self._on_scan,
+            10,
+        )
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
@@ -125,11 +164,14 @@ class GuideManager(Node):
             SessionStart, '/qr_reader_node/session_start', self._on_session_start, 10)
 
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.path_planner = ActionClient(
+            self, ComputePathToPose, 'compute_path_to_pose')
 
         self.create_timer(1.0, self._publish_state)
         self.get_logger().info(
             f'guide_manager 시작 (robot_id={self.robot_id}, '
-            f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint})')
+            f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint}, '
+            f'recovery={self.recovery_mode})')
 
     # ------------------------------------------------------------------ 설정
 
@@ -329,6 +371,16 @@ class GuideManager(Node):
 
     # ------------------------------------------------------------------ 주행
 
+    def _on_scan(self, msg: LaserScan) -> None:
+        self._latest_scan = msg
+        self._latest_scan_received_ns = self.get_clock().now().nanoseconds
+
+    def _on_nav_feedback(self, feedback_msg, generation: int) -> None:
+        if generation != self._nav_generation:
+            return
+        self._latest_nav_pose = feedback_msg.feedback.current_pose
+        self._latest_nav_pose_received_ns = self.get_clock().now().nanoseconds
+
     def send_goal(self, waypoint_name: str) -> None:
         """환자 안내 목적지로 이동한다."""
         if self._battery_alarm:
@@ -374,7 +426,10 @@ class GuideManager(Node):
             {'station_name': waypoint_name, 'error_code': int(error_code)})
 
     def _send_nav_goal(
-            self, waypoint_name: str, *, is_dock: bool, session_id: int) -> None:
+            self, waypoint_name: str, *, is_dock: bool, session_id: int,
+            recovery_attempt: int = 0,
+            recovery_failures: Mapping[str, int] | None = None,
+            announce: bool = True) -> None:
         wp = self.waypoints.get(waypoint_name)
         if wp is None:
             self.get_logger().error(f'알 수 없는 waypoint: {waypoint_name}')
@@ -407,17 +462,24 @@ class GuideManager(Node):
         else:
             self.robot_state = GuideState.ROBOT_MOVING
             self.session_state = GuideState.SESSION_GUIDING
-            self.events.publish(
-                'nav.goal_sent', {'visit_name': waypoint_name}, session_id)
+            if announce:
+                self.events.publish(
+                    'nav.goal_sent', {'visit_name': waypoint_name}, session_id)
 
-        future = self.nav.send_goal_async(goal)
+        future = self.nav.send_goal_async(
+            goal,
+            feedback_callback=lambda feedback: self._on_nav_feedback(
+                feedback, generation),
+        )
         future.add_done_callback(
             lambda done: self._on_goal_response(
-                done, generation, waypoint_name, is_dock, session_id))
+                done, generation, waypoint_name, is_dock, session_id,
+                recovery_attempt, dict(recovery_failures or {})))
 
     def _on_goal_response(
             self, future, generation: int, waypoint_name: str,
-            is_dock: bool, session_id: int):
+            is_dock: bool, session_id: int, recovery_attempt: int = 0,
+            recovery_failures: Mapping[str, int] | None = None):
         try:
             handle = future.result()
         except Exception as exc:  # noqa: BLE001 - Nav2 오류를 이벤트로 보고
@@ -441,11 +503,13 @@ class GuideManager(Node):
         result = handle.get_result_async()
         result.add_done_callback(
             lambda done: self._on_goal_result(
-                done, generation, waypoint_name, is_dock, session_id))
+                done, generation, waypoint_name, is_dock, session_id,
+                recovery_attempt, dict(recovery_failures or {})))
 
     def _on_goal_result(
             self, future, generation: int, waypoint_name: str,
-            is_dock: bool, session_id: int):
+            is_dock: bool, session_id: int, recovery_attempt: int = 0,
+            recovery_failures: Mapping[str, int] | None = None):
         if generation != self._nav_generation:
             return
         try:
@@ -472,9 +536,231 @@ class GuideManager(Node):
                     'nav.goal_succeeded', {'visit_name': waypoint_name}, session_id)
                 self.get_logger().info(f'도착: {waypoint_name}')
         else:
+            if (not is_dock and status == 6
+                    and self._start_adaptive_recovery(
+                        waypoint_name, session_id, recovery_attempt,
+                        dict(recovery_failures or {}))):
+                return
             self._goal_failed(
                 waypoint_name, is_dock, session_id, int(status),
                 f'주행 실패 (status={status})')
+
+    def _start_adaptive_recovery(
+            self, waypoint_name: str, session_id: int, recovery_attempt: int,
+            failures: dict[str, int]) -> bool:
+        """현재 위치에서 안전한 탈출 후보를 만들고 경로 검증을 시작한다."""
+        if self.recovery_mode != 'adaptive':
+            return False
+        if self._battery_alarm or self._emergency_engaged:
+            return False
+        if recovery_attempt >= self.recovery_max_attempts:
+            self.get_logger().error(
+                f'적응형 복구 최대 횟수({self.recovery_max_attempts})에 도달했습니다.')
+            return False
+        now_ns = self.get_clock().now().nanoseconds
+        stale_ns = int(self.recovery_scan_stale_sec * 1_000_000_000)
+        if (self._latest_scan is None or self._latest_nav_pose is None
+                or now_ns - self._latest_scan_received_ns > stale_ns
+                or now_ns - self._latest_nav_pose_received_ns > stale_ns):
+            self.get_logger().warn(
+                'LiDAR 또는 현재 위치가 오래되어 적응형 복구를 건너뜁니다.')
+            return False
+        if not self.path_planner.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn(
+                'compute_path_to_pose 액션 서버가 없어 적응형 복구를 건너뜁니다.')
+            return False
+
+        wp = self.waypoints.get(waypoint_name)
+        if wp is None:
+            return False
+        pose = self._latest_nav_pose.pose
+        robot_yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
+        map_goal_angle = math.atan2(
+            float(wp['y']) - pose.position.y,
+            float(wp['x']) - pose.position.x,
+        )
+        scan = self._latest_scan
+        candidates = select_escape_candidates(
+            scan.ranges,
+            angle_min=float(scan.angle_min),
+            angle_increment=float(scan.angle_increment),
+            range_min=float(scan.range_min),
+            range_max=float(scan.range_max),
+            goal_bearing_rad=math.atan2(
+                math.sin(map_goal_angle - robot_yaw),
+                math.cos(map_goal_angle - robot_yaw),
+            ),
+            failures=failures,
+        )[:self.recovery_candidate_limit]
+        if not candidates:
+            self.get_logger().warn('안전 여유를 만족하는 탈출 후보가 없습니다.')
+            return False
+
+        context = {
+            'waypoint_name': waypoint_name,
+            'session_id': session_id,
+            'recovery_attempt': recovery_attempt,
+            'failures': failures,
+            'candidates': candidates,
+            'index': 0,
+            'robot_x': float(pose.position.x),
+            'robot_y': float(pose.position.y),
+            'robot_yaw': robot_yaw,
+            'generation': self._nav_generation,
+        }
+        self.robot_state = GuideState.ROBOT_MOVING
+        self.get_logger().warn(
+            f'적응형 복구 {recovery_attempt + 1}/{self.recovery_max_attempts}: '
+            f'{len(candidates)}개 후보 경로를 검증합니다.')
+        self._validate_next_recovery_candidate(context)
+        return True
+
+    def _candidate_pose(self, context: dict, candidate: EscapeCandidate) -> PoseStamped:
+        x, y, yaw = candidate_to_map(
+            candidate,
+            robot_x=context['robot_x'],
+            robot_y=context['robot_y'],
+            robot_yaw=context['robot_yaw'],
+        )
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        z, w = _yaw_to_quat(yaw)
+        pose.pose.orientation.z = z
+        pose.pose.orientation.w = w
+        return pose
+
+    def _validate_next_recovery_candidate(self, context: dict) -> None:
+        if context['generation'] != self._nav_generation:
+            return
+        index = context['index']
+        if index >= len(context['candidates']):
+            self._goal_failed(
+                context['waypoint_name'], False, context['session_id'], 208,
+                '검증 가능한 적응형 탈출 경로가 없습니다.')
+            return
+        candidate = context['candidates'][index]
+        context['index'] += 1
+        goal = ComputePathToPose.Goal()
+        goal.goal = self._candidate_pose(context, candidate)
+        goal.use_start = False
+        future = self.path_planner.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_recovery_path_response(done, context, candidate))
+
+    def _on_recovery_path_response(
+            self, future, context: dict, candidate: EscapeCandidate) -> None:
+        if context['generation'] != self._nav_generation:
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'탈출 경로 요청 실패({candidate.name}): {exc}')
+            self._reject_recovery_candidate(context, candidate)
+            return
+        if not handle.accepted:
+            self._reject_recovery_candidate(context, candidate)
+            return
+        result = handle.get_result_async()
+        result.add_done_callback(
+            lambda done: self._on_recovery_path_result(done, context, candidate))
+
+    def _on_recovery_path_result(
+            self, future, context: dict, candidate: EscapeCandidate) -> None:
+        if context['generation'] != self._nav_generation:
+            return
+        try:
+            wrapped = future.result()
+            path_result = wrapped.result
+            valid = (
+                wrapped.status == 4
+                and path_result.error_code == ComputePathToPose.Result.NONE
+                and len(path_result.path.poses) >= 2
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'탈출 경로 결과 실패({candidate.name}): {exc}')
+            valid = False
+        if not valid:
+            self._reject_recovery_candidate(context, candidate)
+            return
+        self.get_logger().info(
+            f'탈출 후보 선택: {candidate.name}, 거리={candidate.distance_m:.2f}m, '
+            f'여유={candidate.clearance_m:.2f}m')
+        self._send_recovery_goal(context, candidate)
+
+    def _reject_recovery_candidate(
+            self, context: dict, candidate: EscapeCandidate) -> None:
+        failures = context['failures']
+        failures[candidate.name] = failures.get(candidate.name, 0) + 1
+        self._validate_next_recovery_candidate(context)
+
+    def _send_recovery_goal(
+            self, context: dict, candidate: EscapeCandidate) -> None:
+        self._nav_generation += 1
+        context['generation'] = self._nav_generation
+        context['active_candidate'] = candidate
+        goal = NavigateToPose.Goal()
+        goal.pose = self._candidate_pose(context, candidate)
+        future = self.nav.send_goal_async(
+            goal,
+            feedback_callback=lambda feedback: self._on_nav_feedback(
+                feedback, context['generation']),
+        )
+        future.add_done_callback(
+            lambda done: self._on_recovery_goal_response(done, context))
+
+    def _on_recovery_goal_response(self, future, context: dict) -> None:
+        if context['generation'] != self._nav_generation:
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'탈출 목표 전송 실패: {exc}')
+            self._recovery_motion_failed(context)
+            return
+        if not handle.accepted:
+            self._recovery_motion_failed(context)
+            return
+        result = handle.get_result_async()
+        result.add_done_callback(
+            lambda done: self._on_recovery_goal_result(done, context))
+
+    def _on_recovery_goal_result(self, future, context: dict) -> None:
+        if context['generation'] != self._nav_generation:
+            return
+        try:
+            status = future.result().status
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'탈출 이동 결과 실패: {exc}')
+            self._recovery_motion_failed(context)
+            return
+        if status != 4:
+            self._recovery_motion_failed(context)
+            return
+        self.get_logger().info('임시 탈출 지점 도착; 원래 안내 목표를 다시 시도합니다.')
+        self._send_nav_goal(
+            context['waypoint_name'],
+            is_dock=False,
+            session_id=context['session_id'],
+            recovery_attempt=context['recovery_attempt'] + 1,
+            recovery_failures=context['failures'],
+            announce=False,
+        )
+
+    def _recovery_motion_failed(self, context: dict) -> None:
+        candidate = context['active_candidate']
+        failures = context['failures']
+        failures[candidate.name] = failures.get(candidate.name, 0) + 1
+        next_attempt = context['recovery_attempt'] + 1
+        if self._start_adaptive_recovery(
+                context['waypoint_name'], context['session_id'],
+                next_attempt, failures):
+            return
+        self._goal_failed(
+            context['waypoint_name'], False, context['session_id'], 6,
+            f'탈출 이동 실패 ({candidate.name})')
 
     def _goal_failed(
             self, waypoint_name: str, is_dock: bool, session_id: int,

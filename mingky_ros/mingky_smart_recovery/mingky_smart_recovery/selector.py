@@ -160,3 +160,26 @@ def select_escape_candidates(
         ))
 
     return sorted(candidates, key=lambda candidate: candidate.score, reverse=True)
+
+
+def candidate_to_map(
+    candidate: EscapeCandidate,
+    *,
+    robot_x: float,
+    robot_y: float,
+    robot_yaw: float,
+) -> tuple[float, float, float]:
+    """로봇 기준 탈출 후보를 map 좌표의 ``x, y, yaw``로 변환한다."""
+    map_x = (
+        robot_x + math.cos(robot_yaw) * candidate.x_m
+        - math.sin(robot_yaw) * candidate.y_m
+    )
+    map_y = (
+        robot_y + math.sin(robot_yaw) * candidate.x_m
+        + math.cos(robot_yaw) * candidate.y_m
+    )
+    map_yaw = math.atan2(
+        math.sin(robot_yaw + candidate.bearing_rad),
+        math.cos(robot_yaw + candidate.bearing_rad),
+    )
+    return map_x, map_y, map_yaw

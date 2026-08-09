@@ -8,6 +8,7 @@
     <arg name="map" default="$(find-pkg-share mingky_bringup)/map/yun_map_highres_clean.yaml"/>
     <arg name="nav2_params" default="$(find-pkg-share pinky_navigation)/params/nav2_params.yaml"/>
     <arg name="charging_waypoint" default=""/>
+    <arg name="recovery_mode" default="default"/>
     <arg name="backend_url" default="http://192.168.0.10:8000"/>
 
     <arg name="start_robot_base" default="true"/>
@@ -42,6 +43,7 @@
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="map_name" value="$(var map_name)"/>
         <param name="charging_waypoint" value="$(var charging_waypoint)" type="str"/>
+        <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
     </node>
 
     <node pkg="mingky_event_gateway" exec="event_gateway"
