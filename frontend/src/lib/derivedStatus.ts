@@ -79,19 +79,26 @@ export function deriveCurrentDestination(
  */
 export function deriveRobotState(
   events: EventOut[],
-  session: { session_id: number; ended_at: string | null },
+  session: { session_id: number; robot_id?: string; ended_at: string | null },
 ): RobotState {
   if (session.ended_at) return '완료'
 
   const sessionEvents = events.filter((e) => e.session_id === session.session_id)
+  // 통신 복구와 배터리 회복처럼 세션과 무관한 robot.* 이벤트도 있다.
+  // robot_id가 있으면 해당 로봇의 전체 상태 전이를 함께 본다.
+  const robotEvents = session.robot_id
+    ? events.filter(
+        (e) => e.robot_id === session.robot_id && e.event_code.startsWith('robot.'),
+      )
+    : sessionEvents
 
-  if (isTransitionActive(sessionEvents, 'robot.comm_lost', 'robot.comm_restored')) {
+  if (isTransitionActive(robotEvents, 'robot.comm_lost', 'robot.comm_restored')) {
     return '통신 두절'
   }
-  if (isTransitionActive(sessionEvents, 'robot.battery_low', 'robot.battery_recovered')) {
+  if (isTransitionActive(robotEvents, 'robot.battery_low', 'robot.battery_recovered')) {
     return '배터리 부족'
   }
-  if (isTransitionActive(sessionEvents, 'robot.paused', 'robot.resumed')) {
+  if (isTransitionActive(robotEvents, 'robot.paused', 'robot.resumed')) {
     return '일시정지'
   }
 

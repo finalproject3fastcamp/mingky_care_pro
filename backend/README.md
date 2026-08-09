@@ -33,6 +33,7 @@ uvicorn app.main:app --reload
 - `GET /sessions/{id}` — 세션 상세 (끝난 세션 포함)
 - `GET /robots` — 로봇 목록 + 최근 배터리 + 활성 세션 + 통신 상태
 - `POST /robots/{id}/heartbeat` — 로봇 생존 신호 (본문 없음, 204)
+- `POST /robots/{id}/battery` — 전압/퍼센트 표본 저장 (204)
 - `GET /patients/{patient_id}/photo` — 환자 프로필 사진 (`image/*`, private 캐시)
 - `GET /docs` — OpenAPI 문서
 
@@ -256,3 +257,14 @@ date_part('year', age(p.birth_date))::int AS age
 
 활성 세션 조인이 행을 늘리지 않는 것은 `003` 의 부분 유니크 인덱스가
 로봇당 활성 세션을 하나로 보장하기 때문입니다.
+
+### `POST /robots/{id}/battery`
+
+이벤트 게이트웨이가 첫 표본은 즉시, 이후 기본 2분 주기로 호출합니다.
+`voltage`와 `battery_percent` 중 하나 이상이 필요합니다. 기록 시각은 대시보드의
+stale 판정에 쓰이므로 로봇 시각이 아니라 서버의 `now()`를 사용합니다.
+로봇 활성화는 이 표본이 5분 이내이고 40% 이상일 때만 허용됩니다.
+
+```json
+{ "voltage": 7.2, "battery_percent": 50 }
+```

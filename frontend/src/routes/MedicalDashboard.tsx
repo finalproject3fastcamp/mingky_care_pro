@@ -210,6 +210,7 @@ interface SessionViewProps {
 function SessionView({ session, robot, events }: SessionViewProps) {
   const derivedState = deriveRobotState(events, {
     session_id: session.session_id,
+    robot_id: session.robot_id,
     ended_at: session.ended_at,
   })
   const derivedDestination =

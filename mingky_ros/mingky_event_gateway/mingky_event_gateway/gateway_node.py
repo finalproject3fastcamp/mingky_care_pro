@@ -20,6 +20,7 @@
 """
 
 import json
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from datetime import datetime, timezone
 import rclpy
 import requests
 from rclpy.node import Node
+from std_msgs.msg import Float32
 
 from mingky_interfaces.msg import Event
 
@@ -68,6 +70,9 @@ class EventGateway(Node):
         self.declare_parameter("heartbeat_interval_sec", 5.0)
         # 주기보다 짧아야 한다. 길면 응답을 기다리는 사이 다음 차례가 밀린다.
         self.declare_parameter("heartbeat_timeout_sec", 2.0)
+        # 배터리 추이는 이벤트가 아니라 별도 로그에 저빈도로 저장한다.
+        # 0 이면 전송하지 않는다. 첫 표본은 즉시, 이후에는 이 주기로 보낸다.
+        self.declare_parameter("battery_interval_sec", 120.0)
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -77,6 +82,9 @@ class EventGateway(Node):
             self.get_parameter("heartbeat_interval_sec").value)
         self.heartbeat_timeout = float(
             self.get_parameter("heartbeat_timeout_sec").value)
+        self.battery_url = f"{base}/robots/{self.robot_id}/battery"
+        self.battery_interval = float(
+            self.get_parameter("battery_interval_sec").value)
         self.batch_size = int(self.get_parameter("batch_size").value)
         self.flush_interval = float(self.get_parameter("flush_interval_sec").value)
         self.timeout = float(self.get_parameter("http_timeout_sec").value)
@@ -87,6 +95,15 @@ class EventGateway(Node):
             int(self.get_parameter("max_queue_rows").value))
 
         self.create_subscription(Event, "/events", self._on_event, 100)
+        self.create_subscription(
+            Float32, "/battery/voltage", self._on_battery_voltage, 10)
+        self.create_subscription(
+            Float32, "/battery/percent", self._on_battery_percent, 10)
+
+        self._battery_lock = threading.Lock()
+        self._battery_voltage = None
+        self._battery_percent = None
+        self._battery_wake = threading.Event()
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -98,6 +115,12 @@ class EventGateway(Node):
             self._heartbeat = threading.Thread(
                 target=self._heartbeat_loop, daemon=True)
             self._heartbeat.start()
+
+        self._battery = None
+        if self.battery_interval > 0:
+            self._battery = threading.Thread(
+                target=self._battery_loop, daemon=True)
+            self._battery.start()
 
         self.get_logger().info(
             f"event_gateway 시작 (대상={self.url}, 대기 {self.queue.count()}건)")
@@ -117,6 +140,22 @@ class EventGateway(Node):
             "payload": json.loads(msg.payload) if msg.payload else {},
         })
         self._wake.set()
+
+    def _on_battery_voltage(self, msg: Float32) -> None:
+        if not math.isfinite(msg.data) or not 0 <= msg.data <= 12:
+            self.get_logger().warn(f"유효하지 않은 배터리 전압 무시: {msg.data}")
+            return
+        with self._battery_lock:
+            self._battery_voltage = float(msg.data)
+        self._battery_wake.set()
+
+    def _on_battery_percent(self, msg: Float32) -> None:
+        if not math.isfinite(msg.data):
+            self.get_logger().warn(f"유효하지 않은 배터리 퍼센트 무시: {msg.data}")
+            return
+        with self._battery_lock:
+            self._battery_percent = int(round(max(0.0, min(100.0, msg.data))))
+        self._battery_wake.set()
 
     # ------------------------------------------------------------------ 전송
 
@@ -234,14 +273,63 @@ class EventGateway(Node):
 
         session.close()
 
+    # --------------------------------------------------------------- battery
+
+    def _battery_payload(self) -> dict | None:
+        with self._battery_lock:
+            voltage = self._battery_voltage
+            percent = self._battery_percent
+        if voltage is None and percent is None:
+            return None
+        return {"voltage": voltage, "battery_percent": percent}
+
+    def _battery_loop(self) -> None:
+        """첫 표본은 즉시, 이후 최신 표본을 저빈도로 전송한다.
+
+        전송 실패를 큐에 쌓지 않는다. 배터리는 최신값만 의미가 있고 다음 주기에
+        다시 보내면 되므로, 과거 표본을 몰아서 보내는 것이 오히려 화면을 속인다.
+        """
+        session = requests.Session()
+        last_sent = None
+        while not self._stop.is_set():
+            timeout = None
+            if last_sent is not None:
+                elapsed = time.monotonic() - last_sent
+                timeout = max(0.0, self.battery_interval - elapsed)
+            self._battery_wake.wait(timeout=timeout)
+            self._battery_wake.clear()
+            if self._stop.is_set():
+                break
+            if (last_sent is not None
+                    and time.monotonic() - last_sent < self.battery_interval):
+                continue
+
+            payload = self._battery_payload()
+            if payload is None:
+                continue
+            last_sent = time.monotonic()
+            try:
+                response = session.post(
+                    self.battery_url, json=payload, timeout=self.timeout)
+            except requests.RequestException as exc:
+                self.get_logger().warn(f"배터리 표본 전송 실패: {exc}")
+                continue
+            if not response.ok:
+                self.get_logger().warn(
+                    f"배터리 표본 거부: HTTP {response.status_code}")
+        session.close()
+
     # ------------------------------------------------------------------ 종료
 
     def destroy_node(self):
         self._stop.set()
         self._wake.set()
+        self._battery_wake.set()
         self._sender.join(timeout=2.0)
         if self._heartbeat is not None:
             self._heartbeat.join(timeout=2.0)
+        if self._battery is not None:
+            self._battery.join(timeout=2.0)
         self.queue.close()
         return super().destroy_node()
 

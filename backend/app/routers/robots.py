@@ -4,20 +4,21 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import arming, heartbeat
 from ..db import get_pool
-from ..schemas import RobotArmingOut, RobotOut
+from ..schemas import BatterySampleIn, RobotArmingOut, RobotOut
 
 router = APIRouter(prefix="/robots", tags=["robots"])
 
 # 의료진이 로봇을 고를 때 최소로 요구하는 배터리 잔량.
-# 로봇 내부 warn 임계값(guide_manager: 6.9V) 과 별개의 UI 문턱이다.
-# 안내가 시작되기 전이라 여유를 넉넉히 잡는다.
+# BatteryGuard 의 저전압 운영선과 같은 값이다. 서버에서도 다시 검사해 오래된
+# 화면이나 직접 API 호출로 저전압 로봇이 활성화되는 것을 막는다.
 MIN_BATTERY_PERCENT = 40
+MAX_BATTERY_AGE = timedelta(minutes=5)
 
 # 배터리는 마지막으로 저장된 표본이다. 실시간 값이 아니다.
 # 화면에 띄우는 실시간 상태는 DB 에 저장하지 않기로 했다(3~5초마다 덮어쓰는
@@ -119,7 +120,7 @@ async def arm_robot(robot_id: str) -> RobotOut:
       - 등록된 로봇이며 is_active
       - robot_type = 'mobile' (조제 스테이션은 대상 아님)
       - 진행 중 세션 없음
-      - 최신 배터리 >= MIN_BATTERY_PERCENT (표본이 아직 없으면 거부)
+      - 5분 이내 배터리 >= MIN_BATTERY_PERCENT (없거나 오래됐으면 거부)
 
     이미 armed 인 로봇을 다시 arm 하면 200 이 나가지만 arming.arm 이
     idempotent 라 armed_at 시각과 이벤트가 새로 안 생긴다.
@@ -139,12 +140,20 @@ async def arm_robot(robot_id: str) -> RobotOut:
                 raise HTTPException(
                     status_code=409,
                     detail=f"robot busy with session {row['active_session_id']}")
+            seen = heartbeat.snapshot().get(robot_id)
+            if seen is not None and seen[1]:
+                raise HTTPException(status_code=409, detail="robot is offline")
             percent = row["battery_percent"]
             if percent is None or percent < MIN_BATTERY_PERCENT:
                 raise HTTPException(
                     status_code=409,
                     detail=(f"battery {percent if percent is not None else 'unknown'}%"
                             f" below {MIN_BATTERY_PERCENT}%"))
+            recorded_at = row["battery_recorded_at"]
+            if (recorded_at is None
+                    or datetime.now(timezone.utc) - recorded_at > MAX_BATTERY_AGE):
+                raise HTTPException(
+                    status_code=409, detail="battery reading is stale")
 
             already = arming.is_armed(robot_id)
             arming.arm(robot_id)
@@ -205,4 +214,31 @@ async def post_heartbeat(robot_id: str) -> Response:
             raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
     heartbeat.touch(robot_id)
+    return Response(status_code=204)
+
+
+@router.post("/{robot_id}/battery", status_code=204)
+async def post_battery(robot_id: str, sample: BatterySampleIn) -> Response:
+    """배터리 최신 표본을 PostgreSQL 추이 로그에 저장한다.
+
+    기록 시각은 로봇 시계가 아니라 서버 수신 시각을 쓴다. 이 값은 대시보드의
+    stale 판정과 arming 검증에 사용되므로 전송 지연을 숨기지 않아야 한다.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        inserted = await conn.fetchval(
+            """
+            INSERT INTO robot_battery_log (
+                robot_id, recorded_at, voltage, battery_percent)
+            SELECT robot_id, now(), $2, $3
+            FROM robots
+            WHERE robot_id = $1 AND is_active
+            RETURNING 1
+            """,
+            robot_id,
+            sample.voltage,
+            sample.battery_percent,
+        )
+    if not inserted:
+        raise HTTPException(status_code=404, detail="unknown or inactive robot")
     return Response(status_code=204)
