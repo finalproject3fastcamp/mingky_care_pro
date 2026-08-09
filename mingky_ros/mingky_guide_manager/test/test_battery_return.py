@@ -111,3 +111,21 @@ def test_emergency_state_is_mirrored_with_recovery_event(manager):
         ('robot.resumed', {'reason': 'operator_release'}, 63),
     ]
     assert node.robot_state == GuideState.ROBOT_IDLE
+
+
+def test_dock_failure_retries_before_final_event(manager):
+    node, published = manager
+    node._battery_alarm = True
+    node._dock_attempt = 1
+
+    node._dock_failed('charging_station_1', 6, retryable=True)
+
+    assert published == []
+    assert node._dock_retry_timer is not None
+    node._cancel_dock_retry()
+
+    node._dock_attempt = node.dock_max_attempts
+    node._dock_failed('charging_station_1', 6, retryable=True)
+    assert published == [
+        ('dock.return_failed', {
+            'station_name': 'charging_station_1', 'error_code': 6}, 0)]

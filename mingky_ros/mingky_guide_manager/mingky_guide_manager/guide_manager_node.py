@@ -54,10 +54,16 @@ class GuideManager(Node):
         # 비우면 robot_id 의 숫자 접미사를 사용한다.
         # pinky-01 -> charging_station_1, pinky-02 -> charging_station_2
         self.declare_parameter('charging_waypoint', '')
+        self.declare_parameter('dock_max_attempts', 3)
+        self.declare_parameter('dock_retry_delay_sec', 5.0)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
         self.charging_waypoint = configured_dock or self._default_charging_waypoint()
+        self.dock_max_attempts = max(
+            1, int(self.get_parameter('dock_max_attempts').value))
+        self.dock_retry_delay = max(
+            0.1, float(self.get_parameter('dock_retry_delay_sec').value))
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -78,6 +84,8 @@ class GuideManager(Node):
         self._emergency_engaged = False
         self._emergency_reason = 'emergency_stop'
         self._dock_pending = False
+        self._dock_attempt = 0
+        self._dock_retry_timer = None
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -213,6 +221,7 @@ class GuideManager(Node):
         self._battery_alarm = msg.data
 
         if not msg.data:
+            self._cancel_dock_retry()
             self.events.publish(
                 'robot.battery_recovered', {'percent': max(self.percent, 0)})
             if self.robot_state == GuideState.ROBOT_BATTERY_LOW:
@@ -237,6 +246,7 @@ class GuideManager(Node):
         self.session_id = 0
         self.session_state = GuideState.SESSION_NONE
         self.patient_id = ''
+        self._dock_attempt = 0
         if self._emergency_engaged:
             self._dock_pending = True
             self.get_logger().warn('비상정지 해제 뒤 충전소 복귀를 시작합니다.')
@@ -258,6 +268,7 @@ class GuideManager(Node):
             # 진행 중인 Nav2 콜백은 EmergencyStop 이 취소한 뒤 늦게 도착할 수 있다.
             # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
             self._nav_generation += 1
+            self._cancel_dock_retry()
             self._dock_pending = self._battery_alarm
             self.robot_state = GuideState.ROBOT_PAUSED
             self.events.publish(
@@ -327,7 +338,40 @@ class GuideManager(Node):
 
     def _return_to_dock(self) -> None:
         """현재 안내 목표를 선점하고 이 로봇에 배정된 충전소로 복귀한다."""
+        if not self._battery_alarm:
+            return
+        if self._emergency_engaged:
+            self._dock_pending = True
+            return
+        self._dock_pending = False
+        self._dock_attempt += 1
+        self.get_logger().warn(
+            f'충전소 복귀 시도 {self._dock_attempt}/{self.dock_max_attempts}')
         self._send_nav_goal(self.charging_waypoint, is_dock=True, session_id=0)
+
+    def _cancel_dock_retry(self) -> None:
+        if self._dock_retry_timer is not None:
+            self._dock_retry_timer.cancel()
+            self.destroy_timer(self._dock_retry_timer)
+            self._dock_retry_timer = None
+
+    def _retry_dock(self) -> None:
+        self._cancel_dock_retry()
+        self._return_to_dock()
+
+    def _dock_failed(
+            self, waypoint_name: str, error_code: int, *, retryable: bool) -> None:
+        self.robot_state = GuideState.ROBOT_BATTERY_LOW
+        if (retryable and self._battery_alarm and not self._emergency_engaged
+                and self._dock_attempt < self.dock_max_attempts):
+            self.get_logger().warn(
+                f'{self.dock_retry_delay:.1f}초 뒤 충전소 복귀를 재시도합니다.')
+            self._dock_retry_timer = self.create_timer(
+                self.dock_retry_delay, self._retry_dock)
+            return
+        self.events.publish(
+            'dock.return_failed',
+            {'station_name': waypoint_name, 'error_code': int(error_code)})
 
     def _send_nav_goal(
             self, waypoint_name: str, *, is_dock: bool, session_id: int) -> None:
@@ -335,16 +379,12 @@ class GuideManager(Node):
         if wp is None:
             self.get_logger().error(f'알 수 없는 waypoint: {waypoint_name}')
             if is_dock:
-                self.events.publish(
-                    'dock.return_failed',
-                    {'station_name': waypoint_name, 'error_code': -2})
+                self._dock_failed(waypoint_name, -2, retryable=False)
             return
         if not self.nav.wait_for_server(timeout_sec=3.0):
             self.get_logger().error('navigate_to_pose 액션 서버가 없습니다.')
             if is_dock:
-                self.events.publish(
-                    'dock.return_failed',
-                    {'station_name': waypoint_name, 'error_code': -3})
+                self._dock_failed(waypoint_name, -3, retryable=True)
             return
 
         goal = NavigateToPose.Goal()
@@ -419,6 +459,7 @@ class GuideManager(Node):
         # action_msgs/GoalStatus.STATUS_SUCCEEDED == 4
         if status == 4:
             if is_dock:
+                self._cancel_dock_retry()
                 # 좌표 도착만으로 충전 전류가 흐른다고 단정할 수는 없다.
                 self.robot_state = GuideState.ROBOT_WAITING
                 self.events.publish(
@@ -440,10 +481,7 @@ class GuideManager(Node):
             error_code: int, message: str) -> None:
         self.get_logger().error(message)
         if is_dock:
-            self.robot_state = GuideState.ROBOT_BATTERY_LOW
-            self.events.publish(
-                'dock.return_failed',
-                {'station_name': waypoint_name, 'error_code': int(error_code)})
+            self._dock_failed(waypoint_name, error_code, retryable=True)
         else:
             self.robot_state = GuideState.ROBOT_IDLE
             self.events.publish(

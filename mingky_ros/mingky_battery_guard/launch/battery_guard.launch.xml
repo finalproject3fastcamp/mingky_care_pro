@@ -1,39 +1,26 @@
-<?xml version='1.0' ?>
+<?xml version='1.0'?>
 
+<!-- 배터리 판정 노드만 실행한다. 충전소 자동 복귀와 안전 게이트까지 필요한
+     운영 환경에서는 mingky_bringup/mingky_system.launch.xml 을 사용한다. -->
 <launch>
     <arg name="threshold_percent" default="40.0"/>
     <arg name="confirm_count" default="3"/>
     <arg name="rearm_percent" default="60.0"/>
-
-    <!-- 충전 감지: 표본 trend_samples 개 중 최근 절반이 예전 절반보다
-         trend_rise(%p) 이상 높아야 충전으로 본다. 모터 부하는 12%p 급으로
-         출렁이므로 trend_rise 를 그보다 훨씬 낮게 두면 오탐한다. -->
     <arg name="trend_samples" default="5"/>
     <arg name="trend_rise" default="2.0"/>
-
-    <!-- 충전소 좌표. 맵마다 다르므로 각자 실제 값으로 바꿔서 쓸 것. -->
-    <arg name="dock_x" default="0.0"/>
-    <arg name="dock_y" default="0.0"/>
-    <arg name="dock_yaw" default="0.0"/>
-    <arg name="dock_frame" default="map"/>
-
-    <arg name="use_nav2" default="true"/>
-    <!-- 부저는 로봇 GPIO를 쓴다. 이 노드가 로봇 위에서 돌 때만 true. -->
+    <arg name="median_samples" default="3"/>
     <arg name="use_buzzer" default="true"/>
     <arg name="buzzer_script" default="/home/pinky/ap/battery_buzzer.py"/>
     <arg name="buzzer_level" default="danger"/>
 
-    <node pkg="mingky_battery_guard" exec="battery_guard" name="battery_guard" output="screen">
+    <node pkg="mingky_battery_guard" exec="battery_guard"
+          name="battery_guard" output="screen">
         <param name="threshold_percent" value="$(var threshold_percent)"/>
         <param name="confirm_count" value="$(var confirm_count)"/>
         <param name="rearm_percent" value="$(var rearm_percent)"/>
         <param name="trend_samples" value="$(var trend_samples)"/>
         <param name="trend_rise" value="$(var trend_rise)"/>
-        <param name="dock_x" value="$(var dock_x)"/>
-        <param name="dock_y" value="$(var dock_y)"/>
-        <param name="dock_yaw" value="$(var dock_yaw)"/>
-        <param name="dock_frame" value="$(var dock_frame)"/>
-        <param name="use_nav2" value="$(var use_nav2)"/>
+        <param name="median_samples" value="$(var median_samples)"/>
         <param name="use_buzzer" value="$(var use_buzzer)"/>
         <param name="buzzer_script" value="$(var buzzer_script)"/>
         <param name="buzzer_level" value="$(var buzzer_level)"/>
