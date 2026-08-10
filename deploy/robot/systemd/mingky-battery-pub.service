@@ -1,0 +1,18 @@
+[Unit]
+Description=배터리 퍼블리셔 (주행과 무관하게 상시)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+# 배터리는 주행 스택(bringup_robot)에 묶여 있었다. 그런데 의료진이 대시보드에서
+# 로봇을 고르려면 배터리 값이 먼저 있어야 하고, 그건 주행 전 상황이다.
+# 값이 없으면 백엔드가 409 로 선택을 막아 아무것도 시작할 수 없다.
+EnvironmentFile=-/etc/environment
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run pinky_bringup battery_publisher'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=Foxglove 역터널 (클라우드 관제 서버로 아웃바운드)
+After=network-online.target fg-bridge.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+# 도메인이 아닌 오리진 IP 로 붙는다. Cloudflare 는 HTTP 만 프록시하므로 SSH 가 지나가지 못한다.
+ExecStart=/usr/bin/ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=20 -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=accept-new \
+  -o IdentitiesOnly=yes \
+  -i /home/pinky/.ssh/id_fgtunnel \
+  -R 127.0.0.1:18765:127.0.0.1:8765 \
+  fgtunnel@161.118.208.109
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
