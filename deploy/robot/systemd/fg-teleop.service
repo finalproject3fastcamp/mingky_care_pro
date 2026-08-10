@@ -1,0 +1,17 @@
+[Unit]
+Description=주행 모드 관리 + 텔레옵 속도 상한
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+EnvironmentFile=-/etc/environment
+# 로봇별 robot_id 를 여기서 읽는다. 없으면 모드 이벤트가 엉뚱한 로봇으로 기록된다.
+EnvironmentFile=/etc/mingky/robot.env
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup teleop.launch.py robot_id:=${MINGKY_ROBOT_ID}'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=밍키케어 이벤트 게이트웨이 (로봇 → 클라우드 관제)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+EnvironmentFile=-/etc/environment
+EnvironmentFile=/etc/mingky/robot.env
+ExecStart=/usr/local/bin/mingky-gateway.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
