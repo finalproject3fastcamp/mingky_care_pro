@@ -14,6 +14,7 @@ install(
     scripts/capture_waypoint.sh
     scripts/run_nav2_manual_test.sh
     scripts/run_nav2_waypoint_test.sh
+    scripts/start_guidance_test.sh
     scripts/check_waypoints.py
     scripts/run_discovery_server.sh
   DESTINATION lib/${PROJECT_NAME}

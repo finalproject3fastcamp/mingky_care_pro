@@ -24,6 +24,35 @@ Nav2 속도 출력은 `cmd_vel_safety_input`으로 연결되며, 실제 `/cmd_ve
 게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
 실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
 
+## QR 확인 후 수동 출발 테스트
+
+QR을 인식하면 Guide Manager는 세션을 `patient_confirmed` 상태로 저장하고
+관제 출발 명령을 기다립니다. 관제 시작 버튼이 연결되기 전에는 현재 세션 ID를
+확인한 뒤 테스트 명령으로 동일한 출발 신호를 보낼 수 있습니다.
+
+```bash
+ros2 topic echo --once /guide_manager/state
+ros2 run mingky_bringup start_guidance_test.sh <session_id>
+```
+
+명령의 `session_id`가 현재 확인된 세션과 같을 때만 첫 검사실 waypoint로
+주행합니다. 이미 출발한 세션, 배터리 부족·비상정지 상태, 등록되지 않은
+검사실은 거부합니다.
+
+QR 카메라와 백엔드 없이 상태머신 배관만 시험하려면 먼저 가짜 세션을 한 번
+발행할 수 있습니다.
+
+```bash
+ros2 topic pub --once /qr_reader_node/session_start \
+  mingky_interfaces/msg/SessionStart \
+  "{session_id: 9001, patient_id: test-patient, current_step_order: 1, visit_names: ['X-ray']}"
+
+ros2 run mingky_bringup start_guidance_test.sh 9001
+```
+
+두 번째 명령은 실제 Nav2 목표를 전송합니다. 실로봇에서는 Nav2 localization과
+초기 위치 설정을 마치고, 로봇 주변과 비상정지 동작을 확인한 뒤 실행하세요.
+
 ## 후방 USB 카메라
 
 Pinky에 V4L2 드라이버를 설치합니다.
