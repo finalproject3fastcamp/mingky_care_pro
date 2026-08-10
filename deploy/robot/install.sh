@@ -12,6 +12,21 @@ set -euo pipefail
 ROBOT_ID="${1:-}"
 [ -n "$ROBOT_ID" ] || { echo "사용법: sudo ./install.sh <robot-id>   예: pinky-01" >&2; exit 1; }
 
+# 역터널 포트는 로봇마다 달라야 한다. 번호에서 유도해 사람이 고를 여지를 없앤다.
+#
+# 서버의 authorized_keys 가 키별로 permitlisten 을 걸어 두므로 값이 틀리면
+# 서버가 바인딩을 거부한다. 유닛에 ExitOnForwardFailure=yes 가 있어 터널이
+# 뜨지 않고 재시작만 반복하며, 그 로봇은 접근 불가가 된다. 두 로봇이 같은
+# 포트를 쓰는 사고가 실제로 이 파일에서 나왔다.
+N="${ROBOT_ID##*-}"
+case "$N" in
+    0[1-9]|[1-9]) ;;
+    *) echo "robot-id 는 pinky-01 형식이어야 한다: $ROBOT_ID" >&2; exit 1 ;;
+esac
+N=$((10#$N))
+SSH_PORT=$((22020 + N))
+FG_PORT=$((18764 + N))
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [ "$(id -u)" -eq 0 ] || { echo "sudo 로 실행하세요." >&2; exit 1; }
 
@@ -21,10 +36,13 @@ install -d -m 755 /etc/mingky
 if [ -f /etc/mingky/robot.env ]; then
     echo "  유지: /etc/mingky/robot.env (이미 있음)"
 else
-    sed "s/^MINGKY_ROBOT_ID=.*/MINGKY_ROBOT_ID=${ROBOT_ID}/" \
+    sed -e "s/^MINGKY_ROBOT_ID=.*/MINGKY_ROBOT_ID=${ROBOT_ID}/" \
+        -e "s/^MINGKY_SSH_TUNNEL_PORT=.*/MINGKY_SSH_TUNNEL_PORT=${SSH_PORT}/" \
+        -e "s/^MINGKY_FOXGLOVE_TUNNEL_PORT=.*/MINGKY_FOXGLOVE_TUNNEL_PORT=${FG_PORT}/" \
         "$HERE/robot.env.example" > /etc/mingky/robot.env
     chmod 644 /etc/mingky/robot.env
-    echo "  생성: /etc/mingky/robot.env (MINGKY_ROBOT_ID=${ROBOT_ID})"
+    echo "  생성: /etc/mingky/robot.env"
+    echo "         MINGKY_ROBOT_ID=${ROBOT_ID}  SSH=${SSH_PORT}  Foxglove=${FG_PORT}"
 fi
 
 install -m 755 "$HERE/bin/foxglove-remote.sh" /usr/local/bin/
@@ -44,7 +62,7 @@ systemctl enable --now \
     mingky-battery-pub \
     mingky-teleop-bridge
 
-cat <<'EOF'
+cat <<EOF
 
 설치 끝. 확인:
     systemctl status mingky-ssh-tunnel mingky-gateway mingky-battery-pub
@@ -52,9 +70,16 @@ cat <<'EOF'
 아직 남은 것 — 이 스크립트가 못 하는 일:
 
   1. 터널 키
-     /home/pinky/.ssh/id_ed25519_tunnel 이 있어야 하고, 그 공개키가
-     클라우드의 ~ubuntu/.ssh/authorized_keys 에 permitlisten 과 함께
-     등록돼 있어야 한다. 키를 저장소에 둘 수 없으므로 수동이다.
+     /home/pinky/.ssh/id_fgtunnel 이 있어야 하고, 그 공개키가 클라우드의
+     ~fgtunnel/.ssh/authorized_keys 에 아래 형태로 등록돼 있어야 한다.
+     키를 저장소에 둘 수 없으므로 수동이다.
+
+     로봇마다 키를 따로 쓰고 permitlisten 으로 자기 포트만 열게 한다.
+     같은 키를 돌려쓰면 한 로봇이 남의 포트를 잡아, 죽은 로봇 자리에
+     다른 로봇이 들어앉는 오배선이 생긴다.
+
+     이 로봇이 필요한 줄:
+     restrict,port-forwarding,permitlisten="127.0.0.1:${FG_PORT}",permitlisten="127.0.0.1:${SSH_PORT}" <공개키> fgtunnel-${ROBOT_ID}
 
   2. Wi-Fi 자동 접속
      nmcli -f NAME,AUTOCONNECT,AUTOCONNECT-PRIORITY con show

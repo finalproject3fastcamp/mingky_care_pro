@@ -37,6 +37,19 @@ deploy/cloud/          관제 서버에 들어가는 것
                  :22022 → pinky2
 ```
 
+**포트는 로봇마다 달라야 한다.** `install.sh` 가 robot-id 번호에서 유도해
+`/etc/mingky/robot.env` 에 적는다. 유닛 파일에는 번호가 없다.
+
+```
+pinky-01   SSH 22021   Foxglove 18765
+pinky-02   SSH 22022   Foxglove 18766
+pinky-03   SSH 22023   Foxglove 18767
+```
+
+서버의 `authorized_keys` 가 키별로 `permitlisten` 을 걸어 두므로 값이 틀리면
+서버가 바인딩을 거부한다. 유닛에 `ExitOnForwardFailure=yes` 가 있어 터널이
+뜨지 않고 재시작만 반복하며, **그 로봇은 접근 불가가 된다.**
+
 로봇 IP 를 알 필요가 없고, 로봇이 망을 옮겨도 그대로 된다.
 
 ---

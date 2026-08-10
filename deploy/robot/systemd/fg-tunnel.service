@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pinky
+# 포트는 로봇마다 다르다. robot.env 가 정본이다.
+EnvironmentFile=/etc/mingky/robot.env
 # 도메인이 아닌 오리진 IP 로 붙는다. Cloudflare 는 HTTP 만 프록시하므로 SSH 가 지나가지 못한다.
 ExecStart=/usr/bin/ssh -N \
   -o ExitOnForwardFailure=yes \
@@ -13,7 +15,7 @@ ExecStart=/usr/bin/ssh -N \
   -o StrictHostKeyChecking=accept-new \
   -o IdentitiesOnly=yes \
   -i /home/pinky/.ssh/id_fgtunnel \
-  -R 127.0.0.1:18765:127.0.0.1:8765 \
+  -R 127.0.0.1:${MINGKY_FOXGLOVE_TUNNEL_PORT}:127.0.0.1:8765 \
   fgtunnel@161.118.208.109
 Restart=always
 RestartSec=10
