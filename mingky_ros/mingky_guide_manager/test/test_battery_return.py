@@ -97,6 +97,60 @@ def test_session_created_while_low_is_closed_immediately(manager):
     assert node.session_id == 0
 
 
+def test_confirmed_session_starts_only_with_matching_session_id(manager):
+    node, published = manager
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node.visit_waypoints['X-ray'] = 'xray_room_goal'
+    message = SessionStart(
+        session_id=71,
+        patient_id='patient-3',
+        current_step_order=1,
+        visit_names=['X-ray', '임상병리실'],
+    )
+    node._on_session_start(message)
+
+    node._on_start_guidance(String(data='70'))
+    assert node.nav.sent == []
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+
+    node._on_start_guidance(String(data='71'))
+
+    assert len(node.nav.sent) == 1
+    assert node.nav.sent[0].pose.pose.position.x == 1.0
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node.session_state == GuideState.SESSION_GUIDING
+    assert published == [
+        ('nav.goal_sent', {'visit_name': 'xray_room_goal'}, 71)]
+
+
+def test_start_guidance_rejects_unknown_visit_mapping(manager):
+    node, _ = manager
+    node.session_id = 72
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = '등록되지 않은 검사실'
+
+    node._on_start_guidance(String(data='72'))
+
+    assert node.nav.sent == []
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+
+
+def test_completed_schedule_does_not_restart_first_visit(manager):
+    node, _ = manager
+    message = SessionStart(
+        session_id=73,
+        patient_id='patient-4',
+        current_step_order=0,
+        visit_names=['X-ray'],
+    )
+
+    node._on_session_start(message)
+    node._on_start_guidance(String(data='73'))
+
+    assert node.current_visit == ''
+    assert node.nav.sent == []
+
+
 def test_emergency_state_is_mirrored_with_recovery_event(manager):
     node, published = manager
     node.session_id = 63

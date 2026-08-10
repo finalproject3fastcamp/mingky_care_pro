@@ -13,6 +13,7 @@
     - 상태 소유와 GuideState 발행
     - BatteryGuard 판정에 따른 세션 종료와 충전소 복귀
     - Nav2 NavigateToPose 액션 클라이언트, waypoint 로드
+    - QR 세션 확인 후 관제 출발 명령으로 첫 방문지 주행
     - 세션 시작/단계 완료를 토픽으로 수동 트리거 (QR·마커 노드가 붙기 전까지)
 """
 
@@ -120,6 +121,7 @@ class GuideManager(Node):
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
 
+        self.visit_waypoints = {}
         self.waypoints = self._load_waypoints(
             self.get_parameter('waypoints_file').value,
             self.get_parameter('map_name').value)
@@ -178,6 +180,12 @@ class GuideManager(Node):
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
         self.create_subscription(String, '~/start_session', self._on_start_session, 10)
         self.create_subscription(String, '~/goto', self._on_goto, 10)
+
+        # 관제 버튼이 생기기 전에는 ros2 topic pub 으로 같은 명령을 시험한다.
+        # session_id 를 함께 받아 오래된 화면의 출발 요청이 새 세션을 움직이지
+        # 못하게 한다.
+        self.create_subscription(
+            String, '~/start_guidance', self._on_start_guidance, 10)
 
         # QR 노드가 백엔드 응답을 파싱해 흘려주는 세션 개시 신호.
         # 지금은 수신·저장·로그만 한다. Nav2 자동 트리거는 아직 붙이지 않았다.
@@ -273,6 +281,7 @@ class GuideManager(Node):
         with open(path, encoding='utf-8') as f:
             data = yaml.safe_load(f) or {}
         waypoints = data.get('waypoints') or {}
+        self.visit_waypoints = data.get('visit_waypoints') or {}
 
         # 파일은 있는데 비어 있는 경우가 제일 찾기 어렵다. 노드는 정상 기동하고
         # 목표를 보낼 때마다 '알 수 없는 waypoint' 만 나온다. 기동 시에 짚는다.
@@ -281,7 +290,9 @@ class GuideManager(Node):
                 f'{path} 에 waypoint 가 없습니다. 오래된 빌드 산출물일 수 있으니 '
                 'install/ 을 지우고 다시 빌드해 보세요.')
         else:
-            self.get_logger().info(f'waypoints 로드: {path} ({len(waypoints)}개)')
+            self.get_logger().info(
+                f'waypoints 로드: {path} ({len(waypoints)}개, '
+                f'방문지 매핑 {len(self.visit_waypoints)}개)')
         return waypoints
 
     def _default_charging_waypoint(self) -> str:
@@ -400,6 +411,46 @@ class GuideManager(Node):
     def _on_goto(self, msg: String):
         self.send_goal(msg.data.strip())
 
+    def _on_start_guidance(self, msg: String) -> None:
+        """확인된 현재 세션의 첫 방문지로 출발한다."""
+        requested = msg.data.strip()
+        try:
+            requested_session_id = int(requested)
+        except ValueError:
+            self.get_logger().warn(
+                f'출발 명령의 session_id가 올바르지 않습니다: {requested!r}')
+            return
+
+        if requested_session_id <= 0 or requested_session_id != self.session_id:
+            self.get_logger().warn(
+                f'출발 명령 세션 불일치: 요청={requested_session_id}, '
+                f'현재={self.session_id}')
+            return
+        if self.session_state != GuideState.SESSION_CONFIRMED:
+            self.get_logger().warn(
+                f'환자 확인 상태에서만 출발할 수 있습니다: {self.session_state}')
+            return
+        if self._battery_alarm:
+            self.get_logger().warn('배터리 부족 상태에서는 출발할 수 없습니다.')
+            return
+        if self._emergency_engaged:
+            self.get_logger().warn('비상정지 상태에서는 출발할 수 없습니다.')
+            return
+        if not self.current_visit:
+            self.get_logger().error('현재 세션에 방문할 검사실이 없습니다.')
+            return
+
+        waypoint_name = self.visit_waypoints.get(self.current_visit)
+        if not waypoint_name:
+            self.get_logger().error(
+                f'방문지 waypoint 매핑이 없습니다: {self.current_visit!r}')
+            return
+
+        self.get_logger().info(
+            f'안내 출발 승인: session_id={self.session_id} '
+            f'{self.current_visit!r} -> {waypoint_name!r}')
+        self.send_goal(waypoint_name)
+
     def _on_session_start(self, msg: SessionStart):
         """QR 노드에서 세션 정보가 들어왔을 때. 저장만 하고 주행은 아직 트리거하지 않는다."""
         if self._battery_alarm:
@@ -412,8 +463,9 @@ class GuideManager(Node):
         self.session_id = int(msg.session_id)
         self.patient_id = str(msg.patient_id)
         self.session_visits = list(msg.visit_names)
-        # 현재 방문지는 visit_name 이지 waypoint 키가 아니다. Nav2 매핑은 후속 작업.
-        idx = max(int(msg.current_step_order) - 1, 0)
+        # 0은 백엔드가 "남은 단계 없음"을 나타내는 값이다. 0을 첫 단계로
+        # 보정하면 완료된 세션을 재스캔했을 때 첫 검사실로 다시 출발한다.
+        idx = int(msg.current_step_order) - 1
         self.current_visit = (
             self.session_visits[idx] if 0 <= idx < len(self.session_visits) else '')
         self.session_state = GuideState.SESSION_CONFIRMED
