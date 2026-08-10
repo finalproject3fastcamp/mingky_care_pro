@@ -11,9 +11,10 @@ import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
 import { getActiveSessions, getRobots } from '../lib/api'
-import { deriveCurrentDestination, deriveRobotMode, deriveRobotState } from '../lib/derivedStatus'
+import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
+import { useRobotMode } from '../lib/useRobotMode'
 import { usePolling } from '../lib/usePolling'
 import { useTeleopSocket } from '../lib/useTeleopSocket'
 import type { EventOut } from '../types/events'
@@ -52,6 +53,10 @@ export function MedicalDashboard() {
   // 조작과 위치는 폴링이 아니라 소켓이다. 방향키를 누른 뒤 3초 뒤에 움직이면
   // 조작이라 할 수 없고, 위치도 지도 위에서 끊겨 보인다.
   const teleop = useTeleopSocket(selectedRobotId)
+
+  // 모드는 대시보드의 이벤트 목록에서 찾지 않는다. 그 목록은 최근 30건이라
+  // nav.* 이 쌓이면 모드 변경이 창 밖으로 밀려 "확인 중" 으로 돌아간다.
+  const mode = useRobotMode(selectedRobotId, POLL_MS)
 
   // 선택한 로봇이 실제 목록에 있고 armed 이거나 세션이 있는 동안만 유효 선택이다.
   // 세션이 끝나거나 다른 경로로 disarmed 되면 선택을 자동으로 해제해서
@@ -189,11 +194,23 @@ export function MedicalDashboard() {
       </button>
       {/* 안내 중이든 대기 중이든 항상 보여야 한다. 급할 때 찾는 것이
           화면 상태에 따라 사라지면 안 된다. */}
-      {selectedRobotId && (() => {
-        const mode = deriveRobotMode(events.data ?? [], selectedRobotId)
-        return (
+      {selectedRobotId && (
           <div className="control-deck">
-            <RobotModeControl robotId={selectedRobotId} mode={mode} />
+            {/* 끊김은 조작·정지가 안 닿는다는 뜻이라 화면 위쪽에 크게 알린다.
+                패널마다 흩어 놓으면 어느 것이 진짜 상태인지 알기 어렵다. */}
+            {!teleop.robotConnected && (
+              <p className="control-deck__offline" role="alert">
+                로봇 연결 끊김 — 조작과 비상정지가 전달되지 않습니다.
+                {teleop.connected
+                  ? ' 관제 서버는 정상이며 로봇 쪽 브리지를 확인하세요.'
+                  : ' 관제 서버와의 연결도 끊겨 있습니다.'}
+              </p>
+            )}
+            <RobotModeControl
+              robotId={selectedRobotId}
+              mode={mode}
+              robotConnected={teleop.robotConnected}
+            />
             <RobotMap
               pose={teleop.pose}
               live={teleop.robotConnected}
@@ -214,8 +231,7 @@ export function MedicalDashboard() {
               }
             />
           </div>
-        )
-      })()}
+      )}
       {activeSession ? (
         // 환자가 확인된 뒤로는 카메라를 보여주지 않는다. QR 을 대는 순간을
         // 안내하려고 띄우는 화면이라 그 순간이 지나면 쓸모가 없고, 로봇도

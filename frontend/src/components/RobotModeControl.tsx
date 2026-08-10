@@ -26,11 +26,14 @@ interface Props {
   robotId: string
   /** 이벤트에서 파생한 실제 모드. 아직 모르면 null. */
   mode: RobotMode | null
-  /** 명령 실패를 의료진에게 알릴 때 쓴다. */
-  onError?: (message: string) => void
+  /** 로봇 브리지 연결 여부. 끊겨 있으면 조작·정지가 닿지 않는다. */
+  robotConnected?: boolean
 }
 
-export function RobotModeControl({ robotId, mode, onError }: Props) {
+export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
+  // 요청이 실패하면 화면에 남긴다. 특히 비상정지는 실패를 모르면
+  // 눌렀으니 섰겠거니 하고 다음 행동을 한다.
+  const [error, setError] = useState<string | null>(null)
   const [requested, setRequested] = useState<RobotMode | null>(null)
   const [sending, setSending] = useState(false)
 
@@ -42,15 +45,22 @@ export function RobotModeControl({ robotId, mode, onError }: Props) {
   // 로봇을 바꾸면 이전 로봇에 건 요청 표시가 남으면 안 된다.
   useEffect(() => {
     setRequested(null)
+    setError(null)
   }, [robotId])
 
   async function request(next: RobotMode) {
     setSending(true)
+    setError(null)
     try {
       await sendOrder(robotId, 'set_mode', next)
       setRequested(next)
     } catch {
-      onError?.(`${MODE_LABEL[next]} 전환 요청을 보내지 못했습니다.`)
+      setRequested(null)
+      setError(
+        next === 'estop'
+          ? '비상정지 요청을 보내지 못했습니다. 로봇이 계속 움직일 수 있습니다.'
+          : `${MODE_LABEL[next]} 전환 요청을 보내지 못했습니다.`,
+      )
     } finally {
       setSending(false)
     }
@@ -66,6 +76,19 @@ export function RobotModeControl({ robotId, mode, onError }: Props) {
           {mode ? MODE_LABEL[mode] : '확인 중'}
         </strong>
       </header>
+
+      {error !== null && (
+        <p className="mode-control__error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {robotConnected === false && (
+        <p className="mode-control__offline" role="status">
+          로봇이 관제에 연결되어 있지 않습니다. 전환 요청이 전달되지 않을 수
+          있습니다.
+        </p>
+      )}
 
       {requested !== null && (
         <p className="mode-control__pending" role="status">

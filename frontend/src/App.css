@@ -1079,6 +1079,7 @@
   display: grid;
   grid-template-columns: minmax(320px, 1fr) 280px;
   grid-template-areas:
+    'offline offline'
     'map mode'
     'map pad';
   gap: 14px;
@@ -1094,7 +1095,7 @@
 @media (max-width: 900px) {
   .control-deck {
     grid-template-columns: 1fr;
-    grid-template-areas: 'mode' 'map' 'pad';
+    grid-template-areas: 'offline' 'mode' 'map' 'pad';
   }
 }
 
@@ -1195,3 +1196,35 @@
   color: var(--warning);
 }
 
+
+/* 모드 요청 실패·연결 없음 — 눌렀는데 안 됐다는 사실이 화면에 남아야 한다.
+   특히 비상정지는 실패를 모르면 섰겠거니 하고 다음 행동을 한다. */
+.mode-control__error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.mode-control__offline {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--warning);
+}
+
+/* 로봇 연결 끊김 — 조작과 비상정지가 안 닿는 상태다. 지도·모드·패드
+   어디를 봐도 이유를 알 수 있게 데크 맨 위에 걸쳐 놓는다. */
+.control-deck__offline {
+  grid-area: offline;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
