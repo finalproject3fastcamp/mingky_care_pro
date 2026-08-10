@@ -13,6 +13,7 @@
   <exec_depend>mingky_battery_guard</exec_depend>
   <exec_depend>mingky_event_gateway</exec_depend>
   <exec_depend>mingky_qr_reader</exec_depend>
+  <exec_depend>mingky_teleop</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>pinky_navigation</exec_depend>
   <exec_depend>pinky_bringup</exec_depend>

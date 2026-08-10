@@ -4,8 +4,10 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 
 ## 운영 통합 실행
 
-실제 로봇 베이스, Nav2, 배터리 감시, 비상정지 안전 게이트, Guide Manager,
-이벤트 게이트웨이를 한 번에 실행합니다.
+실제 로봇 베이스, Nav2, 속도 명령 중재기, 배터리 감시, 비상정지 안전 게이트,
+Guide Manager를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
+조작 bridge·모드 관리자·속도 제한기는 로봇 설치 시 등록한 systemd 상시
+서비스를 사용합니다.
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \
@@ -21,9 +23,11 @@ Reader는 인식 후 백엔드에서 받은 세션을 Guide Manager로 전달하
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
 `charging_waypoint:=charging_station_1`을 전달합니다.
 
-로봇 베이스가 다른 장치에서 이미 실행 중이면 `start_robot_base:=false`, 백엔드
-없이 주행만 시험하면 `start_event_gateway:=false`를 사용합니다. 다른 맵을 쓸
-때는 같은 맵에 대응하는 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
+로봇 베이스가 다른 장치에서 이미 실행 중이면 `start_robot_base:=false`를
+사용합니다. `start_event_gateway` 기본값은 `false`라 운영 로봇의
+`mingky-gateway.service`와 중복되지 않습니다. systemd가 없는 개발 장치에서만
+`start_event_gateway:=true`로 실행합니다. 다른 맵을 쓸 때는 같은 맵에 대응하는
+`map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
 
 카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
 카메라로 QR을 읽을 때는 소스만 바꿉니다.
@@ -33,9 +37,14 @@ ros2 launch mingky_bringup mingky_system.launch.xml start_qr_reader:=false
 ros2 launch mingky_bringup mingky_system.launch.xml qr_source:=usb
 ```
 
-Nav2 속도 출력은 `cmd_vel_safety_input`으로 연결되며, 실제 `/cmd_vel`은 안전
+Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`에서
+중재된 뒤 `cmd_vel_safety_input`으로 연결됩니다. 실제 `/cmd_vel`은 안전
 게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
 실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
+
+원격 조작의 `teleop_bridge`는 `mingky-teleop-bridge.service`,
+`mode_manager`와 `teleop_limiter`는 `fg-teleop.service`가 상시 실행합니다.
+통합 launch는 이 노드를 중복 실행하지 않고 `twist_mux`만 소유합니다.
 
 ## QR 안내 상태머신 테스트
 
