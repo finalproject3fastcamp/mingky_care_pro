@@ -11,6 +11,9 @@ ROBOT_LAUNCH_FILE = (
     Path(__file__).resolve().parents[3]
     / 'pinky' / 'pinky_bringup' / 'launch' / 'bringup_robot.launch.xml'
 )
+ROBOT_INSTALL_SCRIPT = (
+    Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'install.sh'
+)
 
 
 def _root():
@@ -92,12 +95,7 @@ def test_nav2_and_teleop_are_arbitrated_before_safety_gate() -> None:
         for item in root.findall('include')
     }
     assert 'twist_mux.launch.py' in includes
-    assert includes['teleop.launch.py'].get('if') == '$(var start_teleop_control)'
-    teleop_args = {
-        item.get('name'): item.get('value')
-        for item in includes['teleop.launch.py'].findall('arg')
-    }
-    assert teleop_args['robot_id'] == '$(var robot_id)'
+    assert 'teleop.launch.py' not in includes
 
     emergency_stop = next(
         item for item in root.findall('node')
@@ -109,3 +107,12 @@ def test_nav2_and_teleop_are_arbitrated_before_safety_gate() -> None:
     }
     assert params['input_topic'] == 'cmd_vel_safety_input'
     assert params['output_topic'] == 'cmd_vel'
+
+
+def test_systemd_starts_the_teleop_control_nodes() -> None:
+    install_script = ROBOT_INSTALL_SCRIPT.read_text(encoding='utf-8')
+
+    enable_block = install_script.split('systemctl enable --now', 1)[1].split(
+        'cat <<EOF', 1)[0]
+    assert 'mingky-teleop-bridge' in enable_block
+    assert 'fg-teleop' in enable_block

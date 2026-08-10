@@ -6,7 +6,8 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 
 실제 로봇 베이스, Nav2, 속도 명령 중재기, 배터리 감시, 비상정지 안전 게이트,
 Guide Manager를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
-조작 bridge는 로봇 설치 시 등록한 systemd 상시 서비스를 사용합니다.
+조작 bridge·모드 관리자·속도 제한기는 로봇 설치 시 등록한 systemd 상시
+서비스를 사용합니다.
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \
@@ -40,6 +41,10 @@ Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`�
 중재된 뒤 `cmd_vel_safety_input`으로 연결됩니다. 실제 `/cmd_vel`은 안전
 게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
 실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
+
+원격 조작의 `teleop_bridge`는 `mingky-teleop-bridge.service`,
+`mode_manager`와 `teleop_limiter`는 `fg-teleop.service`가 상시 실행합니다.
+통합 launch는 이 노드를 중복 실행하지 않고 `twist_mux`만 소유합니다.
 
 ## QR 안내 상태머신 테스트
 

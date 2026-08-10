@@ -19,7 +19,6 @@
     <!-- 로봇 설치 시 gateway와 teleop bridge는 systemd 상시 서비스다. gateway를
          여기서도 띄우면 heartbeat·명령 폴링이 중복되므로 기본은 끈다. -->
     <arg name="start_event_gateway" default="false"/>
-    <arg name="start_teleop_control" default="true"/>
     <arg name="use_buzzer" default="true"/>
     <arg name="use_led" default="true"/>
 
@@ -37,15 +36,9 @@
         <arg name="cmd_vel_output" value="cmd_vel_smoothed"/>
     </include>
 
-    <!-- 자동주행과 수동조작 중 하나만 안전 게이트로 전달한다. -->
+    <!-- 자동주행과 수동조작 중 하나만 안전 게이트로 전달한다. 원격 조작의
+         mode_manager와 teleop_limiter는 fg-teleop.service가 상시 실행한다. -->
     <include file="$(find-pkg-share mingky_bringup)/launch/twist_mux.launch.py"/>
-
-    <!-- systemd teleop bridge가 받은 원격 명령에 로봇 쪽 모드와 속도 상한을
-         적용한 뒤 twist_mux의 고우선순위 입력으로 보낸다. -->
-    <include file="$(find-pkg-share mingky_bringup)/launch/teleop.launch.py"
-             if="$(var start_teleop_control)">
-        <arg name="robot_id" value="$(var robot_id)"/>
-    </include>
 
     <!-- 환자 카드 인식은 안내 세션의 기본 입력이다. 카메라가 없는 개발 PC나
          Nav2 단독 시험에서는 start_qr_reader:=false 로 끈다. -->

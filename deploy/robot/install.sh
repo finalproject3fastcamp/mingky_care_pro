@@ -54,18 +54,20 @@ for unit in "$HERE"/systemd/*.service; do
 done
 systemctl daemon-reload
 
-# 터널·게이트웨이·배터리는 항상 떠 있어야 한다.
-# fg-* (Foxglove) 는 관측용이라 필요할 때만 켠다.
+# 접속·관제·배터리와 원격 조작의 수신·모드·속도 상한은 항상 떠 있어야 한다.
+# fg-bridge와 fg-tunnel만 Foxglove 관측용이라 필요할 때 켠다.
 systemctl enable --now \
     mingky-ssh-tunnel \
     mingky-gateway \
     mingky-battery-pub \
-    mingky-teleop-bridge
+    mingky-teleop-bridge \
+    fg-teleop
 
 cat <<EOF
 
 설치 끝. 확인:
-    systemctl status mingky-ssh-tunnel mingky-gateway mingky-battery-pub
+    systemctl status mingky-ssh-tunnel mingky-gateway mingky-battery-pub \
+        mingky-teleop-bridge fg-teleop
 
 아직 남은 것 — 이 스크립트가 못 하는 일:
 

@@ -69,7 +69,8 @@ sudo ./install.sh pinky-01        # 2호기는 pinky-02
 | `mingky-gateway` | 이벤트·heartbeat 상향, 명령 하향 |
 | `mingky-battery-pub` | 배터리 발행 |
 | `mingky-teleop-bridge` | 대시보드 실시간 조작·위치 |
-| `fg-bridge` `fg-tunnel` `fg-teleop` | Foxglove 관측 (필요할 때만) |
+| `fg-bridge` `fg-tunnel` | Foxglove 관측 (필요할 때만) |
+| `fg-teleop` | 주행 모드 관리·원격 조작 속도 상한 (상시) |
 
 **`mingky-battery-pub` 를 따로 둔 이유가 있다.** 배터리 퍼블리셔는 원래
 `bringup_robot.launch.xml` 안에 있어서 주행 스택을 띄워야만 돌았다. 그런데
