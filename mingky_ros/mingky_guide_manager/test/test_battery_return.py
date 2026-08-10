@@ -25,7 +25,7 @@ class FakeNav:
     def wait_for_server(self, timeout_sec):
         return True
 
-    def send_goal_async(self, goal):
+    def send_goal_async(self, goal, feedback_callback=None):
         self.sent.append(goal)
         return PendingFuture()
 
@@ -129,3 +129,51 @@ def test_dock_failure_retries_before_final_event(manager):
     assert published == [
         ('dock.return_failed', {
             'station_name': 'charging_station_1', 'error_code': 6}, 0)]
+
+
+def test_default_navigation_keeps_nav2_default_behavior_tree(manager):
+    node, _ = manager
+    node.waypoints['target'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+
+    node.send_goal('target')
+
+    assert node.nav.sent[-1].behavior_tree == ''
+
+
+def test_adaptive_smac_failure_waits_and_keeps_original_goal():
+    node = GuideManager(parameter_overrides=[
+        Parameter('robot_id', value='pinky-01'),
+        Parameter('recovery_mode', value='adaptive'),
+        Parameter('planner_mode', value='smac2d'),
+    ])
+    node.nav = FakeNav()
+    node.waypoints['target'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    published = []
+    node.events.publish = lambda code, payload=None, session_id=0, level=None: (
+        published.append((code, payload or {}, session_id)))
+    try:
+        node.send_goal('target')
+        first_generation = node._nav_generation
+
+        assert node.nav.sent[-1].behavior_tree.endswith(
+            'navigate_no_recovery_smac2d.xml')
+
+        aborted = SimpleNamespace(result=lambda: SimpleNamespace(status=6))
+        node._on_goal_result(aborted, first_generation, 'target', False, 0)
+
+        assert len(node.nav.sent) == 1
+        assert node._adaptive_retry_timer is not None
+        assert node.robot_state == GuideState.ROBOT_WAITING
+        assert not any(code == 'nav.goal_aborted' for code, _, _ in published)
+
+        retry_generation = node._nav_generation
+        node._retry_adaptive_goal(
+            retry_generation, 'target', 0, 1, {'forward': 1})
+
+        assert len(node.nav.sent) == 2
+        assert node.nav.sent[-1].behavior_tree.endswith(
+            'navigate_no_recovery_smac2d.xml')
+        assert node._adaptive_retry_timer is None
+    finally:
+        node._cancel_adaptive_retry()
+        node.destroy_node()
