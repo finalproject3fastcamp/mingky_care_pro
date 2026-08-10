@@ -5,7 +5,7 @@
 동작한다. 설계 근거는 app/orders.py 주석 참고.
 """
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from .. import orders
 from ..db import get_pool
@@ -36,8 +36,25 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
 
 
 @router.get("/{robot_id}/orders/next", response_model=OrderOut | None)
-async def next_order(robot_id: str) -> OrderOut | None:
-    """로봇이 주기적으로 물어본다. 없으면 null.
+async def next_order(
+    robot_id: str,
+    wait: float = Query(
+        0.0, ge=0.0, le=50.0,
+        description="명령이 없을 때 최대 몇 초까지 응답을 붙들고 기다릴지"),
+) -> OrderOut | None:
+    """로봇이 물어본다. 없으면 null.
+
+    wait 를 주면 **롱폴링**이다. 명령이 없어도 바로 null 을 주지 않고 그
+    시간까지 응답을 붙들고 있다가, 명령이 걸리는 순간 즉시 돌려준다.
+    로봇이 3초마다 다시 묻는 대신 한 번 열어두고 기다리므로 명령이 걸리고
+    로봇이 받기까지의 평균 1.5초가 사라진다.
+
+    기본값이 0 인 것은 이전 로봇과 호환되기 위해서다. wait 를 안 보내는
+    게이트웨이는 예전처럼 즉시 응답을 받는다.
+
+    상한이 50초인 것은 중간 프록시 때문이다. nginx 기본 proxy_read_timeout
+    이 60초라 그보다 짧아야 프록시가 먼저 끊지 않는다. Cloudflare 를 거치는
+    경로는 100초가 상한이므로 이 값이면 양쪽 다 안전하다.
 
     **꺼내 보기만 하고 지우지 않는다.** 응답이 무선에서 유실되면 로봇은
     못 받았는데 서버는 보냈다고 믿게 되고, 명령이 증발한다. 지우는 것은
@@ -47,7 +64,9 @@ async def next_order(robot_id: str) -> OrderOut | None:
     때리면 폴링 비용이 그대로 DB 부하가 된다. 등록되지 않은 robot_id 는
     애초에 명령이 걸릴 수 없으므로 항상 null 이 나간다.
     """
-    return orders.peek(robot_id)
+    if wait <= 0:
+        return orders.peek(robot_id)
+    return await orders.wait_next(robot_id, wait)
 
 
 @router.post("/{robot_id}/orders/{order_id}/ack", status_code=204)

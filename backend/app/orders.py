@@ -26,6 +26,7 @@ heartbeat.py 와 같다. 워커나 레플리카가 2개 이상이면 명령이 �
 늘려야 하면 이 모듈의 저장소를 PostgreSQL 로 옮길 것.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -54,6 +55,17 @@ _pending: dict[str, OrderOut] = {}
 # 명시적 판단이므로 덮어쓰는 것이 맞다.
 _safety: dict[str, OrderOut] = {}
 
+# robot_id → 그 로봇의 명령을 기다리고 있는 대기자들.
+#
+# 롱폴링용이다. 로봇이 3초마다 물어보면 명령이 걸린 직후에도 평균 1.5초를
+# 기다린다. 실측으로 왕복이 200ms 인데 대기가 1500ms 라, 늦는 원인의 대부분이
+# 폴링 주기였다. 명령이 걸리는 순간 깨우면 그 1500ms 가 사라진다.
+#
+# 로봇당 대기자가 여럿일 수 있다(재접속 직후 이전 요청이 아직 안 끝난 경우).
+# 그래서 Event 하나를 공유하지 않고 대기자마다 따로 만든다 — 공유하면 늦게
+# 온 쪽이 clear() 해서 먼저 기다리던 쪽이 신호를 놓친다.
+_waiters: dict[str, set[asyncio.Event]] = {}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -80,7 +92,44 @@ def put(robot_id: str, command: str, argument: str) -> OrderOut:
         created_at=_now(),
     )
     slot[robot_id] = order
+    _wake(robot_id)
     return order
+
+
+def _wake(robot_id: str) -> None:
+    """이 로봇을 기다리던 롱폴링 요청을 전부 깨운다."""
+    for event in _waiters.pop(robot_id, ()):
+        event.set()
+
+
+async def wait_next(robot_id: str, timeout: float) -> OrderOut | None:
+    """명령이 생길 때까지 기다렸다 돌려준다. timeout 안에 없으면 None.
+
+    peek 과 달리 **응답을 붙들고 있는다.** 로봇은 이 요청 하나를 열어둔 채
+    기다리다 명령이 걸리면 즉시 받는다. 왕복이 아니라 편도라 폴링보다
+    빠르다.
+
+    peek 과 등록 사이에 await 가 없다. 같은 이벤트 루프에서 도는 put 이
+    그 틈에 끼어들 수 없으므로, 명령이 걸렸는데 아무도 못 깨우는 경우는
+    생기지 않는다.
+    """
+    order = peek(robot_id)
+    if order is not None:
+        return order
+
+    event = asyncio.Event()
+    _waiters.setdefault(robot_id, set()).add(event)
+    try:
+        await asyncio.wait_for(event.wait(), timeout)
+    except TimeoutError:
+        return None
+    finally:
+        waiting = _waiters.get(robot_id)
+        if waiting is not None:
+            waiting.discard(event)
+            if not waiting:
+                _waiters.pop(robot_id, None)
+    return peek(robot_id)
 
 
 def peek(robot_id: str) -> OrderOut | None:
