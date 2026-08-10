@@ -21,6 +21,7 @@ setup(
     maintainer_email='mingky-care@example.com',
     description='QR reader package for the Mingky Care project.',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'qr_reader_node = mingky_qr_reader.qr_reader_node:main',

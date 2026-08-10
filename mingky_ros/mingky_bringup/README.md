@@ -37,7 +37,7 @@ Nav2 속도 출력은 `cmd_vel_safety_input`으로 연결되며, 실제 `/cmd_ve
 게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
 실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
 
-## QR 확인 후 수동 출발 테스트
+## QR 안내 상태머신 테스트
 
 QR을 인식하면 Guide Manager는 세션을 `patient_confirmed` 상태로 저장하고
 관제 출발 명령을 기다립니다. 관제 시작 버튼이 연결되기 전에는 현재 세션 ID를
@@ -52,8 +52,21 @@ ros2 run mingky_bringup start_guidance_test.sh <session_id>
 주행합니다. 이미 출발한 세션, 배터리 부족·비상정지 상태, 등록되지 않은
 검사실은 거부합니다.
 
-QR 카메라와 백엔드 없이 상태머신 배관만 시험하려면 먼저 가짜 세션을 한 번
-발행할 수 있습니다.
+출발 후에는 다음 순서를 자동으로 반복합니다.
+
+1. 현재 검사실의 `goal` waypoint로 이동
+2. 임상 도착을 기록하고 같은 검사실의 `waiting` waypoint로 이동
+3. `in_room + waiting`에서 동일 환자 QR을 기다림
+4. QR을 다시 읽으면 현재 단계를 완료하고 다음 검사실로 출발
+5. 마지막 검사실이면 세션을 `completed`로 종료
+
+처음 QR은 관제에서 활성화(arming)한 로봇만 인식합니다. 검사 완료
+QR은 활성 세션의 waiting 상태에서만 스캔 창이 자동으로 열리므로
+별도 arming이 필요하지 않습니다. 다른 환자·세션 QR은 거부합니다.
+
+QR 카메라와 백엔드 없이 첫 출발 배관만 시험하려면 먼저 가짜 세션을 한 번
+발행할 수 있습니다. 완료 QR 반복 흐름은 백엔드의 활성 세션 응답까지
+포함하므로 통합 환경에서 테스트합니다.
 
 ```bash
 ros2 topic pub --once /qr_reader_node/session_start \

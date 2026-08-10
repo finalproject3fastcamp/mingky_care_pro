@@ -12,8 +12,11 @@ import requests
 from pyzbar import pyzbar
 from pyzbar.pyzbar import ZBarSymbol
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from mingky_interfaces.msg import SessionStart
+from mingky_interfaces.msg import GuideState, SessionStart
+
+from .scan_policy import completion_scan_enabled
 
 
 @dataclass
@@ -206,7 +209,16 @@ class QrReaderNode(Node):
         # arming 상태. 백엔드 폴링 결과의 캐시다.
         # 기동 직후는 disarmed 로 시작해, 첫 폴링이 armed 를 확인해야 스캔이 켜진다.
         self._armed = False
+        self._completion_scan_enabled = False
         self._arming_fails = 0
+
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.create_subscription(
+            GuideState, '/guide_manager/state', self._on_guide_state, state_qos)
 
         period = 1.0 / max(fps, 0.1)
         self._timer = self.create_timer(period, self._tick)
@@ -282,11 +294,9 @@ class QrReaderNode(Node):
         return frame
 
     def _tick(self) -> None:
-        # armed 가 아니면 캡처조차 하지 않는다. 미리보기가 필요한 건 "QR 을
-        # 대주세요" 를 안내하는 순간뿐이고, 그 순간은 곧 armed 인 순간이다.
-        # 스캔이 끝나면 백엔드가 arming 을 소비하므로 여기서 자동으로 멎는다.
-        # 계속 흘리면 CPU 와 무선 대역폭만 먹는다.
-        if not self._armed:
+        # 최초 환자 확인은 관제 arming, 검사 완료는 Guide Manager의 waiting
+        # 상태가 스캔 창을 연다. 그 밖에는 캡처조차 하지 않는다.
+        if not (self._armed or self._completion_scan_enabled):
             return
 
         frame = self._read_frame()
@@ -349,6 +359,20 @@ class QrReaderNode(Node):
             else:
                 self._disarm()
 
+    def _on_guide_state(self, msg: GuideState) -> None:
+        enabled = completion_scan_enabled(msg, self.robot_id)
+        if enabled == self._completion_scan_enabled:
+            return
+        self.get_logger().info(
+            f'검사 완료 QR 스캔 창: {self._completion_scan_enabled} → {enabled}')
+        self._completion_scan_enabled = enabled
+        if enabled:
+            # 이전(최초 확인 또는 직전 검사실)에서 읽은 같은
+            # 환자 QR이라도 새 waiting 단계에서는 즉시 받아야 한다.
+            self._last = None
+        if not enabled and not self._armed and self._preview is not None:
+            self._preview.clear()
+
     def _disarm(self) -> None:
         """스캔을 끄고 미리보기에 남은 프레임을 버린다.
 
@@ -356,7 +380,7 @@ class QrReaderNode(Node):
         해야 해서 한곳에 모은다.
         """
         self._armed = False
-        if self._preview is not None:
+        if not self._completion_scan_enabled and self._preview is not None:
             self._preview.clear()
 
     def _is_debounced(self, value: str) -> bool:

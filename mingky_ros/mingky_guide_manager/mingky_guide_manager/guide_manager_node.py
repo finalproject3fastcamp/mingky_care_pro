@@ -131,6 +131,7 @@ class GuideManager(Node):
         self.session_state = GuideState.SESSION_NONE
         self.session_id = 0
         self.patient_id = ''
+        self.current_step_order = 0
         self.current_visit = ''
         self.voltage = float('nan')
         self.percent = -1
@@ -187,8 +188,9 @@ class GuideManager(Node):
         self.create_subscription(
             String, '~/start_guidance', self._on_start_guidance, 10)
 
-        # QR 노드가 백엔드 응답을 파싱해 흘려주는 세션 개시 신호.
-        # 지금은 수신·저장·로그만 한다. Nav2 자동 트리거는 아직 붙이지 않았다.
+        # QR 노드가 백엔드 응답을 파싱해 흘려주는 세션 신호.
+        # 최초 QR은 관제 출발을 기다리고, waiting spot에서 받은
+        # 같은 세션 QR은 현재 검사를 완료하고 다음 안내를 시작한다.
         # session_start 자체는 이벤트가 아니라 로봇 내부 배관 신호라 events 로는 쏘지 않는다.
         # 상응하는 session.started 는 백엔드가 POST /qr/scan 안에서 이미 반영한 뒤라 중복이다.
         self.session_visits: list[str] = []
@@ -352,6 +354,8 @@ class GuideManager(Node):
         self.session_id = 0
         self.session_state = GuideState.SESSION_NONE
         self.patient_id = ''
+        self.current_step_order = 0
+        self.current_visit = ''
         self._dock_attempt = 0
         if self._emergency_engaged:
             self._dock_pending = True
@@ -452,7 +456,7 @@ class GuideManager(Node):
         self.send_goal(waypoint_name)
 
     def _on_session_start(self, msg: SessionStart):
-        """QR 노드에서 세션 정보가 들어왔을 때. 저장만 하고 주행은 아직 트리거하지 않는다."""
+        """최초 QR은 세션을 확인하고, 검사실 재스캔은 현재 단계를 완료한다."""
         if self._battery_alarm:
             # QR API가 이미 DB 세션을 만들었으므로 무시만 하면 활성 세션이 남는다.
             self.events.publish(
@@ -460,20 +464,101 @@ class GuideManager(Node):
             self.get_logger().warn(
                 f'배터리 부족으로 새 세션 {msg.session_id} 을 즉시 종료합니다.')
             return
-        self.session_id = int(msg.session_id)
-        self.patient_id = str(msg.patient_id)
+
+        incoming_session_id = int(msg.session_id)
+        incoming_patient_id = str(msg.patient_id)
+        if incoming_session_id <= 0 or not incoming_patient_id:
+            self.get_logger().error(
+                f'유효하지 않은 session_start: session_id={incoming_session_id} '
+                f'patient_id={incoming_patient_id!r}')
+            return
+
+        active_states = (
+            GuideState.SESSION_CONFIRMED,
+            GuideState.SESSION_GUIDING,
+            GuideState.SESSION_ARRIVED,
+            GuideState.SESSION_IN_ROOM,
+        )
+        if self.session_id > 0 and self.session_state in active_states:
+            if (incoming_session_id != self.session_id
+                    or incoming_patient_id != self.patient_id):
+                self.get_logger().error(
+                    '활성 안내와 다른 QR 세션을 거부합니다: '
+                    f'현재={self.session_id}/{self.patient_id}, '
+                    f'요청={incoming_session_id}/{incoming_patient_id}')
+                return
+            if self.session_state == GuideState.SESSION_IN_ROOM:
+                self._complete_current_step_from_qr()
+            else:
+                self.get_logger().info(
+                    f'진행 중 세션의 중복 QR 무시: session_id={self.session_id} '
+                    f'state={self.session_state}')
+            return
+
+        self.session_id = incoming_session_id
+        self.patient_id = incoming_patient_id
         self.session_visits = list(msg.visit_names)
         # 0은 백엔드가 "남은 단계 없음"을 나타내는 값이다. 0을 첫 단계로
         # 보정하면 완료된 세션을 재스캔했을 때 첫 검사실로 다시 출발한다.
-        idx = int(msg.current_step_order) - 1
+        self.current_step_order = int(msg.current_step_order)
+        idx = self.current_step_order - 1
         self.current_visit = (
             self.session_visits[idx] if 0 <= idx < len(self.session_visits) else '')
-        self.session_state = GuideState.SESSION_CONFIRMED
+        self.session_state = (
+            GuideState.SESSION_CONFIRMED if self.current_visit
+            else GuideState.SESSION_COMPLETED)
         self.get_logger().info(
             f'session_start 수신: session_id={self.session_id} '
             f'patient={self.patient_id} step={msg.current_step_order}/'
             f'{len(self.session_visits)} current_visit={self.current_visit!r} '
             f'visits={self.session_visits}')
+
+    def _complete_current_step_from_qr(self) -> None:
+        """waiting spot에서 같은 환자 QR을 현재 검사 완료로 해석한다."""
+        if self.robot_state != GuideState.ROBOT_WAITING:
+            self.get_logger().warn(
+                f'로봇이 대기 중이 아니어서 완료 QR을 무시합니다: {self.robot_state}')
+            return
+        if self._emergency_engaged or self._battery_alarm:
+            self.get_logger().warn('안전 정지 상태에서는 다음 검사실로 출발하지 않습니다.')
+            return
+        if not 1 <= self.current_step_order <= len(self.session_visits):
+            self.get_logger().error(
+                f'현재 검사 순서가 올바르지 않습니다: {self.current_step_order}')
+            return
+
+        completed_order = self.current_step_order
+        self.events.publish(
+            'session.step_completed',
+            {'step_order': completed_order, 'source': 'qr'},
+            self.session_id,
+        )
+
+        if completed_order >= len(self.session_visits):
+            self.current_step_order = 0
+            self.session_state = GuideState.SESSION_COMPLETED
+            self.robot_state = GuideState.ROBOT_IDLE
+            self.events.publish(
+                'session.ended', {'end_reason': 'completed'}, self.session_id)
+            self.get_logger().info(f'안내 세션 완료: session_id={self.session_id}')
+            return
+
+        self.current_step_order = completed_order + 1
+        self.current_visit = self.session_visits[self.current_step_order - 1]
+        waypoint_name = self._visit_waypoint(self.current_visit, 'goal')
+        if not waypoint_name:
+            # 완료 사실은 되돌리지 않는다. 운영자가 매핑을 고친 뒤 명시적으로
+            # 재개할 수 있도록 다음 환자 확인 상태에서 멈춘다.
+            self.session_state = GuideState.SESSION_CONFIRMED
+            self.robot_state = GuideState.ROBOT_WAITING
+            self.get_logger().error(
+                f'다음 검사실 goal 매핑이 없어 대기합니다: {self.current_visit!r}')
+            return
+
+        self.get_logger().info(
+            f'검사 완료 QR 확인: step={completed_order}; '
+            f'다음 검사실={self.current_visit!r}')
+        self.send_goal(waypoint_name)
 
     # ------------------------------------------------------------------ 주행
 

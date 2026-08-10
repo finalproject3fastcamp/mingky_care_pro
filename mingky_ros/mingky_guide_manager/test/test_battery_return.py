@@ -213,6 +213,116 @@ def test_completed_schedule_does_not_restart_first_visit(manager):
     assert node.nav.sent == []
 
 
+def test_waiting_qr_completes_step_and_starts_next_visit(manager):
+    node, published = manager
+    node.session_id = 81
+    node.patient_id = 'patient-5'
+    node.session_visits = ['X-ray', 'CT']
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_IN_ROOM
+    node.robot_state = GuideState.ROBOT_WAITING
+    node.visit_waypoints['CT'] = {
+        'goal': 'ct_room_goal',
+        'waiting': 'ct_room_waiting',
+    }
+    node.waypoints['ct_room_goal'] = {'x': 5.0, 'y': 6.0, 'yaw': 0.0}
+
+    node._on_session_start(SessionStart(
+        session_id=81,
+        patient_id='patient-5',
+        current_step_order=1,
+        visit_names=['X-ray', 'CT'],
+    ))
+
+    assert node.current_step_order == 2
+    assert node.current_visit == 'CT'
+    assert node.session_state == GuideState.SESSION_GUIDING
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert len(node.nav.sent) == 1
+    assert node.nav.sent[0].pose.pose.position.x == 5.0
+    assert published == [
+        ('session.step_completed', {'step_order': 1, 'source': 'qr'}, 81),
+        ('nav.goal_sent', {'visit_name': 'CT'}, 81),
+    ]
+
+
+def test_waiting_qr_completes_final_step_and_session(manager):
+    node, published = manager
+    node.session_id = 82
+    node.patient_id = 'patient-6'
+    node.session_visits = ['X-ray', 'CT']
+    node.current_step_order = 2
+    node.current_visit = 'CT'
+    node.session_state = GuideState.SESSION_IN_ROOM
+    node.robot_state = GuideState.ROBOT_WAITING
+
+    node._on_session_start(SessionStart(
+        session_id=82,
+        patient_id='patient-6',
+        current_step_order=2,
+        visit_names=['X-ray', 'CT'],
+    ))
+
+    assert node.current_step_order == 0
+    assert node.session_state == GuideState.SESSION_COMPLETED
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node.nav.sent == []
+    assert published == [
+        ('session.step_completed', {'step_order': 2, 'source': 'qr'}, 82),
+        ('session.ended', {'end_reason': 'completed'}, 82),
+    ]
+
+
+def test_active_session_rejects_other_patient_qr(manager):
+    node, published = manager
+    node.session_id = 83
+    node.patient_id = 'patient-7'
+    node.session_visits = ['X-ray']
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_IN_ROOM
+    node.robot_state = GuideState.ROBOT_WAITING
+
+    node._on_session_start(SessionStart(
+        session_id=84,
+        patient_id='patient-8',
+        current_step_order=1,
+        visit_names=['CT'],
+    ))
+
+    assert node.session_id == 83
+    assert node.patient_id == 'patient-7'
+    assert node.current_visit == 'X-ray'
+    assert node.nav.sent == []
+    assert published == []
+
+
+def test_duplicate_qr_while_moving_does_not_reset_active_session(manager):
+    node, published = manager
+    node.session_id = 85
+    node.patient_id = 'patient-9'
+    node.session_visits = ['X-ray', 'CT']
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+
+    node._on_session_start(SessionStart(
+        session_id=85,
+        patient_id='patient-9',
+        current_step_order=1,
+        visit_names=['X-ray', 'CT'],
+    ))
+
+    assert node.current_step_order == 1
+    assert node.current_visit == 'X-ray'
+    assert node.session_state == GuideState.SESSION_GUIDING
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node.nav.sent == []
+    assert published == []
+
+
 def test_emergency_state_is_mirrored_with_recovery_event(manager):
     node, published = manager
     node.session_id = 63
