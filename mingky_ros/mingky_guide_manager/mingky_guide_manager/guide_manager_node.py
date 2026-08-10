@@ -598,9 +598,17 @@ class GuideManager(Node):
         return str(mapping.get(kind) or '')
 
     def _move_to_waiting_spot(self, visit_name: str, session_id: int) -> None:
-        waypoint_name = self._visit_waypoint(visit_name, 'waiting')
-        if not waypoint_name:
+        mapping = self.visit_waypoints.get(visit_name)
+        if not isinstance(mapping, dict) or 'waiting' not in mapping:
             self._waiting_spot_failed(visit_name, '', -2)
+            return
+        waypoint_name = str(mapping.get('waiting') or '')
+        if not waypoint_name:
+            # waiting: null 은 설정 누락이 아니라 별도 대기 위치가 없는 방문지다.
+            self.robot_state = GuideState.ROBOT_WAITING
+            self.session_state = GuideState.SESSION_IN_ROOM
+            self.get_logger().info(
+                f'별도 waiting spot 없음; goal에서 QR 대기: {visit_name}')
             return
         self.get_logger().info(
             f'검사실 도착; waiting spot으로 이동: {waypoint_name}')
@@ -614,10 +622,11 @@ class GuideManager(Node):
 
     def _waiting_spot_failed(
             self, visit_name: str, waypoint_name: str, error_code: int) -> None:
-        # 환자 전달은 이미 끝났다. waiting 이동 실패 때문에 임상 단계를
-        # 되돌리거나 다음 검사실로 넘어가면 안 되므로 현재 위치에서 QR을 받는다.
-        self.robot_state = GuideState.ROBOT_WAITING
-        self.session_state = GuideState.SESSION_IN_ROOM
+        # 설정 누락이나 실제 주행 실패를 정상 대기로 숨기면 출입구를 막은 채
+        # 다음 단계로 진행할 수 있다. 임상 도착 기록은 유지하되 운영자가
+        # 확인할 때까지 완료 QR 스캔과 자동 진행을 열지 않는다.
+        self.robot_state = GuideState.ROBOT_PAUSED
+        self.session_state = GuideState.SESSION_ARRIVED
         self.events.publish(
             'nav.waiting_spot_failed',
             {
@@ -627,8 +636,8 @@ class GuideManager(Node):
             },
             self.session_id,
         )
-        self.get_logger().warn(
-            f'waiting spot 이동 실패; 현재 위치에서 대기합니다: {visit_name}')
+        self.get_logger().error(
+            f'waiting spot 이동 실패; 운영자 확인이 필요합니다: {visit_name}')
 
     def _cancel_adaptive_retry(self) -> None:
         if self._adaptive_retry_timer is not None:

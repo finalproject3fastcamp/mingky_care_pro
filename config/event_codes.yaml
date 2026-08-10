@@ -88,8 +88,8 @@ nav.goal_aborted:
 nav.waiting_spot_failed:
   level: warning
   payload: { visit_name: string, waypoint_name: string, error_code: int }
-  # 환자는 검사실에 도착했으므로 안내 단계를 실패시키지 않고 현재 위치에서
-  # QR 을 기다린다. waiting 위치 이동만 실패했다는 운영 진단 이벤트다.
+  # 검사실 도착 기록은 유지하지만 로봇을 paused 로 전환한다. 설정 누락이나
+  # 주행 실패를 정상 대기로 숨기지 않으며, 운영자 확인 전에는 QR 진행을 막는다.
 
 nav.stuck:
   level: warning

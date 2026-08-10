@@ -161,7 +161,7 @@ def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
         ('nav.goal_succeeded', {'visit_name': 'X-ray'}, 74)]
 
 
-def test_missing_waiting_spot_falls_back_to_current_position(manager):
+def test_missing_waiting_spot_pauses_for_operator(manager):
     node, published = manager
     node.session_id = 75
     node.current_visit = 'CT'
@@ -173,8 +173,8 @@ def test_missing_waiting_spot_falls_back_to_current_position(manager):
     node._on_goal_result(succeeded, 8, 'ct_room_goal', False, 75)
 
     assert node.nav.sent == []
-    assert node.robot_state == GuideState.ROBOT_WAITING
-    assert node.session_state == GuideState.SESSION_IN_ROOM
+    assert node.robot_state == GuideState.ROBOT_PAUSED
+    assert node.session_state == GuideState.SESSION_ARRIVED
     assert published == [
         ('nav.goal_succeeded', {'visit_name': 'CT'}, 75),
         ('nav.waiting_spot_failed', {
@@ -182,6 +182,36 @@ def test_missing_waiting_spot_falls_back_to_current_position(manager):
             'waypoint_name': '',
             'error_code': -2,
         }, 75),
+    ]
+
+
+def test_explicit_no_waiting_spot_waits_at_clinical_goal(manager):
+    node, published = manager
+    session_id = 76
+    visit_name = '별도 대기 없는 방문지'
+    node.current_visit = visit_name
+    node.session_id = session_id
+    node.session_state = GuideState.SESSION_GUIDING
+    node.visit_waypoints[visit_name] = {
+        'goal': 'no_waiting_goal',
+        'waiting': None,
+    }
+    node._nav_generation = 9
+    succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+
+    node._on_goal_result(
+        succeeded,
+        9,
+        'no_waiting_goal',
+        False,
+        session_id,
+    )
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_IN_ROOM
+    assert published == [
+        ('nav.goal_succeeded', {'visit_name': visit_name}, session_id),
     ]
 
 
