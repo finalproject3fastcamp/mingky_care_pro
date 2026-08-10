@@ -16,6 +16,7 @@ setup(
     maintainer_email='mingky-care@example.com',
     description='Speed limiting for human-issued velocity commands.',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'teleop_limiter = mingky_teleop.teleop_limiter:main',

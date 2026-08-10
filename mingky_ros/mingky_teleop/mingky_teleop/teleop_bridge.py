@@ -34,7 +34,11 @@ from nav2_msgs.msg import ParticleCloud
 from nav_msgs.msg import Path
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
+from tf2_ros import Buffer, TransformException, TransformListener
+
+from .scan_geometry import transform_polar_point
 
 try:
     # websocket-client(동기). ROS 노드가 이미 스레드로 돌고 있어 asyncio 를
@@ -50,6 +54,7 @@ SCAN_TOPIC = "/scan"
 # 옛 이름 /particlecloud (geometry_msgs/PoseArray) 는 발행자가 없다.
 PARTICLE_TOPIC = "/particle_cloud"
 PLAN_TOPIC = "/plan"
+SCAN_BASE_FRAME = "base_footprint"
 
 # 무선 구간을 아끼려고 솎아 보낸다. 화면에서 "맵과 겹치나" 를 보는 데는
 # 점 개수가 아니라 윤곽이 중요하다.
@@ -80,6 +85,14 @@ class TeleopBridge(Node):
         self.reconnect = float(self.get_parameter("reconnect_sec").value)
 
         self.cmd_pub = self.create_publisher(Twist, OUT_TOPIC, 10)
+
+        # /scan 각도는 센서 프레임 기준이다. Pinky의 rplidar_link는 로봇에
+        # 대해 180도 돌아가 있고 원점도 조금 어긋나 있으므로, 대시보드로
+        # 보내기 전에 TF로 로봇 기준 좌표로 옮긴다. Nav2가 쓰는 것과 같은
+        # 정본을 사용해야 관제 라이다도 실제 벽과 겹친다.
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self._scan_tf_warned = False
 
         # AMCL 은 set_initial_pose 로 (0,0,0) 에서 시작한다. 로봇이 실제로 거기
         # 있지 않으면 **틀린 위치를 확신한 채** 출발한다. 지금까지는 RViz 로만
@@ -121,15 +134,32 @@ class TeleopBridge(Node):
         self._pose = {"type": "pose", "x": p.x, "y": p.y, "yaw": yaw}
 
     def _on_scan(self, msg: LaserScan):
-        """로봇 기준 극좌표 그대로 보낸다.
+        """센서 측정점을 TF로 로봇 기준 극좌표로 바꿔 보낸다.
 
         지도 좌표로 옮기는 계산을 여기서 하지 않는 이유는, 그러려면 pose 와
         시각을 맞춰야 하는데 그 정합은 화면이 pose 와 함께 갖고 있는 편이
-        간단하기 때문이다. 화면은 받은 pose 를 기준으로 회전시켜 그린다.
+        간단하기 때문이다. 여기서는 정적인 센서 장착 회전·오프셋만 적용하고,
+        화면은 받은 pose 를 기준으로 지도 좌표까지 회전시켜 그린다.
         """
         ranges = msg.ranges
         if not ranges:
             return
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                SCAN_BASE_FRAME, msg.header.frame_id, Time())
+        except TransformException as exc:
+            if not self._scan_tf_warned:
+                self.get_logger().warn(
+                    f"라이다 TF를 찾지 못해 관제 전송을 건너뜁니다: "
+                    f"{msg.header.frame_id} → {SCAN_BASE_FRAME}: {exc}")
+                self._scan_tf_warned = True
+            return
+
+        self._scan_tf_warned = False
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        translation = (t.x, t.y, t.z)
+        rotation = (q.x, q.y, q.z, q.w)
         step = max(1, len(ranges) // SCAN_POINTS)
         points = []
         for i in range(0, len(ranges), step):
@@ -137,8 +167,13 @@ class TeleopBridge(Node):
             # inf·nan 은 "못 맞음" 이다. 그리면 안 되므로 뺀다.
             if r is None or r != r or r == float("inf") or r <= msg.range_min:
                 continue
-            points.append([round(msg.angle_min + i * msg.angle_increment, 4),
-                           round(float(r), 3)])
+            angle, distance = transform_polar_point(
+                msg.angle_min + i * msg.angle_increment,
+                float(r),
+                translation=translation,
+                rotation=rotation,
+            )
+            points.append([round(angle, 4), round(distance, 3)])
         self._scan = {"type": "scan", "points": points}
 
     def _on_particles(self, msg: ParticleCloud):
