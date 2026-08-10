@@ -495,6 +495,16 @@ class GuideManager(Node):
         self._cancel_adaptive_retry()
         self._send_nav_goal(waypoint_name, is_dock=False, session_id=self.session_id)
 
+    def _visit_name_for_waypoint(self, waypoint_name: str) -> str:
+        """Nav2 좌표 키를 관제와 DB가 사용하는 방문지 이름으로 되돌린다."""
+        if self.visit_waypoints.get(self.current_visit) == waypoint_name:
+            return self.current_visit
+        return next(
+            (visit for visit, waypoint in self.visit_waypoints.items()
+             if waypoint == waypoint_name),
+            waypoint_name,
+        )
+
     def _cancel_adaptive_retry(self) -> None:
         if self._adaptive_retry_timer is not None:
             self._adaptive_retry_timer.cancel()
@@ -571,17 +581,18 @@ class GuideManager(Node):
 
         self._nav_generation += 1
         generation = self._nav_generation
-        self.current_visit = waypoint_name
         if is_dock:
+            self.current_visit = waypoint_name
             self.robot_state = GuideState.ROBOT_BATTERY_LOW
             self.events.publish(
                 'dock.return_started', {'station_name': waypoint_name})
         else:
+            self.current_visit = self._visit_name_for_waypoint(waypoint_name)
             self.robot_state = GuideState.ROBOT_MOVING
             self.session_state = GuideState.SESSION_GUIDING
             if announce:
                 self.events.publish(
-                    'nav.goal_sent', {'visit_name': waypoint_name}, session_id)
+                    'nav.goal_sent', {'visit_name': self.current_visit}, session_id)
 
         future = self.nav.send_goal_async(
             goal,
@@ -651,7 +662,9 @@ class GuideManager(Node):
                 self.robot_state = GuideState.ROBOT_WAITING
                 self.session_state = GuideState.SESSION_ARRIVED
                 self.events.publish(
-                    'nav.goal_succeeded', {'visit_name': waypoint_name}, session_id)
+                    'nav.goal_succeeded',
+                    {'visit_name': self._visit_name_for_waypoint(waypoint_name)},
+                    session_id)
                 self.get_logger().info(f'도착: {waypoint_name}')
         else:
             if (not is_dock and status == 6
@@ -938,7 +951,10 @@ class GuideManager(Node):
             self.robot_state = GuideState.ROBOT_IDLE
             self.events.publish(
                 'nav.goal_aborted',
-                {'visit_name': waypoint_name, 'error_code': int(error_code)},
+                {
+                    'visit_name': self._visit_name_for_waypoint(waypoint_name),
+                    'error_code': int(error_code),
+                },
                 session_id)
 
     # ------------------------------------------------------------------ 발행

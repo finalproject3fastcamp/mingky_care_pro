@@ -119,8 +119,9 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
     assert node.nav.sent[0].pose.pose.position.x == 1.0
     assert node.robot_state == GuideState.ROBOT_MOVING
     assert node.session_state == GuideState.SESSION_GUIDING
+    assert node.current_visit == 'X-ray'
     assert published == [
-        ('nav.goal_sent', {'visit_name': 'xray_room_goal'}, 71)]
+        ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
 
 
 def test_start_guidance_rejects_unknown_visit_mapping(manager):
