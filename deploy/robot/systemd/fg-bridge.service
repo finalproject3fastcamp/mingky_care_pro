@@ -1,0 +1,16 @@
+[Unit]
+Description=Foxglove Bridge (원격 관측용, 읽기 전용)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+# ROS_DOMAIN_ID 는 여기 있다. systemd 는 .bashrc 를 읽지 않는다.
+EnvironmentFile=-/etc/environment
+ExecStart=/usr/local/bin/foxglove-remote.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

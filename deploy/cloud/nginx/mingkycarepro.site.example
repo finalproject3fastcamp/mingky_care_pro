@@ -1,0 +1,51 @@
+server {
+    listen 80;
+    listen [::]:80;
+    server_name mingkycarepro.site www.mingkycarepro.site;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        # 대시보드의 실시간 조작이 /api/ 아래로 WebSocket 을 연다.
+        # 업그레이드 헤더를 넘기지 않으면 평범한 GET 이 되어 404 가 된다.
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    listen [::]:443 ssl ipv6only=on; # managed by Certbot
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/mingkycarepro.site/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/mingkycarepro.site/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+
+    # Foxglove 역터널 중계. 경로의 토큰이 사실상 접근 열쇠이므로 공개 금지.
+    # 브리지는 읽기 전용(clientPublish 없음)으로 띄운다.
+    location /fg/<FOXGLOVE_TOKEN>/pinky1/ {
+        proxy_pass http://127.0.0.1:18765/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /fg/<FOXGLOVE_TOKEN>/pinky2/ {
+        proxy_pass http://127.0.0.1:18766/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+}
