@@ -56,6 +56,9 @@ ESTOP_ENGAGE_TOPIC = "/emergency_stop"
 ESTOP_RELEASE_SERVICE = "/emergency_stop/release"
 ESTOP_STATE_TOPIC = "/emergency_stop/state"
 
+# twist_mux 의 lock. manual 동안 Nav2 입력만 막는다.
+MANUAL_LOCK_TOPIC = "/manual_mode_lock"
+
 
 def _latched(depth: int = 1) -> QoSProfile:
     """늦게 붙는 구독자도 마지막 값을 받게 한다.
@@ -89,6 +92,8 @@ class ModeManager(Node):
         self.mode_pub = self.create_publisher(String, MODE_TOPIC, _latched())
         self.event_pub = self.create_publisher(Event, EVENT_TOPIC, 10)
         self.estop_pub = self.create_publisher(Bool, ESTOP_ENGAGE_TOPIC, 10)
+        self.manual_lock_pub = self.create_publisher(
+            Bool, MANUAL_LOCK_TOPIC, _latched())
         self.release_client = self.create_client(Trigger, ESTOP_RELEASE_SERVICE)
 
         self.create_subscription(String, SET_TOPIC, self.on_set, 10)
@@ -98,6 +103,10 @@ class ModeManager(Node):
         self.create_subscription(
             Bool, ESTOP_STATE_TOPIC, self.on_estop_state, _latched())
 
+        # 게이트 응답을 기다리는 동안의 목적 모드. 확정 전에는 mode 를 안 바꾼다.
+        self._pending_mode = None
+
+        self._apply_manual_lock()
         self._announce(previous=None, source="startup")
         self.get_logger().info(f"모드 관리 시작 (현재 {self.mode})")
 
@@ -114,44 +123,78 @@ class ModeManager(Node):
         if requested == self.mode:
             return
 
+        # estop 이 얽힌 전환은 **게이트가 실제로 움직인 뒤에** 확정한다.
+        # 요청만 하고 모드를 먼저 바꾸면, 게이트가 안 떠 있거나 요청이
+        # 유실됐을 때 화면은 "정지됨" 인데 로봇은 그대로 달린다.
+        # 확정은 on_estop_state 가 한다.
+        if requested == "estop" or self.mode == "estop":
+            self._pending_mode = requested
+            self.get_logger().warn(
+                f"모드 전환 요청: {self.mode} → {requested} (게이트 응답 대기)")
+            self._apply_estop(engage=requested == "estop")
+            return
+
         previous = self.mode
         self.mode = requested
         self.get_logger().warn(f"모드 전환: {previous} → {self.mode}")
-
-        # 게이트를 먼저 움직인다. 상태 토픽이 돌아오면 on_estop_state 가
-        # 같은 값이라 다시 알리지 않는다.
-        if requested == "estop":
-            self._apply_estop(True)
-        elif previous == "estop":
-            self._apply_estop(False)
-
+        self._apply_manual_lock()
         self._announce(previous=previous, source="remote")
 
     def on_estop_state(self, msg: Bool):
-        """게이트가 걸리거나 풀리면 모드를 맞춘다.
+        """게이트 상태가 정본이다. 여기서만 estop 모드를 확정한다.
 
-        저전압 복귀나 장애물로 게이트가 걸릴 수도 있다. 그때 모드가 auto 로
-        남아 있으면 화면은 "자동 주행 중" 이라고 하는데 로봇은 서 있다.
+        요청을 보낸 뒤가 아니라 게이트가 실제로 움직인 것을 보고 바꾼다.
+        저전압 복귀나 장애물로 게이트가 걸릴 수도 있어서, 이 경로는 관제
+        요청이 없을 때도 동작해야 한다. 그때 모드가 auto 로 남아 있으면
+        화면은 "자동 주행 중" 인데 로봇은 서 있다.
         """
-        if msg.data and self.mode != "estop":
+        engaged = bool(msg.data)
+
+        if engaged and self.mode != "estop":
             previous, self.mode = self.mode, "estop"
-            self.get_logger().warn(f"게이트 정지 감지: {previous} → estop")
+            self._pending_mode = None
+            self.get_logger().warn(f"게이트 정지 확인: {previous} → estop")
+            self._apply_manual_lock()
             self._announce(previous=previous, source="gate")
-        elif not msg.data and self.mode == "estop":
-            self.mode = "auto"
-            self.get_logger().warn("게이트 해제 감지: estop → auto")
+            return
+
+        if not engaged and self.mode == "estop":
+            # 해제 요청에 담긴 목적 모드가 있으면 그리로, 없으면 auto.
+            # 게이트가 다른 이유로 풀렸을 때 임의로 manual 로 두면 안 된다.
+            target = self._pending_mode or "auto"
+            self.mode = target if target != "estop" else "auto"
+            self._pending_mode = None
+            self.get_logger().warn(f"게이트 해제 확인: estop → {self.mode}")
+            self._apply_manual_lock()
             self._announce(previous="estop", source="gate")
 
     def _apply_estop(self, engage: bool):
-        """게이트에 위임한다. 여기서 모터를 직접 건드리지 않는다."""
+        """게이트에 위임한다. 여기서 모터를 직접 건드리지 않는다.
+
+        요청이 나가지 못하면 모드를 바꾸지 않는다. 확정은 on_estop_state 가
+        하므로, 게이트가 없으면 모드는 원래대로 남고 화면도 바뀌지 않는다.
+        """
         if engage:
             self.estop_pub.publish(Bool(data=True))
             return
+
         if not self.release_client.service_is_ready():
+            self._pending_mode = None
             self.get_logger().error(
-                f"{ESTOP_RELEASE_SERVICE} 가 없다. 게이트가 떠 있는지 확인하라")
+                f"{ESTOP_RELEASE_SERVICE} 가 없다. 게이트가 떠 있는지 확인하라. "
+                "정지는 걸린 채로 둔다")
             return
         self.release_client.call_async(Trigger.Request())
+
+    def _apply_manual_lock(self):
+        """manual 일 때만 Nav2 를 막는다.
+
+        우선순위만으로는 텔레옵이 1 초 끊길 때마다 Nav2 가 제어권을 도로
+        가져간다. 조작자가 잠깐 손을 뗀 사이 로봇이 스스로 출발하는 셈이라
+        모드 표가 말하는 것과 다르다. lock 우선순위 50 은 텔레옵(100)보다
+        낮고 Nav2(10)보다 높아 **Nav2 만** 막는다.
+        """
+        self.manual_lock_pub.publish(Bool(data=self.mode == "manual"))
 
     def _announce(self, previous, source: str):
         self.mode_pub.publish(String(data=self.mode))

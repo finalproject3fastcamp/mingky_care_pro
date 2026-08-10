@@ -12,7 +12,6 @@
  * 실시간 상태 push 채널이 붙기 전까지의 임시 계층이다.
  */
 
-import type { RobotMode } from './api'
 import type { EventOut } from '../types/events'
 import type { RobotState } from '../types/monitoring'
 
@@ -121,26 +120,3 @@ export function deriveRobotState(
   return '대기'
 }
 
-/**
- * 로봇의 현재 주행 모드 — 가장 최근 robot.mode_changed 의 payload.mode.
- *
- * 모드의 정본은 로봇이 갖는다 (mingky_teleop/README.md). 백엔드는 상태를
- * 소유하지 않고 이벤트로 결과만 받으므로, 화면도 /robots 가 아니라 여기서
- * 파생한다. **명령을 보낸 직후가 아니라 이벤트가 돌아온 뒤에 바뀐다** —
- * 로봇이 실제로 받아들였다는 근거가 이벤트뿐이기 때문이다.
- *
- * 폴링 window 안에 모드 이벤트가 없으면 null 이다. 모른다는 뜻이지
- * auto 라는 뜻이 아니므로, 화면에서 "확인 중" 과 "자동" 을 구분해야 한다.
- */
-export function deriveRobotMode(
-  events: EventOut[],
-  robotId: string,
-): RobotMode | null {
-  const hit = events.find(
-    (e) => e.robot_id === robotId && e.event_code === 'robot.mode_changed',
-  )
-  if (!hit) return null
-
-  const mode = hit.payload?.mode
-  return mode === 'auto' || mode === 'manual' || mode === 'estop' ? mode : null
-}

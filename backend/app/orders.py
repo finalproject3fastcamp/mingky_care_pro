@@ -34,21 +34,39 @@ from .schemas import OrderOut
 
 log = logging.getLogger("mingky")
 
-# robot_id → 대기 중인 명령. 로봇당 하나만 둔다.
+# 안전 명령으로 다루는 command. 주행 명령과 슬롯을 나눠 담는다.
+#
+# 한 슬롯에 같이 두면 비상정지 요청이 아직 안 받아간 사이에 goto 가 들어와
+# **덮어써진다.** 조작자는 정지를 눌렀는데 로봇은 그 명령을 본 적이 없다.
+# 로그에만 남고 화면에는 성공으로 보이므로 알아채기도 어렵다.
+_SAFETY_COMMANDS = frozenset({"set_mode"})
+
+# robot_id → 대기 중인 주행 명령. 로봇당 하나만 둔다.
 #
 # 큐로 쌓지 않는 이유: 안내 로봇에게 "지금 어디로 가라" 는 최신 것 하나만
 # 유효하다. 밀린 목적지를 순서대로 소화하는 건 오히려 위험하다.
 # 새 명령이 오면 아직 안 받아간 이전 명령을 덮어쓴다.
 _pending: dict[str, OrderOut] = {}
 
+# robot_id → 대기 중인 안전 명령. 주행 명령이 덮어쓰지 못한다.
+#
+# 안전 명령끼리는 최신 것이 이긴다. estop 뒤에 오는 해제 요청은 조작자의
+# 명시적 판단이므로 덮어쓰는 것이 맞다.
+_safety: dict[str, OrderOut] = {}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _slot(command: str) -> dict[str, OrderOut]:
+    return _safety if command in _SAFETY_COMMANDS else _pending
+
+
 def put(robot_id: str, command: str, argument: str) -> OrderOut:
-    """명령을 걸어둔다. 기존 대기 명령이 있으면 덮어쓴다."""
-    previous = _pending.get(robot_id)
+    """명령을 걸어둔다. 같은 종류의 기존 대기 명령만 덮어쓴다."""
+    slot = _slot(command)
+    previous = slot.get(robot_id)
     if previous is not None:
         log.warning("이전 명령을 덮어씀: robot=%s %s(%s) order_id=%s",
                     robot_id, previous.command, previous.argument,
@@ -61,13 +79,18 @@ def put(robot_id: str, command: str, argument: str) -> OrderOut:
         argument=argument,
         created_at=_now(),
     )
-    _pending[robot_id] = order
+    slot[robot_id] = order
     return order
 
 
 def peek(robot_id: str) -> OrderOut | None:
-    """대기 중인 명령을 돌려준다. 지우지 않는다."""
-    return _pending.get(robot_id)
+    """대기 중인 명령을 돌려준다. 지우지 않는다.
+
+    **안전 명령을 먼저 준다.** 정지 요청과 주행 명령이 함께 대기 중이면
+    정지가 먼저 가야 한다. 반대 순서면 로봇이 목적지로 출발한 뒤에야
+    정지를 받는다.
+    """
+    return _safety.get(robot_id) or _pending.get(robot_id)
 
 
 def ack(robot_id: str, order_id: uuid.UUID) -> bool:
@@ -76,18 +99,28 @@ def ack(robot_id: str, order_id: uuid.UUID) -> bool:
     지운 경우 True. order_id 가 안 맞으면 지우지 않고 False —
     그 사이 새 명령으로 덮어써진 경우이므로 새 것을 살려둬야 한다.
     """
-    order = _pending.get(robot_id)
-    if order is None or order.order_id != order_id:
-        return False
-    del _pending[robot_id]
-    return True
+    for slot in (_safety, _pending):
+        order = slot.get(robot_id)
+        if order is not None and order.order_id == order_id:
+            del slot[robot_id]
+            return True
+    return False
 
 
-def snapshot() -> dict[str, OrderOut]:
-    """대기 중인 전체 명령. 디버깅과 조회용."""
-    return dict(_pending)
+def snapshot() -> dict[str, list[OrderOut]]:
+    """대기 중인 전체 명령. 디버깅과 조회용.
+
+    로봇당 안전·주행 슬롯이 따로 있으므로 목록으로 돌려준다.
+    peek 과 같은 순서(안전 먼저)로 담는다.
+    """
+    result: dict[str, list[OrderOut]] = {}
+    for robot_id in set(_safety) | set(_pending):
+        orders = [s[robot_id] for s in (_safety, _pending) if robot_id in s]
+        result[robot_id] = orders
+    return result
 
 
 def reset() -> None:
     """테스트용."""
     _pending.clear()
+    _safety.clear()

@@ -69,5 +69,9 @@ async def ack_order(robot_id: str, order_id: str, body: OrderAck) -> Response:
 
 @router.get("/orders/pending", response_model=list[OrderOut])
 async def list_pending() -> list[OrderOut]:
-    """대기 중인 전체 명령. 디버깅용."""
-    return list(orders.snapshot().values())
+    """대기 중인 전체 명령. 디버깅용.
+
+    로봇당 안전·주행 슬롯이 따로 있어 두 건이 함께 나올 수 있다.
+    peek 과 같은 순서(안전 먼저)로 담긴다.
+    """
+    return [order for orders_ in orders.snapshot().values() for order in orders_]
