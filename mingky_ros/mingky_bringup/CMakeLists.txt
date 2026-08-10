@@ -14,6 +14,7 @@ install(
     scripts/capture_waypoint.sh
     scripts/run_nav2_manual_test.sh
     scripts/run_nav2_waypoint_test.sh
+    scripts/start_guidance_test.sh
     scripts/check_waypoints.py
     scripts/run_discovery_server.sh
   DESTINATION lib/${PROJECT_NAME}
@@ -30,5 +31,11 @@ install(
   FILES README.md
   DESTINATION share/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_system_launch test/test_system_launch.py)
+  ament_add_pytest_test(test_waypoint_config test/test_waypoint_config.py)
+endif()
 
 ament_package()

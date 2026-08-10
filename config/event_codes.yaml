@@ -85,6 +85,12 @@ nav.goal_aborted:
   payload: { visit_name: string, error_code: int }
   # error_code 는 Nav2 NavigateToPose 결과 코드를 그대로 넣는다.
 
+nav.waiting_spot_failed:
+  level: warning
+  payload: { visit_name: string, waypoint_name: string, error_code: int }
+  # 검사실 도착 기록은 유지하지만 로봇을 paused 로 전환한다. 설정 누락이나
+  # 주행 실패를 정상 대기로 숨기지 않으며, 운영자 확인 전에는 QR 진행을 막는다.
+
 nav.stuck:
   level: warning
   payload: { x: float, y: float }

@@ -17,6 +17,8 @@
   <!-- preview_port>0 일 때 MJPEG 미리보기 서버용 (평소엔 미사용) -->
   <exec_depend>python3-flask</exec_depend>
 
+  <test_depend>python3-pytest</test_depend>
+
   <export>
     <build_type>ament_python</build_type>
   </export>

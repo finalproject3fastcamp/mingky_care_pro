@@ -23,6 +23,8 @@
   <exec_depend>twist_mux</exec_depend>
   <exec_depend>v4l2_camera</exec_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

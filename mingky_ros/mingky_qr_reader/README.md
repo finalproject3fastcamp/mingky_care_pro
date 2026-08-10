@@ -12,13 +12,25 @@ Pinky 카메라에서 환자 카드 QR을 인식해 백엔드(`POST /qr/scan`)�
 
 | 이름 | 기본값 | 설명 |
 | --- | --- | --- |
-| `source` | `image` | `image` / `usb` / `csi`(미구현) |
+| `source` | `image` | `image` / `usb` / `csi` |
 | `image_path` | `""` | `source=image` 일 때 읽을 정적 이미지 경로 |
 | `usb_device_index` | `0` | `source=usb` 일 때 `/dev/videoN` 인덱스 |
 | `backend_url` | `http://localhost:8000` | FastAPI 백엔드 주소 |
+| `robot_id` | `""` | 스캔하는 로봇 ID(필수) |
 | `fps` | `10.0` | 프레임 처리 주기 |
 | `debounce_seconds` | `5.0` | 같은 값 연속 스캔 무시 구간 |
 | `http_timeout_seconds` | `3.0` | 백엔드 요청 타임아웃 |
+
+## 스캔 활성화 규칙
+
+- 최초 환자 QR: 의료진이 백엔드에서 해당 로봇을 arming했을 때만 인식
+- 안내 중: 카메라 스캔 비활성화
+- 검사실 `waiting` 도착: `GuideState` 가 `in_room + waiting`이면 완료 QR 스캔 자동 활성화
+- 동일 환자 QR 재인식: 현재 단계 완료 후 다음 검사실 출발
+- 마지막 단계 QR: 안내 세션 종료
+
+완료 QR은 우연한 스캔을 막기 위해 활성 세션의 대기 상태에서만
+허용합니다. 처음 QR에 사용한 arming은 재사용하지 않습니다.
 
 ## 샘플 QR / 인쇄용 카드
 

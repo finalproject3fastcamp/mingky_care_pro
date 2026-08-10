@@ -9,8 +9,13 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \
-  robot_id:=pinky-01 backend_url:=http://192.168.0.10:8000
+  robot_id:=pinky-01 backend_url:=https://mingkycarepro.site/api
 ```
+
+실로봇 기본값은 CSI QR 카메라와 LiDAR 적응형 복구를 함께 실행합니다. QR
+Reader는 인식 후 백엔드에서 받은 세션을 Guide Manager로 전달하며, 일반
+주행이 실패하면 적응형 복구가 안전한 임시 탈출 지점을 찾아 원래 목표를 다시
+시도합니다. 전역 경로 계획기는 검증된 `navfn`을 그대로 사용합니다.
 
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
@@ -20,9 +25,59 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
 없이 주행만 시험하면 `start_event_gateway:=false`를 사용합니다. 다른 맵을 쓸
 때는 같은 맵에 대응하는 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
 
+카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
+카메라로 QR을 읽을 때는 소스만 바꿉니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml start_qr_reader:=false
+ros2 launch mingky_bringup mingky_system.launch.xml qr_source:=usb
+```
+
 Nav2 속도 출력은 `cmd_vel_safety_input`으로 연결되며, 실제 `/cmd_vel`은 안전
 게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
 실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
+
+## QR 안내 상태머신 테스트
+
+QR을 인식하면 Guide Manager는 세션을 `patient_confirmed` 상태로 저장하고
+관제 출발 명령을 기다립니다. 관제 시작 버튼이 연결되기 전에는 현재 세션 ID를
+확인한 뒤 테스트 명령으로 동일한 출발 신호를 보낼 수 있습니다.
+
+```bash
+ros2 topic echo --once /guide_manager/state
+ros2 run mingky_bringup start_guidance_test.sh <session_id>
+```
+
+명령의 `session_id`가 현재 확인된 세션과 같을 때만 첫 검사실 waypoint로
+주행합니다. 이미 출발한 세션, 배터리 부족·비상정지 상태, 등록되지 않은
+검사실은 거부합니다.
+
+출발 후에는 다음 순서를 자동으로 반복합니다.
+
+1. 현재 검사실의 `goal` waypoint로 이동
+2. 임상 도착을 기록하고 같은 검사실의 `waiting` waypoint로 이동
+3. `in_room + waiting`에서 동일 환자 QR을 기다림
+4. QR을 다시 읽으면 현재 단계를 완료하고 다음 검사실로 출발
+5. 마지막 검사실이면 세션을 `completed`로 종료
+
+처음 QR은 관제에서 활성화(arming)한 로봇만 인식합니다. 검사 완료
+QR은 활성 세션의 waiting 상태에서만 스캔 창이 자동으로 열리므로
+별도 arming이 필요하지 않습니다. 다른 환자·세션 QR은 거부합니다.
+
+QR 카메라와 백엔드 없이 첫 출발 배관만 시험하려면 먼저 가짜 세션을 한 번
+발행할 수 있습니다. 완료 QR 반복 흐름은 백엔드의 활성 세션 응답까지
+포함하므로 통합 환경에서 테스트합니다.
+
+```bash
+ros2 topic pub --once /qr_reader_node/session_start \
+  mingky_interfaces/msg/SessionStart \
+  "{session_id: 9001, patient_id: test-patient, current_step_order: 1, visit_names: ['X-ray']}"
+
+ros2 run mingky_bringup start_guidance_test.sh 9001
+```
+
+두 번째 명령은 실제 Nav2 목표를 전송합니다. 실로봇에서는 Nav2 localization과
+초기 위치 설정을 마치고, 로봇 주변과 비상정지 동작을 확인한 뒤 실행하세요.
 
 ## 후방 USB 카메라
 

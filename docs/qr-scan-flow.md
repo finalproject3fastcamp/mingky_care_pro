@@ -63,7 +63,7 @@ Pinky 는 환자보다 앞장서서 안내하므로 환자는 로봇 뒤에 있�
 
 `_tick()` 이 10Hz 주기로 다음을 수행합니다.
 
-1. armed 가 아니면 즉시 리턴
+1. 최초 QR arming 또는 검사실 waiting 스캔 창이 모두 닫혔으면 즉시 리턴
 2. `_read_frame()` 으로 최신 프레임 획득
 3. `pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])` 로 디코드
 4. 미리보기가 켜져 있으면 인식 박스·라벨을 얹어 MJPEG 로 송출
@@ -135,8 +135,12 @@ QR 페이로드는 지금은 `patient_id` 평문(예: `p001`)입니다. MVP 데�
 - `current_step_order` (1-based)
 - `visit_names[]` — step_order 순서의 방문지 이름 배열
 
-`guide_manager` 는 이 메시지를 받아 세션 상태를 저장하고 이후 Nav2 안내를
-시작합니다.
+`guide_manager` 는 최초 메시지를 받으면 `patient_confirmed`로 저장하고
+관제 출발 명령을 기다립니다. 출발 후에는 각 검사실의 `goal` 도착을
+기록하고 `waiting` 위치로 이동합니다. 이 상태에서만 QR 스캔을 다시
+열며, 같은 환자·세션이 재인식되면 `session.step_completed`를
+발행하고 다음 검사실로 출발합니다. 마지막 단계에서는
+`session.ended(completed)`를 발행하고 안내를 종료합니다.
 
 ## 6. 대시보드 반영
 
