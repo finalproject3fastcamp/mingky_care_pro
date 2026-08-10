@@ -78,6 +78,14 @@ class EventGateway(Node):
         # 네트워크를 옮겨도 나가는 연결만 만들면 되기 때문이다.
         self.declare_parameter("order_interval_sec", 3.0)
         self.declare_parameter("order_timeout_sec", 2.0)
+        # 롱폴링. 명령이 없어도 서버가 이 시간까지 응답을 붙들고 있다가,
+        # 걸리는 순간 돌려준다. 0 이면 예전처럼 즉시 응답을 받고 주기마다
+        # 다시 묻는다.
+        #
+        # 폴링 주기(3초)면 명령이 걸린 뒤 로봇이 받기까지 평균 1.5초가 그냥
+        # 흐른다. 왕복이 200ms 인 것에 비하면 대기가 지연의 대부분이었다.
+        # 서버 상한이 50초이고, 중간 프록시가 먼저 끊지 않도록 그보다 짧게 둔다.
+        self.declare_parameter("order_wait_sec", 25.0)
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -93,6 +101,7 @@ class EventGateway(Node):
         self.orders_url = f"{base}/robots/{self.robot_id}/orders"
         self.order_interval = float(self.get_parameter("order_interval_sec").value)
         self.order_timeout = float(self.get_parameter("order_timeout_sec").value)
+        self.order_wait = float(self.get_parameter("order_wait_sec").value)
         self.batch_size = int(self.get_parameter("batch_size").value)
         self.flush_interval = float(self.get_parameter("flush_interval_sec").value)
         self.timeout = float(self.get_parameter("http_timeout_sec").value)
@@ -182,6 +191,14 @@ class EventGateway(Node):
     # ------------------------------------------------------------------ 전송
 
     def _send_loop(self) -> None:
+        # heartbeat·orders·battery 는 이미 Session 을 쓰는데 이 경로만 빠져
+        # 있었다. 매 배치마다 TCP + TLS 를 새로 맺으면 왕복이 세 번이다 —
+        # 실측으로 새 연결 287ms, 재사용 92ms 였다. 무선 구간에서 특히 크다.
+        #
+        # 다른 스레드와 공유하지 않는다. requests.Session 은 스레드 안전이
+        # 아니고, 여기는 백오프로 몇 초씩 묶이는 경로라 heartbeat 가 그 뒤에
+        # 줄 서면 생존 신호가 늦는다.
+        session = requests.Session()
         backoff = self.flush_interval
         while not self._stop.is_set():
             self._wake.wait(timeout=backoff)
@@ -195,7 +212,7 @@ class EventGateway(Node):
             ids = [row_id for row_id, _ in batch]
             bodies = [body for _, body in batch]
 
-            if self._post(bodies):
+            if self._post(session, bodies):
                 self.queue.drop(ids)
                 backoff = self.flush_interval
                 # 남은 게 있으면 곧바로 다음 배치를 보낸다.
@@ -208,10 +225,10 @@ class EventGateway(Node):
                     f"전송 실패, {backoff:.0f}초 뒤 재시도 "
                     f"(대기 {self.queue.count()}건)")
 
-    def _post(self, bodies: list[dict]) -> bool:
+    def _post(self, session: requests.Session, bodies: list[dict]) -> bool:
         """성공하면 True. True 를 돌려준 건만 큐에서 지운다."""
         try:
-            response = requests.post(self.url, json=bodies, timeout=self.timeout)
+            response = session.post(self.url, json=bodies, timeout=self.timeout)
         except requests.RequestException as exc:
             self.get_logger().debug(f"HTTP 실패: {exc}")
             return False
@@ -358,21 +375,41 @@ class EventGateway(Node):
         ack 가 유실되면 다음 폴링에 같은 명령이 다시 오기 때문이다.
         """
         session = requests.Session()
-        self.get_logger().info(
-            f"명령 수신 시작 ({self.orders_url}/next, {self.order_interval:.0f}초 주기)")
+        if self.order_wait > 0:
+            # 붙들려 있는 동안 읽기 타임아웃이 나면 안 된다. 서버가 기다리는
+            # 시간보다 넉넉히 길게 준다.
+            read_timeout = self.order_wait + 10.0
+            params = {"wait": self.order_wait}
+            self.get_logger().info(
+                f"명령 수신 시작 ({self.orders_url}/next, "
+                f"롱폴링 {self.order_wait:.0f}초)")
+        else:
+            read_timeout = self.order_timeout
+            params = None
+            self.get_logger().info(
+                f"명령 수신 시작 ({self.orders_url}/next, "
+                f"{self.order_interval:.0f}초 주기)")
 
         last_id = None
         failing = False
-        while not self._stop.wait(self.order_interval):
+        self._warned_no_longpoll = False
+        while not self._stop.is_set():
+            # 롱폴링일 때는 서버가 대기를 대신하므로 여기서 또 쉬지 않는다.
+            # 다만 요청이 곧바로 실패하는 상황(서버 다운)에서 재요청을
+            # 퍼붓지 않도록, 실패했을 때만 주기만큼 쉰다.
+            asked_at = time.monotonic()
             try:
                 response = session.get(
-                    f"{self.orders_url}/next", timeout=self.order_timeout)
+                    f"{self.orders_url}/next", params=params,
+                    timeout=(self.order_timeout, read_timeout))
                 response.raise_for_status()
                 order = response.json()
             except (requests.RequestException, ValueError) as exc:
                 if not failing:
                     self.get_logger().warn(f"명령 조회 실패: {exc}")
                     failing = True
+                if self._stop.wait(self.order_interval):
+                    break
                 continue
 
             if failing:
@@ -380,6 +417,25 @@ class EventGateway(Node):
                 failing = False
 
             if not order:
+                # 롱폴링이면 대기 시간을 채우고 빈손으로 돌아온 것이라 곧바로
+                # 다시 건다. 아니면 다음 주기까지 쉰다.
+                #
+                # 단, 롱폴링인데 즉시 돌아왔다면 서버가 wait 를 모르는
+                # 구버전이다(모르는 질의 인자는 그냥 무시된다). 그대로 두면
+                # 쉬지 않고 재요청하는 뜨거운 루프가 되므로, 응답이 너무
+                # 빨리 오면 폴링처럼 쉰다. 배포 순서가 어긋나도 안전하도록
+                # 서버 버전을 묻지 않고 걸린 시간으로 판단한다.
+                too_fast = (self.order_wait > 0
+                            and time.monotonic() - asked_at < self.order_wait / 2)
+                if too_fast and not self._warned_no_longpoll:
+                    self.get_logger().warn(
+                        "서버가 롱폴링을 지원하지 않는 것 같다 "
+                        f"(대기 요청 {self.order_wait:.0f}초, 즉시 응답). "
+                        f"{self.order_interval:.0f}초 주기 폴링으로 동작한다.")
+                    self._warned_no_longpoll = True
+                if (self.order_wait <= 0 or too_fast) and self._stop.wait(
+                        self.order_interval):
+                    break
                 continue
 
             order_id = order.get("order_id")
@@ -392,13 +448,22 @@ class EventGateway(Node):
                     continue
 
             # ack 는 매번 시도한다. 앞서 유실됐을 수 있다.
+            acked = True
             try:
                 session.post(f"{self.orders_url}/{order_id}/ack",
                              json={"order_id": order_id},
                              timeout=self.order_timeout)
             except requests.RequestException:
                 # 실패해도 버린다. 다음 폴링에 같은 명령이 오면 다시 ack 한다.
-                pass
+                acked = False
+
+            # ack 가 안 됐으면 서버에 명령이 그대로 남아, 다음 요청이 기다리지
+            # 않고 같은 것을 즉시 돌려준다. 롱폴링에는 주기적인 쉼이 없으므로
+            # 그대로 두면 초당 수십 번을 재요청하는 뜨거운 루프가 된다.
+            # 폴링 방식일 때는 루프 앞머리에서 이미 쉬므로 해당 없다.
+            if self.order_wait > 0 and not acked:
+                if self._stop.wait(self.order_interval):
+                    break
 
         session.close()
 
