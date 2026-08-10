@@ -8,11 +8,14 @@
     <arg name="map" default="$(find-pkg-share mingky_bringup)/map/yun_map_highres_clean.yaml"/>
     <arg name="nav2_params" default="$(find-pkg-share pinky_navigation)/params/nav2_params.yaml"/>
     <arg name="charging_waypoint" default=""/>
-    <arg name="recovery_mode" default="default"/>
+    <arg name="recovery_mode" default="adaptive"/>
     <arg name="planner_mode" default="navfn"/>
     <arg name="backend_url" default="http://192.168.0.10:8000"/>
 
     <arg name="start_robot_base" default="true"/>
+    <arg name="start_qr_reader" default="true"/>
+    <arg name="qr_source" default="csi"/>
+    <arg name="qr_preview_port" default="0"/>
     <arg name="start_event_gateway" default="true"/>
     <arg name="use_buzzer" default="true"/>
     <arg name="use_led" default="true"/>
@@ -24,6 +27,16 @@
         <arg name="map" value="$(var map)"/>
         <arg name="params_file" value="$(var nav2_params)"/>
         <arg name="cmd_vel_output" value="cmd_vel_safety_input"/>
+    </include>
+
+    <!-- 환자 카드 인식은 안내 세션의 기본 입력이다. 카메라가 없는 개발 PC나
+         Nav2 단독 시험에서는 start_qr_reader:=false 로 끈다. -->
+    <include file="$(find-pkg-share mingky_bringup)/launch/qr_reader.launch.py"
+             if="$(var start_qr_reader)">
+        <arg name="source" value="$(var qr_source)"/>
+        <arg name="robot_id" value="$(var robot_id)"/>
+        <arg name="backend_url" value="$(var backend_url)"/>
+        <arg name="preview_port" value="$(var qr_preview_port)"/>
     </include>
 
     <!-- 실제 /cmd_vel 의 유일한 발행자. Nav2/teleop 입력과 모터 출력을 분리한다. -->

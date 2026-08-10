@@ -9,8 +9,13 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \
-  robot_id:=pinky-01 backend_url:=http://192.168.0.10:8000
+  robot_id:=pinky-01 backend_url:=https://mingkycarepro.site/api
 ```
+
+실로봇 기본값은 CSI QR 카메라와 LiDAR 적응형 복구를 함께 실행합니다. QR
+Reader는 인식 후 백엔드에서 받은 세션을 Guide Manager로 전달하며, 일반
+주행이 실패하면 적응형 복구가 안전한 임시 탈출 지점을 찾아 원래 목표를 다시
+시도합니다. 전역 경로 계획기는 검증된 `navfn`을 그대로 사용합니다.
 
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
@@ -19,6 +24,14 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
 로봇 베이스가 다른 장치에서 이미 실행 중이면 `start_robot_base:=false`, 백엔드
 없이 주행만 시험하면 `start_event_gateway:=false`를 사용합니다. 다른 맵을 쓸
 때는 같은 맵에 대응하는 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
+
+카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
+카메라로 QR을 읽을 때는 소스만 바꿉니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml start_qr_reader:=false
+ros2 launch mingky_bringup mingky_system.launch.xml qr_source:=usb
+```
 
 Nav2 속도 출력은 `cmd_vel_safety_input`으로 연결되며, 실제 `/cmd_vel`은 안전
 게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접

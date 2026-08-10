@@ -32,4 +32,9 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_system_launch test/test_system_launch.py)
+endif()
+
 ament_package()

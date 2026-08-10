@@ -17,11 +17,18 @@ Nav2가 기존 목표에 도달하지 못했을 때 주변 LiDAR 공간에서 �
 도착하면 원래 안내 목표를 다시 보냅니다. 따라서 LiDAR 한 방향이 비어
 보인다는 이유만으로 로봇을 바로 움직이지 않습니다.
 
-기존 동작이 기본값입니다. 실제 로봇에서 단계적으로 활성화할 때만 다음처럼
-선택합니다.
+실로봇용 `mingky_system.launch.xml`은 적응형 복구를 기본으로 사용합니다.
+`guide_manager` 노드를 단독 실행할 때는 기존 동작이 기본값이므로 다음처럼
+명시해야 합니다.
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml recovery_mode:=adaptive
+```
+
+통합 launch에서 기존 Nav2 복구만 비교 시험할 때는 반대로 끕니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml recovery_mode:=default
 ```
 
 전역 경로 계획기는 독립적으로 선택할 수 있습니다. `navfn`이 기본이며,
