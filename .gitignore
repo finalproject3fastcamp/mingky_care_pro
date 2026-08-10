@@ -103,3 +103,4 @@ database/*.backup
 
 # Local deployment secrets
 /deploy/.env
+tools/yolo_patient_detection/.env
