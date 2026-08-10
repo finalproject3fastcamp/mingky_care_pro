@@ -56,11 +56,21 @@
 # DB session_steps.visit_name 과 이 맵의 Nav2 waypoint 를 연결한다.
 # 검사실 표시 이름이 바뀌면 좌표 이름을 추측하지 말고 이 매핑을 함께 고친다.
 visit_waypoints:
-  X-ray: xray_room_goal
-  임상병리실: clinical_pathology_room_goal
-  물리치료실: physical_therapy_goal
-  CT: ct_room_goal
-  MRI: mri_room_goal
+  X-ray:
+    goal: xray_room_goal
+    waiting: xray_room_waiting
+  임상병리실:
+    goal: clinical_pathology_room_goal
+    waiting: clinical_pathology_room_waiting
+  물리치료실:
+    goal: physical_therapy_goal
+    waiting: physical_therapy_waiting
+  CT:
+    goal: ct_room_goal
+    waiting: ct_room_waiting
+  MRI:
+    goal: mri_room_goal
+    waiting: mri_room_waiting
 
 waypoints:
   reception_goal:

@@ -100,7 +100,10 @@ def test_session_created_while_low_is_closed_immediately(manager):
 def test_confirmed_session_starts_only_with_matching_session_id(manager):
     node, published = manager
     node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
-    node.visit_waypoints['X-ray'] = 'xray_room_goal'
+    node.visit_waypoints['X-ray'] = {
+        'goal': 'xray_room_goal',
+        'waiting': 'xray_room_waiting',
+    }
     message = SessionStart(
         session_id=71,
         patient_id='patient-3',
@@ -122,6 +125,64 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
     assert node.current_visit == 'X-ray'
     assert published == [
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
+
+
+def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
+    node, published = manager
+    node.session_id = 74
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_GUIDING
+    node.visit_waypoints['X-ray'] = {
+        'goal': 'xray_room_goal',
+        'waiting': 'xray_room_waiting',
+    }
+    node.waypoints['xray_room_waiting'] = {
+        'x': 3.0, 'y': 4.0, 'yaw': 0.0}
+    node._nav_generation = 5
+    succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+
+    node._on_goal_result(
+        succeeded, 5, 'xray_room_goal', False, 74)
+
+    assert len(node.nav.sent) == 1
+    assert node.nav.sent[0].pose.pose.position.x == 3.0
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node.session_state == GuideState.SESSION_ARRIVED
+    assert published == [
+        ('nav.goal_succeeded', {'visit_name': 'X-ray'}, 74)]
+
+    waiting_generation = node._nav_generation
+    node._on_goal_result(
+        succeeded, waiting_generation, 'xray_room_waiting', False, 74, True)
+
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_IN_ROOM
+    assert published == [
+        ('nav.goal_succeeded', {'visit_name': 'X-ray'}, 74)]
+
+
+def test_missing_waiting_spot_falls_back_to_current_position(manager):
+    node, published = manager
+    node.session_id = 75
+    node.current_visit = 'CT'
+    node.session_state = GuideState.SESSION_GUIDING
+    node.visit_waypoints['CT'] = {'goal': 'ct_room_goal'}
+    node._nav_generation = 8
+    succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+
+    node._on_goal_result(succeeded, 8, 'ct_room_goal', False, 75)
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_IN_ROOM
+    assert published == [
+        ('nav.goal_succeeded', {'visit_name': 'CT'}, 75),
+        ('nav.waiting_spot_failed', {
+            'visit_name': 'CT',
+            'waypoint_name': '',
+            'error_code': -2,
+        }, 75),
+    ]
 
 
 def test_start_guidance_rejects_unknown_visit_mapping(manager):
