@@ -1,5 +1,6 @@
 """저전압 세션 종료와 충전소 복귀 흐름의 회귀 테스트."""
 
+import json
 from types import SimpleNamespace
 
 from mingky_guide_manager.guide_manager_node import GuideManager
@@ -241,6 +242,78 @@ def test_completed_schedule_does_not_restart_first_visit(manager):
 
     assert node.current_visit == ''
     assert node.nav.sent == []
+
+
+def test_waypoint_pose_test_is_blocked_during_patient_session(manager):
+    node, published = manager
+    node.session_id = 80
+    node.session_state = GuideState.SESSION_GUIDING
+
+    node._on_goto_pose(String(data=json.dumps({
+        'name': 'draft', 'x': 1.0, 'y': 2.0, 'yaw': 0.3,
+    })))
+
+    assert node.nav.sent == []
+    assert published == []
+
+
+def test_waypoint_pose_test_sends_temporary_goal(manager):
+    node, published = manager
+
+    node._on_goto_pose(String(data=json.dumps({
+        'name': 'hall_corner', 'x': 1.25, 'y': -0.5, 'yaw': 1.2,
+    })))
+
+    assert len(node.nav.sent) == 1
+    assert node.nav.sent[0].pose.pose.position.x == pytest.approx(1.25)
+    assert node.nav.sent[0].pose.pose.position.y == pytest.approx(-0.5)
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert published == [('waypoint.test_started', {
+        'waypoint_name': 'hall_corner',
+        'x': 1.25,
+        'y': -0.5,
+        'yaw': 1.2,
+    }, 0)]
+
+
+def test_waypoint_pose_test_rejects_invalid_payload(manager):
+    node, published = manager
+
+    node._on_goto_pose(String(data='{"x": "not-a-number"}'))
+
+    assert node.nav.sent == []
+    assert published == []
+
+
+def test_waypoint_pose_test_success_does_not_change_session(manager):
+    node, published = manager
+    node._nav_generation = 4
+    node.session_state = GuideState.SESSION_NONE
+    succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+
+    node._on_goal_result(
+        succeeded, 4, '__waypoint_test__', False, 0,
+        is_test=True, test_name='hall_corner')
+
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.current_visit == ''
+    assert published == [(
+        'waypoint.test_succeeded', {'waypoint_name': 'hall_corner'}, 0)]
+
+
+def test_missing_waypoint_test_reports_failure(manager):
+    node, published = manager
+
+    node._send_nav_goal(
+        'missing', is_dock=False, session_id=0,
+        is_test=True, test_name='draft')
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert published == [('waypoint.test_failed', {
+        'waypoint_name': 'draft', 'error_code': -2,
+    }, 0)]
 
 
 def test_waiting_qr_completes_step_and_starts_next_visit(manager):

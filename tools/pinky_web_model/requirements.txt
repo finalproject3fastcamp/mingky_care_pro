@@ -1,0 +1,2 @@
+yourdfpy==0.0.60
+pycollada==0.9.3

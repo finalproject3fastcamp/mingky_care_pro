@@ -126,6 +126,8 @@ class EventGateway(Node):
         # 토픽을 그대로 쓴다 — 상태머신은 명령의 출처를 알 필요가 없다.
         self._order_pubs = {
             "goto": self.create_publisher(String, "/guide_manager/goto", 10),
+            "goto_pose": self.create_publisher(
+                String, "/guide_manager/goto_pose", 10),
             "start_session": self.create_publisher(
                 String, "/guide_manager/start_session", 10),
             # 모드는 mode_manager 가 정본을 들고 있다. 여기서는 요청만 넘긴다.

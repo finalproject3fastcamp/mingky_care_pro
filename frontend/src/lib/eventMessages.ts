@@ -28,6 +28,12 @@ function messageFor(code: string, payload: Record<string, unknown>): string {
       return `${p.station_name ?? '충전소'} 복귀 완료`
     case 'dock.return_failed':
       return `${p.station_name ?? '충전소'} 복귀 실패 (코드 ${p.error_code ?? '?'})`
+    case 'waypoint.test_started':
+      return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 시작`
+    case 'waypoint.test_succeeded':
+      return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 완료`
+    case 'waypoint.test_failed':
+      return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 실패 (코드 ${p.error_code ?? '?'})`
     case 'session.started':
       return `안내 시작: ${p.patient_id ?? ''}`
     case 'session.step_completed':
