@@ -109,6 +109,8 @@ QR 노드가 로봇 안에서 Flask 내장 서버로 프레임을 밀어낸다. 
 | qr_reader_node   | `/qr_reader_node/session_start` (`SessionStart.msg`) | guide_manager           |
 | guide_manager 등 | `/events` (`Event.msg`)                              | event_gateway           |
 | guide_manager    | `/guide_manager/state` (`GuideState.msg`)            | (예정: LCD, 게이트웨이) |
+| event_gateway    | `/navigation_manager/goto_pose` (`String/JSON`)       | navigation_manager      |
+| navigation_manager | `/navigation_manager/result` (`String/JSON`)       | guide_manager           |
 
 지연은 밀리초 수준. UDP 기반이라 이론적으로 손실 가능성이 있지만 같은 로봇
 안에서는 사실상 없다.

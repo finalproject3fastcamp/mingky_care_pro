@@ -147,6 +147,7 @@ class GuideManager(Node):
         self._latest_nav_pose = None
         self._latest_nav_pose_received_ns = 0
         self._adaptive_retry_timer = None
+        self._maintenance_nav_active = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -158,6 +159,8 @@ class GuideManager(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
         self.state_pub = self.create_publisher(GuideState, '~/state', state_qos)
+        self.navigation_cancel_pub = self.create_publisher(
+            Bool, '/navigation_manager/cancel', 10)
 
         self.create_subscription(Float32, '/battery/voltage', self._on_voltage, 10)
         self.create_subscription(Float32, '/battery/percent', self._on_percent, 10)
@@ -177,12 +180,16 @@ class GuideManager(Node):
             self._on_scan,
             10,
         )
+        self.create_subscription(
+            Bool, '/navigation_manager/active',
+            self._on_navigation_active, state_qos)
+        self.create_subscription(
+            String, '/navigation_manager/result',
+            self._on_navigation_result, 10)
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
         self.create_subscription(String, '~/start_session', self._on_start_session, 10)
-        self.create_subscription(String, '~/goto', self._on_goto, 10)
-        self.create_subscription(String, '~/goto_pose', self._on_goto_pose, 10)
 
         # 관제 버튼이 생기기 전에는 ros2 topic pub 으로 같은 명령을 시험한다.
         # session_id 를 함께 받아 오래된 화면의 출발 요청이 새 세션을 움직이지
@@ -399,6 +406,46 @@ class GuideManager(Node):
             self.robot_state = GuideState.ROBOT_IDLE
         self._emergency_reason = 'emergency_stop'
 
+    # --------------------------------------------- 비임상 Waypoint 시험 상태
+
+    def _on_navigation_active(self, msg: Bool) -> None:
+        self._maintenance_nav_active = bool(msg.data)
+
+    def _on_navigation_result(self, msg: String) -> None:
+        """navigation_manager의 시험 주행 결과를 관제 이벤트와 상태로 반영한다."""
+        try:
+            result = json.loads(msg.data)
+            status = str(result['status'])
+            name = str(result.get('waypoint_name') or 'waypoint_draft')
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            self.get_logger().error(f'시험 주행 결과 형식이 올바르지 않습니다: {exc}')
+            return
+
+        if status == 'started':
+            self.robot_state = GuideState.ROBOT_MOVING
+            self.events.publish('waypoint.test_started', {
+                'waypoint_name': name,
+                'x': float(result.get('x', 0.0)),
+                'y': float(result.get('y', 0.0)),
+                'yaw': float(result.get('yaw', 0.0)),
+            })
+        elif status == 'succeeded':
+            self.robot_state = GuideState.ROBOT_WAITING
+            self.events.publish(
+                'waypoint.test_succeeded', {'waypoint_name': name})
+        elif status in ('failed', 'rejected'):
+            # 환자 안내가 시작되어 시험 주행이 취소된 경우에는 안내 상태가 정본이다.
+            if not self._maintenance_nav_active and self.session_state in (
+                    GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+                self.robot_state = (
+                    GuideState.ROBOT_PAUSED if self._emergency_engaged
+                    else GuideState.ROBOT_BATTERY_LOW if self._battery_alarm
+                    else GuideState.ROBOT_IDLE)
+            self.events.publish('waypoint.test_failed', {
+                'waypoint_name': name,
+                'error_code': int(result.get('error_code', -4)),
+            })
+
     # ------------------------------------------------------------------ 세션
 
     def _on_start_session(self, msg: String):
@@ -406,6 +453,8 @@ class GuideManager(Node):
         if self._battery_alarm:
             self.get_logger().warn('배터리 부족 상태에서는 세션을 시작할 수 없습니다.')
             return
+        if self._maintenance_nav_active:
+            self.navigation_cancel_pub.publish(Bool(data=True))
         self.patient_id = msg.data.strip()
         self.session_state = GuideState.SESSION_CONFIRMED
         self.events.publish(
@@ -413,51 +462,6 @@ class GuideManager(Node):
             {'patient_id': self.patient_id, 'marker_id': None},
             self.session_id)
         self.get_logger().info(f'세션 시작: {self.patient_id}')
-
-    def _on_goto(self, msg: String):
-        waypoint_name = msg.data.strip()
-        if not self._can_start_waypoint_test():
-            return
-        self._send_nav_goal(
-            waypoint_name, is_dock=False, is_test=True, session_id=0)
-
-    def _on_goto_pose(self, msg: String) -> None:
-        """엔지니어 화면에서 검증한 임시 좌표로 시험 주행한다."""
-        if not self._can_start_waypoint_test():
-            return
-        try:
-            payload = json.loads(msg.data)
-            name = str(payload.get('name') or 'waypoint_draft').strip()
-            x = float(payload['x'])
-            y = float(payload['y'])
-            yaw = float(payload['yaw'])
-        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            self.get_logger().error(f'시험 waypoint 형식이 올바르지 않습니다: {exc}')
-            return
-        if not all(math.isfinite(value) for value in (x, y, yaw)):
-            self.get_logger().error('시험 waypoint 좌표는 유한한 수여야 합니다.')
-            return
-        # 런타임 좌표 파일은 건드리지 않는다. 이 키는 Goal 메시지를 만드는
-        # 동안만 쓰는 임시 초안이며 저장은 웹에서 YAML로 내보낸 뒤 PR로 한다.
-        key = '__waypoint_test__'
-        self.waypoints[key] = {'x': x, 'y': y, 'yaw': yaw}
-        self._send_nav_goal(
-            key, is_dock=False, is_test=True, test_name=name, session_id=0)
-
-    def _can_start_waypoint_test(self) -> bool:
-        active_states = (
-            GuideState.SESSION_CONFIRMED,
-            GuideState.SESSION_GUIDING,
-            GuideState.SESSION_ARRIVED,
-            GuideState.SESSION_IN_ROOM,
-        )
-        if self.session_id > 0 and self.session_state in active_states:
-            self.get_logger().warn('환자 안내 중에는 waypoint 시험 주행을 할 수 없습니다.')
-            return False
-        if self._battery_alarm or self._emergency_engaged:
-            self.get_logger().warn('안전 정지 상태에서는 waypoint 시험 주행을 할 수 없습니다.')
-            return False
-        return True
 
     def _on_start_guidance(self, msg: String) -> None:
         """확인된 현재 세션의 첫 방문지로 출발한다."""
@@ -483,6 +487,10 @@ class GuideManager(Node):
             return
         if self._emergency_engaged:
             self.get_logger().warn('비상정지 상태에서는 출발할 수 없습니다.')
+            return
+        if self._maintenance_nav_active:
+            self.get_logger().warn(
+                'Waypoint 시험 주행이 끝나기 전에는 환자 안내를 시작할 수 없습니다.')
             return
         if not self.current_visit:
             self.get_logger().error('현재 세션에 방문할 검사실이 없습니다.')
@@ -516,6 +524,11 @@ class GuideManager(Node):
                 f'유효하지 않은 session_start: session_id={incoming_session_id} '
                 f'patient_id={incoming_patient_id!r}')
             return
+
+        if self._maintenance_nav_active:
+            self.navigation_cancel_pub.publish(Bool(data=True))
+            self.get_logger().warn(
+                '환자 세션 확인을 위해 진행 중인 Waypoint 시험 주행을 취소합니다.')
 
         active_states = (
             GuideState.SESSION_CONFIRMED,
@@ -729,8 +742,6 @@ class GuideManager(Node):
     def _send_nav_goal(
             self, waypoint_name: str, *, is_dock: bool, session_id: int,
             is_waiting: bool = False,
-            is_test: bool = False,
-            test_name: str = '',
             recovery_attempt: int = 0,
             recovery_failures: Mapping[str, int] | None = None,
             announce: bool = True) -> None:
@@ -742,11 +753,6 @@ class GuideManager(Node):
             elif is_waiting:
                 self._waiting_spot_failed(
                     self.current_visit, waypoint_name, -2)
-            elif is_test:
-                self._goal_failed(
-                    waypoint_name, False, session_id, -2,
-                    '시험 waypoint를 찾을 수 없습니다.',
-                    is_test=True, test_name=test_name)
             return
         if not self.nav.wait_for_server(timeout_sec=3.0):
             self.get_logger().error('navigate_to_pose 액션 서버가 없습니다.')
@@ -755,11 +761,6 @@ class GuideManager(Node):
             elif is_waiting:
                 self._waiting_spot_failed(
                     self.current_visit, waypoint_name, -3)
-            elif is_test:
-                self._goal_failed(
-                    waypoint_name, False, session_id, -3,
-                    'Nav2 없이는 시험 주행을 시작할 수 없습니다.',
-                    is_test=True, test_name=test_name)
             return
 
         goal = NavigateToPose.Goal()
@@ -771,7 +772,7 @@ class GuideManager(Node):
         z, w = _yaw_to_quat(float(wp['yaw']))
         goal.pose.pose.orientation.z = z
         goal.pose.pose.orientation.w = w
-        if (not is_dock and not is_waiting and not is_test
+        if (not is_dock and not is_waiting
                 and (self.recovery_mode == 'adaptive'
                      or self.planner_mode == 'smac2d')):
             goal.behavior_tree = self._behavior_tree_file(
@@ -787,17 +788,6 @@ class GuideManager(Node):
         elif is_waiting:
             self.robot_state = GuideState.ROBOT_MOVING
             self.session_state = GuideState.SESSION_ARRIVED
-        elif is_test:
-            self.robot_state = GuideState.ROBOT_MOVING
-            self.events.publish(
-                'waypoint.test_started',
-                {
-                    'waypoint_name': test_name or waypoint_name,
-                    'x': float(wp['x']),
-                    'y': float(wp['y']),
-                    'yaw': float(wp['yaw']),
-                },
-            )
         else:
             self.current_visit = self._visit_name_for_waypoint(waypoint_name)
             self.robot_state = GuideState.ROBOT_MOVING
@@ -814,13 +804,11 @@ class GuideManager(Node):
         future.add_done_callback(
             lambda done: self._on_goal_response(
                 done, generation, waypoint_name, is_dock, session_id,
-                is_waiting, is_test, test_name,
-                recovery_attempt, dict(recovery_failures or {})))
+                is_waiting, recovery_attempt, dict(recovery_failures or {})))
 
     def _on_goal_response(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, is_waiting: bool = False,
-            is_test: bool = False, test_name: str = '',
             recovery_attempt: int = 0,
             recovery_failures: Mapping[str, int] | None = None):
         try:
@@ -830,8 +818,7 @@ class GuideManager(Node):
                 return
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -4,
-                f'목표 전송 중 예외: {exc}', is_waiting=is_waiting,
-                is_test=is_test, test_name=test_name)
+                f'목표 전송 중 예외: {exc}', is_waiting=is_waiting)
             return
 
         # 충전 복귀 등 새 목표가 이미 생겼다면 이전 목표 결과는 상태에 반영하지
@@ -843,20 +830,17 @@ class GuideManager(Node):
         if not handle.accepted:
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -1,
-                'Nav2 가 목표를 거부했습니다.', is_waiting=is_waiting,
-                is_test=is_test, test_name=test_name)
+                'Nav2 가 목표를 거부했습니다.', is_waiting=is_waiting)
             return
         result = handle.get_result_async()
         result.add_done_callback(
             lambda done: self._on_goal_result(
                 done, generation, waypoint_name, is_dock, session_id,
-                is_waiting, is_test, test_name,
-                recovery_attempt, dict(recovery_failures or {})))
+                is_waiting, recovery_attempt, dict(recovery_failures or {})))
 
     def _on_goal_result(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, is_waiting: bool = False,
-            is_test: bool = False, test_name: str = '',
             recovery_attempt: int = 0,
             recovery_failures: Mapping[str, int] | None = None):
         if generation != self._nav_generation:
@@ -866,8 +850,7 @@ class GuideManager(Node):
         except Exception as exc:  # noqa: BLE001
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -4,
-                f'결과 수신 중 예외: {exc}', is_waiting=is_waiting,
-                is_test=is_test, test_name=test_name)
+                f'결과 수신 중 예외: {exc}', is_waiting=is_waiting)
             return
 
         # action_msgs/GoalStatus.STATUS_SUCCEEDED == 4
@@ -884,14 +867,6 @@ class GuideManager(Node):
                 self.session_state = GuideState.SESSION_IN_ROOM
                 self.get_logger().info(
                     f'waiting spot 도착: {self.current_visit}')
-            elif is_test:
-                self.robot_state = GuideState.ROBOT_WAITING
-                self.events.publish(
-                    'waypoint.test_succeeded',
-                    {'waypoint_name': test_name or waypoint_name},
-                )
-                self.get_logger().info(
-                    f'waypoint 시험 주행 도착: {test_name or waypoint_name}')
             else:
                 self._cancel_adaptive_retry()
                 self.session_state = GuideState.SESSION_ARRIVED
@@ -903,12 +878,12 @@ class GuideManager(Node):
                 self.get_logger().info(f'도착: {waypoint_name}')
                 self._move_to_waiting_spot(visit_name, session_id)
         else:
-            if (not is_dock and not is_waiting and not is_test and status == 6
+            if (not is_dock and not is_waiting and status == 6
                     and self._start_adaptive_recovery(
                         waypoint_name, session_id, recovery_attempt,
                         dict(recovery_failures or {}))):
                 return
-            if (not is_dock and not is_waiting and not is_test and status == 6
+            if (not is_dock and not is_waiting and status == 6
                     and self.recovery_mode == 'adaptive'):
                 self._schedule_adaptive_retry(
                     waypoint_name, session_id, recovery_attempt,
@@ -916,8 +891,7 @@ class GuideManager(Node):
                 return
             self._goal_failed(
                 waypoint_name, is_dock, session_id, int(status),
-                f'주행 실패 (status={status})', is_waiting=is_waiting,
-                is_test=is_test, test_name=test_name)
+                f'주행 실패 (status={status})', is_waiting=is_waiting)
 
     def _start_adaptive_recovery(
             self, waypoint_name: str, session_id: int, recovery_attempt: int,
@@ -1180,23 +1154,13 @@ class GuideManager(Node):
 
     def _goal_failed(
             self, waypoint_name: str, is_dock: bool, session_id: int,
-            error_code: int, message: str, *, is_waiting: bool = False,
-            is_test: bool = False, test_name: str = '') -> None:
+            error_code: int, message: str, *, is_waiting: bool = False) -> None:
         self.get_logger().error(message)
         if is_dock:
             self._dock_failed(waypoint_name, error_code, retryable=True)
         elif is_waiting:
             self._waiting_spot_failed(
                 self.current_visit, waypoint_name, error_code)
-        elif is_test:
-            self.robot_state = GuideState.ROBOT_IDLE
-            self.events.publish(
-                'waypoint.test_failed',
-                {
-                    'waypoint_name': test_name or waypoint_name,
-                    'error_code': int(error_code),
-                },
-            )
         else:
             self.robot_state = GuideState.ROBOT_IDLE
             self.events.publish(

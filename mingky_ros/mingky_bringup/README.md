@@ -5,7 +5,7 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 ## 운영 통합 실행
 
 실제 로봇 베이스, Nav2, 속도 명령 중재기, 배터리 감시, 비상정지 안전 게이트,
-Guide Manager를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
+Guide Manager와 Navigation Manager를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
 조작 bridge·모드 관리자·속도 제한기는 로봇 설치 시 등록한 systemd 상시
 서비스를 사용합니다.
 
@@ -18,6 +18,11 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
 Reader는 인식 후 백엔드에서 받은 세션을 Guide Manager로 전달하며, 일반
 주행이 실패하면 적응형 복구가 안전한 임시 탈출 지점을 찾아 원래 목표를 다시
 시도합니다. 전역 경로 계획기는 검증된 `navfn`을 그대로 사용합니다.
+
+Guide Manager는 환자 세션과 검사실 순서를 관리합니다. 엔지니어 화면의 저장
+Waypoint·임시 좌표 시험 주행은 별도 Navigation Manager가 담당합니다. 시험
+주행은 한 번에 하나만 허용하며 환자 안내, 저전압 또는 비상정지 상태에서는
+시작하지 않습니다. 시험 중 환자 세션이 확인되면 시험 목표를 취소합니다.
 
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
