@@ -17,6 +17,7 @@
     - 세션 시작/단계 완료를 토픽으로 수동 트리거 (QR·마커 노드가 붙기 전까지)
 """
 
+import json
 import math
 from pathlib import Path
 from typing import Mapping
@@ -146,6 +147,7 @@ class GuideManager(Node):
         self._latest_nav_pose = None
         self._latest_nav_pose_received_ns = 0
         self._adaptive_retry_timer = None
+        self._maintenance_nav_active = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -157,6 +159,8 @@ class GuideManager(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
         self.state_pub = self.create_publisher(GuideState, '~/state', state_qos)
+        self.navigation_cancel_pub = self.create_publisher(
+            Bool, '/navigation_manager/cancel', 10)
 
         self.create_subscription(Float32, '/battery/voltage', self._on_voltage, 10)
         self.create_subscription(Float32, '/battery/percent', self._on_percent, 10)
@@ -176,11 +180,16 @@ class GuideManager(Node):
             self._on_scan,
             10,
         )
+        self.create_subscription(
+            Bool, '/navigation_manager/active',
+            self._on_navigation_active, state_qos)
+        self.create_subscription(
+            String, '/navigation_manager/result',
+            self._on_navigation_result, 10)
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
         self.create_subscription(String, '~/start_session', self._on_start_session, 10)
-        self.create_subscription(String, '~/goto', self._on_goto, 10)
 
         # 관제 버튼이 생기기 전에는 ros2 topic pub 으로 같은 명령을 시험한다.
         # session_id 를 함께 받아 오래된 화면의 출발 요청이 새 세션을 움직이지
@@ -397,6 +406,46 @@ class GuideManager(Node):
             self.robot_state = GuideState.ROBOT_IDLE
         self._emergency_reason = 'emergency_stop'
 
+    # --------------------------------------------- 비임상 Waypoint 시험 상태
+
+    def _on_navigation_active(self, msg: Bool) -> None:
+        self._maintenance_nav_active = bool(msg.data)
+
+    def _on_navigation_result(self, msg: String) -> None:
+        """navigation_manager의 시험 주행 결과를 관제 이벤트와 상태로 반영한다."""
+        try:
+            result = json.loads(msg.data)
+            status = str(result['status'])
+            name = str(result.get('waypoint_name') or 'waypoint_draft')
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            self.get_logger().error(f'시험 주행 결과 형식이 올바르지 않습니다: {exc}')
+            return
+
+        if status == 'started':
+            self.robot_state = GuideState.ROBOT_MOVING
+            self.events.publish('waypoint.test_started', {
+                'waypoint_name': name,
+                'x': float(result.get('x', 0.0)),
+                'y': float(result.get('y', 0.0)),
+                'yaw': float(result.get('yaw', 0.0)),
+            })
+        elif status == 'succeeded':
+            self.robot_state = GuideState.ROBOT_WAITING
+            self.events.publish(
+                'waypoint.test_succeeded', {'waypoint_name': name})
+        elif status in ('failed', 'rejected'):
+            # 환자 안내가 시작되어 시험 주행이 취소된 경우에는 안내 상태가 정본이다.
+            if not self._maintenance_nav_active and self.session_state in (
+                    GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+                self.robot_state = (
+                    GuideState.ROBOT_PAUSED if self._emergency_engaged
+                    else GuideState.ROBOT_BATTERY_LOW if self._battery_alarm
+                    else GuideState.ROBOT_IDLE)
+            self.events.publish('waypoint.test_failed', {
+                'waypoint_name': name,
+                'error_code': int(result.get('error_code', -4)),
+            })
+
     # ------------------------------------------------------------------ 세션
 
     def _on_start_session(self, msg: String):
@@ -404,6 +453,8 @@ class GuideManager(Node):
         if self._battery_alarm:
             self.get_logger().warn('배터리 부족 상태에서는 세션을 시작할 수 없습니다.')
             return
+        if self._maintenance_nav_active:
+            self.navigation_cancel_pub.publish(Bool(data=True))
         self.patient_id = msg.data.strip()
         self.session_state = GuideState.SESSION_CONFIRMED
         self.events.publish(
@@ -411,9 +462,6 @@ class GuideManager(Node):
             {'patient_id': self.patient_id, 'marker_id': None},
             self.session_id)
         self.get_logger().info(f'세션 시작: {self.patient_id}')
-
-    def _on_goto(self, msg: String):
-        self.send_goal(msg.data.strip())
 
     def _on_start_guidance(self, msg: String) -> None:
         """확인된 현재 세션의 첫 방문지로 출발한다."""
@@ -439,6 +487,10 @@ class GuideManager(Node):
             return
         if self._emergency_engaged:
             self.get_logger().warn('비상정지 상태에서는 출발할 수 없습니다.')
+            return
+        if self._maintenance_nav_active:
+            self.get_logger().warn(
+                'Waypoint 시험 주행이 끝나기 전에는 환자 안내를 시작할 수 없습니다.')
             return
         if not self.current_visit:
             self.get_logger().error('현재 세션에 방문할 검사실이 없습니다.')
@@ -472,6 +524,11 @@ class GuideManager(Node):
                 f'유효하지 않은 session_start: session_id={incoming_session_id} '
                 f'patient_id={incoming_patient_id!r}')
             return
+
+        if self._maintenance_nav_active:
+            self.navigation_cancel_pub.publish(Bool(data=True))
+            self.get_logger().warn(
+                '환자 세션 확인을 위해 진행 중인 Waypoint 시험 주행을 취소합니다.')
 
         active_states = (
             GuideState.SESSION_CONFIRMED,

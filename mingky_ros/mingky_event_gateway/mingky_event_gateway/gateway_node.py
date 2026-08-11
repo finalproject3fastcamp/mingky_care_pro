@@ -122,10 +122,13 @@ class EventGateway(Node):
         self._battery_percent = None
         self._battery_wake = threading.Event()
 
-        # 관제 명령을 상태머신에 넘기는 통로. guide_manager 의 기존 수동 트리거
-        # 토픽을 그대로 쓴다 — 상태머신은 명령의 출처를 알 필요가 없다.
+        # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
+        # 비임상 Waypoint 시험은 navigation_manager가 받는다.
         self._order_pubs = {
-            "goto": self.create_publisher(String, "/guide_manager/goto", 10),
+            "goto": self.create_publisher(
+                String, "/navigation_manager/goto", 10),
+            "goto_pose": self.create_publisher(
+                String, "/navigation_manager/goto_pose", 10),
             "start_session": self.create_publisher(
                 String, "/guide_manager/start_session", 10),
             # 모드는 mode_manager 가 정본을 들고 있다. 여기서는 요청만 넘긴다.

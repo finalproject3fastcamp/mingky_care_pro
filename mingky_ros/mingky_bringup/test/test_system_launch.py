@@ -53,6 +53,19 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
     assert _argument(root, 'planner_mode').get('default') == 'navfn'
 
 
+def test_non_clinical_navigation_has_a_separate_manager() -> None:
+    root = _root()
+    managers = {
+        item.get('name'): item
+        for item in root.findall('node')
+        if item.get('name') in ('guide_manager', 'navigation_manager')
+    }
+
+    assert set(managers) == {'guide_manager', 'navigation_manager'}
+    assert managers['guide_manager'].get('pkg') == 'mingky_guide_manager'
+    assert managers['navigation_manager'].get('pkg') == 'mingky_navigation_manager'
+
+
 def test_systemd_owned_publishers_are_not_duplicated() -> None:
     root = _root()
 

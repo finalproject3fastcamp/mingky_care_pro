@@ -33,6 +33,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       EVENT_CODES_FILE: /srv/mingky/config/event_codes.yaml
+      WAYPOINTS_FILE: /srv/mingky/waypoints/yun_map_highres_clean_waypoints.yaml
     depends_on:
       postgres:
         condition: service_healthy

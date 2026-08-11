@@ -1,5 +1,6 @@
 """저전압 세션 종료와 충전소 복귀 흐름의 회귀 테스트."""
 
+import json
 from types import SimpleNamespace
 
 from mingky_guide_manager.guide_manager_node import GuideManager
@@ -241,6 +242,70 @@ def test_completed_schedule_does_not_restart_first_visit(manager):
 
     assert node.current_visit == ''
     assert node.nav.sent == []
+
+
+def test_waypoint_result_updates_robot_but_not_session_state(manager):
+    node, published = manager
+    node.session_state = GuideState.SESSION_NONE
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'started',
+        'waypoint_name': 'hall_corner',
+        'x': 1.25,
+        'y': -0.5,
+        'yaw': 1.2,
+    })))
+
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node.session_state == GuideState.SESSION_NONE
+    assert published == [('waypoint.test_started', {
+        'waypoint_name': 'hall_corner',
+        'x': 1.25,
+        'y': -0.5,
+        'yaw': 1.2,
+    }, 0)]
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'succeeded',
+        'waypoint_name': 'hall_corner',
+    })))
+
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_NONE
+    assert published[-1] == (
+        'waypoint.test_succeeded', {'waypoint_name': 'hall_corner'}, 0)
+
+
+def test_guidance_does_not_start_while_waypoint_test_is_active(manager):
+    node, _ = manager
+    node.session_id = 80
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = 'X-ray'
+    node.visit_waypoints['X-ray'] = {'goal': 'xray_room_goal'}
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node._maintenance_nav_active = True
+
+    node._on_start_guidance(String(data='80'))
+
+    assert node.nav.sent == []
+
+
+def test_rejected_second_waypoint_does_not_clear_active_robot_state(manager):
+    node, published = manager
+    node._maintenance_nav_active = True
+    node.robot_state = GuideState.ROBOT_MOVING
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'rejected',
+        'waypoint_name': 'second',
+        'error_code': -5,
+    })))
+
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert published == [('waypoint.test_failed', {
+        'waypoint_name': 'second',
+        'error_code': -5,
+    }, 0)]
 
 
 def test_waiting_qr_completes_step_and_starts_next_visit(manager):

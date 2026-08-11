@@ -41,6 +41,17 @@ interface Props extends DiagLayers {
   live: boolean
   /** 지도를 찍어 "로봇이 여기 있다" 를 알린다. 없으면 지정 모드가 안 뜬다. */
   onSetPose?: (x: number, y: number, yaw: number) => void
+  waypoints?: WaypointMarker[]
+  onSelectWaypoint?: (name: string) => void
+}
+
+export interface WaypointMarker {
+  name: string
+  x: number
+  y: number
+  yaw: number
+  status?: 'ok' | 'warning' | 'blocked' | 'outside'
+  selected?: boolean
 }
 
 const LAYER_LABEL = {
@@ -51,7 +62,9 @@ const LAYER_LABEL = {
 
 type LayerKey = keyof typeof LAYER_LABEL
 
-export function RobotMap({ pose, live, scan, particles, plan, onSetPose }: Props) {
+export function RobotMap({
+  pose, live, scan, particles, plan, onSetPose, waypoints = [], onSelectWaypoint,
+}: Props) {
   // 위치 지정 모드. 실수로 지도를 눌러 로봇 위치가 바뀌면 안 되므로,
   // 버튼으로 한 번 켜야 찍을 수 있게 한다.
   const [placing, setPlacing] = useState(false)
@@ -126,6 +139,30 @@ export function RobotMap({ pose, live, scan, particles, plan, onSetPose }: Props
       }
     }
 
+    for (const waypoint of waypoints) {
+      const [wx, wy] = toPx(waypoint.x, waypoint.y)
+      const color = waypoint.status === 'blocked' || waypoint.status === 'outside'
+        ? '#dc2626' : waypoint.status === 'warning' ? '#f59e0b' : '#2563eb'
+      ctx.fillStyle = color
+      ctx.strokeStyle = waypoint.selected ? '#111827' : '#ffffff'
+      ctx.lineWidth = waypoint.selected ? 3 : 1.5
+      ctx.beginPath()
+      ctx.arc(wx, wy, waypoint.selected ? 6 : 4, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(wx, wy)
+      ctx.lineTo(wx + Math.cos(-waypoint.yaw) * 13, wy + Math.sin(-waypoint.yaw) * 13)
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.stroke()
+      if (waypoint.selected) {
+        ctx.font = '12px sans-serif'
+        ctx.fillStyle = '#111827'
+        ctx.fillText(waypoint.name, wx + 9, wy - 9)
+      }
+    }
+
     if (!pose) return
 
     // 라이다 — 로봇 기준 극좌표를 pose 로 회전·평행이동해 지도에 얹는다.
@@ -155,7 +192,7 @@ export function RobotMap({ pose, live, scan, particles, plan, onSetPose }: Props
     ctx.strokeStyle = '#fff'
     ctx.lineWidth = 1.5
     ctx.stroke()
-  }, [meta, pose, scan, particles, plan, visible, tick])
+  }, [meta, pose, scan, particles, plan, visible, tick, waypoints])
 
   if (failed) {
     return (
@@ -223,6 +260,18 @@ export function RobotMap({ pose, live, scan, particles, plan, onSetPose }: Props
         height={441}
         className={`robot-map__canvas${placing ? ' robot-map__canvas--placing' : ''}`}
         onPointerDown={(e) => {
+          if (!placing && meta && onSelectWaypoint && waypoints.length) {
+            const point = toMapCoords(e, meta)
+            if (point) {
+              const nearest = waypoints
+                .map((waypoint) => ({ waypoint, distance: Math.hypot(waypoint.x - point.x, waypoint.y - point.y) }))
+                .sort((a, b) => a.distance - b.distance)[0]
+              if (nearest && nearest.distance < meta.resolution * 10) {
+                onSelectWaypoint(nearest.waypoint.name)
+              }
+            }
+            return
+          }
           if (!placing || !meta) return
           const p = toMapCoords(e, meta)
           if (p) setDrag(p)

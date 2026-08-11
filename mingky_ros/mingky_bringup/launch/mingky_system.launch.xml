@@ -72,6 +72,12 @@
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
     </node>
 
+    <node pkg="mingky_navigation_manager" exec="navigation_manager"
+          name="navigation_manager" output="screen">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="map_name" value="$(var map_name)"/>
+    </node>
+
     <node pkg="mingky_event_gateway" exec="event_gateway"
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>

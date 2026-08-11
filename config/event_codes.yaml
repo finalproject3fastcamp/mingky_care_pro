@@ -96,6 +96,18 @@ nav.stuck:
   payload: { x: float, y: float }
   # progress checker 발동.
 
+waypoint.test_started:
+  level: info
+  payload: { waypoint_name: string, x: float, y: float, yaw: float }
+
+waypoint.test_succeeded:
+  level: info
+  payload: { waypoint_name: string }
+
+waypoint.test_failed:
+  level: error
+  payload: { waypoint_name: string, error_code: int }
+
 
 # === 충전소 복귀 ============================================================
 #
