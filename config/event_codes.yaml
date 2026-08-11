@@ -97,6 +97,27 @@ nav.stuck:
   # progress checker 발동.
 
 
+# === 자동 로컬라이제이션 ====================================================
+#
+# auto_localize_node. AMCL 초기 위치를 자동으로 잡는 절차의 시작/성공/실패.
+# RViz 2D Pose Estimate 손조작을 대신한다.
+
+localize.started:
+  level: info
+  payload: { source: string }
+  # source 는 startup(부팅 시 자동) 또는 manual(대시보드 재요청).
+
+localize.converged:
+  level: info
+  payload: { spread_m: float, yaw_spread_deg: float, attempt: int }
+
+localize.failed:
+  level: error
+  payload: { reason: string, attempts: int }
+  # reason: not_converged | no_service | mode_changed | nav2_not_active.
+  # 실패해도 자동으로 계속 재시도하지 않는다 -- 사람 확인이 필요하다는 신호.
+
+
 # === 충전소 복귀 ============================================================
 #
 # 충전소 복귀는 진료 안내 단계가 아니므로 nav.goal_* 로 기록하지 않는다.
