@@ -117,14 +117,17 @@ class OrderIn(BaseModel):
     받았을 때 조용히 무시하는 상황을 만들지 않기 위해서다.
     """
 
-    command: Literal["goto", "start_session", "set_mode"]
-    # goto 면 waypoint 이름, start_session 이면 patient_id,
+    command: Literal[
+        "goto", "goto_pose", "start_session", "start_guidance", "set_mode"
+    ]
+    # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
+    # start_session 이면 patient_id, start_guidance 면 session_id,
     # set_mode 면 auto | manual | estop.
     #
     # 모드는 로봇이 정본을 갖는다. 여기서 보내는 것은 요청이고, 반영 여부는
     # robot.mode_changed 이벤트로 확인한다. 통신이 끊겨도 로봇이 스스로
     # 안전한 상태를 지켜야 하므로 서버가 상태를 소유하지 않는다.
-    argument: str = Field(min_length=1, max_length=100)
+    argument: str = Field(min_length=1, max_length=200)
 
 
 class OrderOut(BaseModel):

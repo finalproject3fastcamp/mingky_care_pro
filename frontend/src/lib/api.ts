@@ -36,7 +36,12 @@ export async function disarmRobot(robotId: string): Promise<Robot> {
 }
 
 /** 로봇에 내리는 명령. schemas.py 의 OrderIn 과 같은 목록이다. */
-export type RobotCommand = 'goto' | 'start_session' | 'set_mode'
+export type RobotCommand =
+  | 'goto'
+  | 'goto_pose'
+  | 'start_session'
+  | 'start_guidance'
+  | 'set_mode'
 
 /** mode_manager 가 인정하는 값. 그 외는 로봇이 무시한다. */
 export type RobotMode = 'auto' | 'manual' | 'estop'
@@ -54,4 +59,41 @@ export async function sendOrder(
   argument: string,
 ): Promise<void> {
   await api.post(`/robots/${robotId}/orders`, { command, argument })
+}
+
+export interface WaypointValue {
+  x: number
+  y: number
+  yaw: number
+}
+
+export interface WaypointSet {
+  map_name: string
+  visit_waypoints: Record<string, Record<string, string | null>>
+  waypoints: Record<string, WaypointValue>
+}
+
+export interface WaypointCheckItem {
+  name: string
+  status: 'ok' | 'warning' | 'blocked' | 'outside'
+  clearance: number | null
+  message: string
+}
+
+export interface WaypointCheckResult {
+  ok: boolean
+  items: WaypointCheckItem[]
+  conflicts: { first: string; second: string; distance: number }[]
+}
+
+export async function getWaypoints(): Promise<WaypointSet> {
+  const { data } = await api.get<WaypointSet>('/waypoints')
+  return data
+}
+
+export async function checkWaypoints(
+  waypoints: Record<string, WaypointValue>,
+): Promise<WaypointCheckResult> {
+  const { data } = await api.post<WaypointCheckResult>('/waypoints/check', { waypoints })
+  return data
 }

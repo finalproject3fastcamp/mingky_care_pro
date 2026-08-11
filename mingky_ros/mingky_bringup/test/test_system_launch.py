@@ -53,6 +53,33 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
     assert _argument(root, 'planner_mode').get('default') == 'navfn'
 
 
+def test_non_clinical_navigation_has_a_separate_manager() -> None:
+    root = _root()
+    managers = {
+        item.get('name'): item
+        for item in root.findall('node')
+        if item.get('name') in ('guide_manager', 'navigation_manager')
+    }
+
+    assert set(managers) == {'guide_manager', 'navigation_manager'}
+    assert managers['guide_manager'].get('pkg') == 'mingky_guide_manager'
+    assert managers['navigation_manager'].get('pkg') == 'mingky_navigation_manager'
+
+
+def test_lcd_status_is_the_only_integrated_lcd_owner() -> None:
+    root = _root()
+
+    assert _argument(root, 'start_lcd_status').get('default') == 'true'
+    lcd_nodes = [
+        item for item in root.findall('node')
+        if item.get('name') == 'lcd_status'
+    ]
+    assert len(lcd_nodes) == 1
+    assert lcd_nodes[0].get('pkg') == 'mingky_lcd_status'
+    assert lcd_nodes[0].get('if') == '$(var start_lcd_status)'
+    assert all(item.get('pkg') != 'pinky_emotion' for item in root.findall('node'))
+
+
 def test_systemd_owned_publishers_are_not_duplicated() -> None:
     root = _root()
 
