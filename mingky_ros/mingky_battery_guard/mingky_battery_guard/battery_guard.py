@@ -52,10 +52,14 @@ class BatteryGuard(Node):
         # ---- 파라미터 ----
         self.declare_parameter('threshold_percent', 40.0)   # 이 % 이하면 발동
         self.declare_parameter('rearm_percent', 60.0)       # 이 % 이상 회복되면 재무장
-        self.declare_parameter('confirm_count', 3)          # 연속 몇 번 낮아야 인정
+        self.declare_parameter('confirm_count', 3)          # 창 안에서 몇 번 낮아야 인정
+        self.declare_parameter('confirm_window', 6)         # 그 '창'의 크기
         self.declare_parameter('trend_samples', 5)          # 추세를 볼 표본 수
         self.declare_parameter('trend_rise', 2.0)           # 이만큼(%p) 올라야 충전 중
         self.declare_parameter('median_samples', 3)         # 중앙값 필터 창 (1이면 끔)
+        # 로봇 기본 부저(battery-buzzer.service)의 danger 선과 같은 값.
+        # 여기까지 내려간 전압은 확인 절차 없이 즉시 알린다.
+        self.declare_parameter('critical_voltage', 6.80)
 
         self.declare_parameter('use_buzzer', True)
         self.declare_parameter('buzzer_script', '/home/pinky/ap/battery_buzzer.py')
@@ -65,6 +69,8 @@ class BatteryGuard(Node):
         self.threshold = g('threshold_percent').value
         self.rearm = g('rearm_percent').value
         self.confirm = int(g('confirm_count').value)
+        self.confirm_window = max(self.confirm, int(g('confirm_window').value))
+        self.critical_v = float(g('critical_voltage').value)
         self.trend_rise = g('trend_rise').value
         self.use_buzzer = g('use_buzzer').value
         self.buzzer_script = g('buzzer_script').value
@@ -78,8 +84,14 @@ class BatteryGuard(Node):
 
         # ---- 상태 ----
         self.fired = False                                        # 이미 울렸나
-        self.low_count = 0                                        # 연속 저전압 횟수
         self.last_percent = None                                  # 마지막 판단값
+
+        # 저전압 여부를 '연속'이 아니라 '최근 창 안의 횟수'로 센다.
+        # 연속 카운터는 기준치 위를 한 번만 봐도 0 으로 초기화되는데, 방전이
+        # 진행된 배터리는 주행하면 처지고 멈추면 회복하기를 반복하므로 연속이
+        # 절대 쌓이지 않는다. 실제로 70% <-> 8% 를 왕복하는 동안 경보가 한 번도
+        # 나가지 않는 현상이 관제에서 보고됐다.
+        self.low_window = deque(maxlen=self.confirm_window)
         self.history = deque(maxlen=int(g('trend_samples').value))  # 필터 후 측정값
 
         # battery_publisher 는 필터를 전혀 걸지 않는다. 5초마다 ADC 를 한 번
@@ -95,6 +107,11 @@ class BatteryGuard(Node):
         )
         self.low_pub = self.create_publisher(Bool, 'battery/low', state_qos)
 
+        # 판단에 쓰는 값은 중앙값이라 최저 전압이 가려진다. 실제로 6.75V 까지
+        # 처져 로봇 기본 부저가 울리는데 관제 화면은 31% 로 보이는 상황이
+        # 발생했다. 최저값을 따로 내보내 그 간극을 없앤다.
+        self.vmin_pub = self.create_publisher(Float32, 'battery/voltage_min', state_qos)
+
         # 전압이 1차 소스다. 퍼센트는 전압을 선형 변환한 파생값이라
         # 6.8V 아래·7.6V 위가 전부 0%/100% 로 뭉개진다.
         # 그리고 퍼센트를 내는 쪽이 죽어도 감시는 계속되어야 한다.
@@ -105,8 +122,9 @@ class BatteryGuard(Node):
         self.create_subscription(Float32, 'battery/percent', self.on_percent, 10)
 
         self.get_logger().info(
-            f'배터리 감시 시작 | 발동 {self.threshold}% (연속 {self.confirm}회) '
-            f'| 재무장 {self.rearm}% | 충전 중이면 건너뜀')
+            f'배터리 감시 시작 | 발동 {self.threshold}% '
+            f'(최근 {self.confirm_window}회 중 {self.confirm}회) '
+            f'| 위험선 {self.critical_v:.2f}V 즉시 | 재무장 {self.rearm}%')
 
     # ===================================================================
 
@@ -130,12 +148,29 @@ class BatteryGuard(Node):
         samples = list(self.history)
         return (min(samples[-n:]) - max(samples[:n])) >= self.trend_rise
 
+    @property
+    def low_count(self):
+        """최근 창 안에서 기준치 이하였던 표본 수."""
+        return sum(self.low_window)
+
+    def critical_now(self):
+        """원본 전압이 위험선까지 내려갔나.
+
+        중앙값이 아니라 원본을 본다. 중앙값은 최저값을 버리기 때문에 위험한
+        강하를 그대로 감춘다. 다만 ADC 단발 오류로 복귀까지 시키면 곤란하므로
+        창 안에서 2회 이상일 때만 인정한다 (약 10초).
+        """
+        if not self.saw_voltage or not self.raw:
+            return False
+        return sum(1 for v in self.raw if v <= self.critical_v) >= 2
+
     def on_voltage(self, msg: Float32):
         """1차 소스. 중앙값을 거른 뒤 퍼센트로 바꿔 판단한다."""
         self.saw_voltage = True
         self.voltage_raw = msg.data
         self.raw.append(msg.data)
         self.voltage = statistics.median(self.raw)
+        self.vmin_pub.publish(Float32(data=float(min(self.raw))))
         self.evaluate(percent_from_voltage(self.voltage))
 
     def on_percent(self, msg: Float32):
@@ -155,57 +190,74 @@ class BatteryGuard(Node):
         volt = ''
         if self.voltage is not None:
             volt = f' ({self.voltage:.3f}V)'
-            # 원본이 필터값과 벌어졌다면 튄 샘플을 걸러냈다는 뜻이다.
-            # 이걸 남겨야 "간혹 낮게 뜬다"를 나중에 근거로 확인할 수 있다.
-            if (self.voltage_raw is not None
-                    and abs(self.voltage_raw - self.voltage) >= 0.01):
-                volt += f' [원본 {self.voltage_raw:.3f}V 걸러냄]'
+            # 최저값을 같이 찍는다. 중앙값만 보면 위험한 강하가 숨는다.
+            vmin = min(self.raw) if self.raw else None
+            if vmin is not None and abs(vmin - self.voltage) >= 0.01:
+                volt += f' [최저 {vmin:.3f}V]'
         self.get_logger().info(
             f'배터리 {pct:.1f}%{volt}' + (' (충전 중)' if charging else ''))
 
-        # 1) 충분히 회복됐으면 재무장. 충전 감지 여부와 무관하게 판단한다.
-        #    충전이 끝나 전압이 평평해지면 is_charging() 이 False 로 돌아오는데,
-        #    재무장을 그 안에 두면 100% 인 채로 영영 무장 해제로 남는다.
-        if self.fired and pct >= self.rearm:
-            self.fired = False
-            self.low_count = 0
-            self.publish_low_state(False)
-            self.get_logger().info(f'{pct:.1f}% 회복 — 감시를 다시 시작합니다.')
+        # 저전압 여부를 창에 먼저 기록한다. 기준치 위여도 지우지 않고 밀어낸다.
+        # 연속 카운터를 쓰면 왕복하는 배터리에서 영영 쌓이지 않는다.
+        self.low_window.append(pct <= self.threshold)
 
-        # 2) 충전 중이면 경보하지 않는다.
-        if charging:
-            self.low_count = 0
+        # 1) 회복은 '지속'되어야 인정한다. 충전 감지 여부와는 무관하다.
+        #    (충전이 끝나 전압이 평평해지면 is_charging() 이 False 로 돌아오므로,
+        #     재무장을 그 안에 두면 100% 인 채로 영영 무장 해제로 남는다)
+        #
+        #    높은 값 하나로 풀어주면 안 된다. 방전된 배터리는 멈출 때마다
+        #    기준치 위로 회복하므로, 발동과 해제를 반복하며 관제에 이벤트
+        #    폭풍을 만들고 충전소 복귀도 계속 취소·재시도된다.
+        #    창이 전부 기준치 위일 때만 푼다.
+        window_full = len(self.low_window) == self.low_window.maxlen
+        if (self.fired and pct >= self.rearm and window_full
+                and self.low_count == 0 and not self.critical_now()):
+            self.fired = False
+            self.low_window.clear()
+            self.publish_low_state(False)
+            self.get_logger().info(
+                f'{pct:.1f}% 회복 (최근 {self.confirm_window}회 모두 정상) — '
+                '감시를 다시 시작합니다.')
+
+        # 2) 위험선 도달은 확인 절차를 건너뛴다.
+        #    로봇 기본 부저가 이미 울리고 있는 구간이다. 충전 중이든 표본이
+        #    부족하든, 여기까지 내려갔으면 알려야 한다.
+        critical = self.critical_now()
+
+        # 3) 충전 중이면 경보하지 않는다. 단 위험선은 예외.
+        if charging and not critical:
             return
 
-        # 3) 이미 울렸으면 재무장 전까지 조용히 있는다.
+        # 5) 이미 울렸으면 재무장 전까지 조용히 있는다.
         if self.fired:
             return
 
-        # 4) 기준치 위면 카운터를 지운다.
-        if pct > self.threshold:
-            self.low_count = 0
-            return
+        if critical:
+            vmin = min(self.raw) if self.raw else float('nan')
+            self.get_logger().error(
+                f'위험 전압 {vmin:.3f}V (기준 {self.critical_v:.2f}V) — 즉시 발동')
+        else:
+            # 6) 창 안에 충분히 쌓이지 않았으면 기다린다.
+            if self.low_count < self.confirm:
+                if pct <= self.threshold:
+                    self.get_logger().warn(
+                        f'낮음 {self.low_count}/{self.confirm} '
+                        f'(최근 {len(self.low_window)}회 중) — {pct:.1f}%')
+                return
 
-        # 5) 모터 부하로 인한 순간 강하를 걸러내기 위해 연속 확인.
-        self.low_count += 1
-        if self.low_count < self.confirm:
+            # 7) 충전 중인지 판단할 표본이 아직 부족하면 기다린다.
+            if len(self.history) < self.history.maxlen:
+                self.get_logger().warn(
+                    f'표본 부족 {len(self.history)}/{self.history.maxlen} — '
+                    '충전 여부 판단 후 결정합니다.')
+                return
+
             self.get_logger().warn(
-                f'낮음 {self.low_count}/{self.confirm} ({pct:.1f}%)')
-            return
+                f'배터리 {pct:.1f}%{volt} — 기준 도달 '
+                f'(최근 {len(self.low_window)}회 중 {self.low_count}회 낮음)')
 
-        # 6) 충전 중인지 판단할 표본이 아직 부족하면 기다린다.
-        #    이게 없으면 confirm_count 가 trend_samples 보다 작을 때
-        #    "충전 중"을 알아채기 전에 발동해버린다.
-        if len(self.history) < self.history.maxlen:
-            self.get_logger().warn(
-                f'표본 부족 {len(self.history)}/{self.history.maxlen} — '
-                '충전 여부 판단 후 결정합니다.')
-            return
-
-        # 7) 발동 — 한 번만.
+        # 8) 발동 — 재무장 전까지 한 번만.
         self.fired = True
-        self.get_logger().warn(f'배터리 {pct:.1f}%{volt} — 기준 도달')
-
         self.publish_low_state(True)
         self.beep()
 
@@ -240,6 +292,7 @@ class BatteryGuard(Node):
                 self.get_logger().info(f'부저 울림 ({self.buzzer_level})')
 
         threading.Thread(target=run, daemon=True).start()   # spin 을 막지 않도록
+
 
 def main(args=None):
     rclpy.init(args=args)
