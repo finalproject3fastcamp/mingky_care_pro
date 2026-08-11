@@ -7,11 +7,14 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
+    GroupAction,
     IncludeLaunchDescription,
     OpaqueFunction,
-    TimerAction,
+    RegisterEventHandler,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
@@ -65,9 +68,8 @@ def _rear_camera_actions(context):
     return [rear_camera, aruco_detector]
 
 
-def generate_launch_description() -> LaunchDescription:
-    """Build the integrated rear-camera launch description."""
-    rear_stream = Node(
+def _rear_stream_action() -> Node:
+    return Node(
         package='mingky_camera_streamer',
         executable='image_streamer',
         name='rear_camera_streamer',
@@ -79,6 +81,28 @@ def generate_launch_description() -> LaunchDescription:
             'max_width': LaunchConfiguration('preview_max_width'),
             'jpeg_quality': LaunchConfiguration('preview_jpeg_quality'),
         }],
+    )
+
+
+def _rear_actions():
+    return [
+        OpaqueFunction(function=_rear_camera_actions),
+        _rear_stream_action(),
+    ]
+
+
+def generate_launch_description() -> LaunchDescription:
+    """Build the integrated rear-camera launch description."""
+    front_camera_waiter = ExecuteProcess(
+        cmd=[
+            'timeout', LaunchConfiguration('front_camera_ready_timeout'),
+            'ros2', 'topic', 'echo', '/front_camera/ready',
+            'std_msgs/msg/Bool', '--once',
+            '--qos-durability', 'transient_local',
+        ],
+        name='front_camera_ready_waiter',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('wait_for_front_camera')),
     )
     return LaunchDescription([
         DeclareLaunchArgument('robot_id', default_value='pinky-01'),
@@ -92,20 +116,30 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('start_aruco_detector', default_value='true'),
         DeclareLaunchArgument('rear_preview_port', default_value='8092'),
         DeclareLaunchArgument(
-            'start_delay',
-            default_value='0.0',
+            'wait_for_front_camera',
+            default_value='false',
             description=(
-                'CSI 카메라와 동시 초기화를 피하기 위한 후방 카메라 시작 지연(초)'
+                '전방 CSI 카메라 준비 신호를 받은 뒤 후방 카메라 시작'
             ),
+        ),
+        DeclareLaunchArgument(
+            'front_camera_ready_timeout',
+            default_value='15.0',
+            description='전방 준비 신호 최대 대기 시간. 초과 시 후방은 계속 시작',
         ),
         DeclareLaunchArgument('preview_max_fps', default_value='10.0'),
         DeclareLaunchArgument('preview_max_width', default_value='640'),
         DeclareLaunchArgument('preview_jpeg_quality', default_value='60'),
-        TimerAction(
-            period=LaunchConfiguration('start_delay'),
-            actions=[
-                OpaqueFunction(function=_rear_camera_actions),
-                rear_stream,
-            ],
+        GroupAction(
+            actions=_rear_actions(),
+            condition=UnlessCondition(
+                LaunchConfiguration('wait_for_front_camera')),
         ),
+        RegisterEventHandler(
+            OnProcessExit(
+                target_action=front_camera_waiter,
+                on_exit=_rear_actions(),
+            ),
+        ),
+        front_camera_waiter,
     ])

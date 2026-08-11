@@ -12,6 +12,7 @@ from pyzbar import pyzbar
 from pyzbar.pyzbar import ZBarSymbol
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool
 
 from mingky_interfaces.msg import GuideState, SessionStart
 from mingky_camera_streamer.mjpeg_server import MjpegServer
@@ -83,7 +84,21 @@ class QrReaderNode(Node):
         self._static_frame = None
         self._last: LastScan | None = None
 
-        self._setup_source()
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self._camera_ready_pub = self.create_publisher(
+            Bool, '/front_camera/ready', state_qos)
+        try:
+            self._setup_source()
+        except Exception:  # noqa: BLE001
+            # 후방 카메라는 전방 초기화의 성공 여부가 아니라 완료 시점만
+            # 기다린다. 실패 상태도 남겨 후방이 무기한 대기하지 않게 한다.
+            self._camera_ready_pub.publish(Bool(data=False))
+            raise
+        self._camera_ready_pub.publish(Bool(data=True))
 
         self._preview: MjpegServer | None = None
         preview_port = int(self.get_parameter("preview_port").value)
@@ -106,11 +121,6 @@ class QrReaderNode(Node):
         self._completion_scan_enabled = False
         self._arming_fails = 0
 
-        state_qos = QoSProfile(
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
         self.create_subscription(
             GuideState, '/guide_manager/state', self._on_guide_state, state_qos)
 
