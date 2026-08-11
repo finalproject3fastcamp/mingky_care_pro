@@ -26,6 +26,8 @@ esac
 N=$((10#$N))
 SSH_PORT=$((22020 + N))
 FG_PORT=$((18764 + N))
+CAMERA_FRONT_PORT=$((18799 + N * 2))
+CAMERA_REAR_PORT=$((18800 + N * 2))
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [ "$(id -u)" -eq 0 ] || { echo "sudo 로 실행하세요." >&2; exit 1; }
@@ -39,11 +41,20 @@ else
     sed -e "s/^MINGKY_ROBOT_ID=.*/MINGKY_ROBOT_ID=${ROBOT_ID}/" \
         -e "s/^MINGKY_SSH_TUNNEL_PORT=.*/MINGKY_SSH_TUNNEL_PORT=${SSH_PORT}/" \
         -e "s/^MINGKY_FOXGLOVE_TUNNEL_PORT=.*/MINGKY_FOXGLOVE_TUNNEL_PORT=${FG_PORT}/" \
+        -e "s/^MINGKY_CAMERA_FRONT_TUNNEL_PORT=.*/MINGKY_CAMERA_FRONT_TUNNEL_PORT=${CAMERA_FRONT_PORT}/" \
+        -e "s/^MINGKY_CAMERA_REAR_TUNNEL_PORT=.*/MINGKY_CAMERA_REAR_TUNNEL_PORT=${CAMERA_REAR_PORT}/" \
         "$HERE/robot.env.example" > /etc/mingky/robot.env
     chmod 644 /etc/mingky/robot.env
     echo "  생성: /etc/mingky/robot.env"
     echo "         MINGKY_ROBOT_ID=${ROBOT_ID}  SSH=${SSH_PORT}  Foxglove=${FG_PORT}"
 fi
+
+# 기존 설치의 robot.env도 새 카메라 포트만 보강한다. 이미 있는 기기별 설정은
+# 덮어쓰지 않는다.
+grep -q '^MINGKY_CAMERA_FRONT_TUNNEL_PORT=' /etc/mingky/robot.env \
+    || echo "MINGKY_CAMERA_FRONT_TUNNEL_PORT=${CAMERA_FRONT_PORT}" >> /etc/mingky/robot.env
+grep -q '^MINGKY_CAMERA_REAR_TUNNEL_PORT=' /etc/mingky/robot.env \
+    || echo "MINGKY_CAMERA_REAR_TUNNEL_PORT=${CAMERA_REAR_PORT}" >> /etc/mingky/robot.env
 
 install -m 755 "$HERE/bin/foxglove-remote.sh" /usr/local/bin/
 
@@ -61,13 +72,14 @@ systemctl enable --now \
     mingky-gateway \
     mingky-battery-pub \
     mingky-teleop-bridge \
+    mingky-camera-tunnel \
     fg-teleop
 
 cat <<EOF
 
 설치 끝. 확인:
     systemctl status mingky-ssh-tunnel mingky-gateway mingky-battery-pub \
-        mingky-teleop-bridge fg-teleop
+        mingky-teleop-bridge mingky-camera-tunnel fg-teleop
 
 아직 남은 것 — 이 스크립트가 못 하는 일:
 
@@ -81,7 +93,7 @@ cat <<EOF
      다른 로봇이 들어앉는 오배선이 생긴다.
 
      이 로봇이 필요한 줄:
-     restrict,port-forwarding,permitlisten="127.0.0.1:${FG_PORT}",permitlisten="127.0.0.1:${SSH_PORT}" <공개키> fgtunnel-${ROBOT_ID}
+     restrict,port-forwarding,permitlisten="127.0.0.1:${FG_PORT}",permitlisten="127.0.0.1:${SSH_PORT}",permitlisten="127.0.0.1:${CAMERA_FRONT_PORT}",permitlisten="127.0.0.1:${CAMERA_REAR_PORT}" <공개키> fgtunnel-${ROBOT_ID}
 
   2. Wi-Fi 자동 접속
      nmcli -f NAME,AUTOCONNECT,AUTOCONNECT-PRIORITY con show

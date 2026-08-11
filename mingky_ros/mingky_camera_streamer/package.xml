@@ -1,22 +1,19 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>mingky_qr_reader</name>
+  <name>mingky_camera_streamer</name>
   <version>0.0.0</version>
-  <description>QR reader package for the Mingky Care project.</description>
+  <description>Low-bandwidth, on-demand MJPEG streaming for Pinky cameras.</description>
   <maintainer email="mingky-care@example.com">Mingky Care Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>mingky_interfaces</exec_depend>
-  <exec_depend>mingky_camera_streamer</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-requests</exec_depend>
-  <exec_depend>python3-pyzbar</exec_depend>
-  <!-- preview_port>0 일 때 MJPEG 미리보기 서버용 (평소엔 미사용) -->
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-flask</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 
