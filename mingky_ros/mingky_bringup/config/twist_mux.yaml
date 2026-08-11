@@ -35,9 +35,9 @@ twist_mux:
         priority: 10
 
       # auto_localize_node 가 AMCL 초기 위치를 잡을 때 쓰는 소량 탐색 이동
-      # (전진/후진 왕복). 사람도 Nav2 경로계획도 아니라 별도 입력으로 뺐다.
-      # teleop(100)보다 낮아 사람 조작이 항상 이긴다. manual lock(50)보다도
-      # 낮게 둬서, 사람이 몰고 있으면 이 입력도 같이 막힌다 -- 로봇이
+      # (회전+전진/후진 왕복). 사람도 Nav2 경로계획도 아니라 별도 입력으로
+      # 뺐다. teleop(100)보다 낮아 사람 조작이 항상 이긴다. manual lock(50)
+      # 보다도 낮게 둬서, 사람이 몰고 있으면 이 입력도 같이 막힌다 -- 로봇이
       # 혼자 움직이면 안 된다.
       localize_probe:
         topic: cmd_vel_localize_probe

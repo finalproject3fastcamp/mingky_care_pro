@@ -5,7 +5,7 @@
       → /reinitialize_global_localization 호출
       → /particle_cloud 로 수렴 관찰 (mingky_localize.convergence)
       → 수렴 안 되면: /scan 으로 안전 방향 탐색 (mingky_smart_recovery 재사용)
-        → 전진 → 후진(원위치) → 재관찰
+        → 제자리 회전 → 직진(이동 중에도 라이다 계속 감시) → 후진 → 회전 복귀
       → 정해진 횟수/시간 넘으면 포기하고 이벤트만 남긴다 (억지로 계속 안 함)
 
 부팅(Nav2 기동) 시 자동 1회 실행되고, ``auto_localize/trigger`` 서비스로
@@ -19,13 +19,19 @@ map_ambiguity.py 가 찾은 "전진 0.4m + 후진 0.4m" 는 계측된 최소값�
 의 clearance 로직 그대로 재사용), 여유가 없으면 그 방향을 포기하고 다른
 방향을 시도한다.
 
-## 왜 이 결과를 "증명"이 아니라 "완화"라고 부르는가
+## 왜 좌표를 Nav2 에게 안 넘기는가 (2026-08-11, 실제 로봇에서 두 번째 교훈)
 
-파티클이 위치·방향 모두 좁게 모여도, 그게 실제로 맞다는 보장은 없다.
-map_ambiguity.py 가 찾은 것처럼 서로 다른 두 실제 위치가 라이다로 거의
-똑같이 보이면, 파티클 전체가 틀린 쪽으로 확신을 갖고 모일 수 있다. 탐색
-이동은 이 위험을 줄이는 시도이지 완전한 증명이 아니다. 최종 확인은 사람이
-대시보드/Foxglove 로 라이다 윤곽이 맵 벽과 겹치는지 보는 것이다.
+한 번은 Nav2(NavigateToPose)에게 "이 지도 좌표로 가라"고 맡겨봤다. Nav2 의
+controller_server 가 실시간으로 장애물을 감시하니 안전할 거라 생각했는데,
+**그 지도 좌표 자체가 AMCL 이 아직 확신 못 하는 위치를 기준으로 계산된
+것**이었다. 지금 우리가 이 노드를 돌리는 상황 자체가 "위치를 모른다"는
+바로 그 상황이라, 지도 좌표를 신뢰하는 방식과 애초에 안 맞았다. 실제로
+로봇이 의도한 거리보다 훨씬 멀리 이동했다.
+
+그래서 오도메트리 기반(상대 이동량)으로 되돌아왔다 -- 지금 위치가 틀려도
+"여기서부터 몇 미터"는 정확하다. 대신 이동 전 한 번 잰 라이다 여유만
+믿지 않고, **이동하는 동안에도 진행 방향의 라이다를 계속 확인해서 가까운
+장애물이 나타나면 즉시 멈춘다.**
 
 ## 왜 별도 twist_mux 채널인가
 
@@ -33,7 +39,6 @@ map_ambiguity.py 가 찾은 것처럼 서로 다른 두 실제 위치가 라이�
 로 쏘면 사람 조작과 충돌하고, cmd_vel_smoothed 로 쏘면 Nav2인 척하게 된다.
 twist_mux 에 별도 입력(cmd_vel_localize_probe)이 필요하다 — manual lock 이
 이것도 같이 막아야 사람이 몰고 있을 때 로봇이 혼자 움직이지 않는다.
-twist_mux.yaml 에 이 채널을 추가해뒀다.
 """
 
 import math
@@ -103,9 +108,26 @@ class AutoLocalizeNode(Node):
         self.declare_parameter("observe_seconds", 5.0)
         self.declare_parameter("probe_distance_m", 0.4)
         self.declare_parameter("probe_min_distance_m", 0.15)
-        self.declare_parameter("probe_linear_speed", 0.1)
+        self.declare_parameter("probe_linear_speed", 0.18)
+        self.declare_parameter("probe_angular_speed", 0.6)
         self.declare_parameter("max_probe_attempts", 3)
         self.declare_parameter("overall_timeout_sec", 60.0)
+        # 이동 중 정면(또는 후진이면 후면) 라이다 최소거리가 이보다 가까워지면
+        # 목표 거리에 안 닿았어도 즉시 멈춘다. 출발 전 한 번 잰 여유만
+        # 믿으면 안 된다는 걸 실제 로봇에서 배웠다 (아래 확인 참고).
+        self.declare_parameter("obstacle_stop_distance_m", 0.20)
+        # 방향 후보를 고를 때 재는 부채꼴 폭과 반드시 같아야 한다 --
+        # 다르면 "이 방향 10도 폭은 안전하다"고 골라놓고 실제로는 더 넓은
+        # 각도를 감시하다가 애초에 검증 안 한 옆쪽에 걸려 불필요하게 일찍
+        # 멈추는 일이 생긴다 (2026-08-11 로봇에서 실측: 후보 선택은 10도인데
+        # 감시가 20도라 매번 여유 있다고 고른 방향에서도 일찍 멈췄다).
+        self.declare_parameter("obstacle_check_half_width_deg", 10.0)
+        # 라이다(rplidar_link)가 로봇 몸체(base_footprint) 기준 180도 돌아서
+        # 달려있다 (2026-08-11 로봇에서 tf2_echo base_footprint rplidar_link
+        # 로 실측: RPY 180도, 평행이동은 1.7cm 라 무시할 만큼 작음). 이 보정
+        # 없이 /scan 각도를 그대로 "로봇 기준 방향"으로 쓰면 정면이라고 판단한
+        # 게 실제로는 후면이 되어, 실제 로봇이 벽 쪽으로 이동하는 사고가 났다.
+        self.declare_parameter("scan_yaw_offset_deg", 180.0)
 
         get = self.get_parameter
         self.robot_id = str(get("robot_id").value)
@@ -116,11 +138,17 @@ class AutoLocalizeNode(Node):
         self.probe_distance_m = float(get("probe_distance_m").value)
         self.probe_min_distance_m = float(get("probe_min_distance_m").value)
         self.probe_linear_speed = float(get("probe_linear_speed").value)
+        self.probe_angular_speed = float(get("probe_angular_speed").value)
         self.max_probe_attempts = int(get("max_probe_attempts").value)
         self.overall_timeout_sec = float(get("overall_timeout_sec").value)
+        self.obstacle_stop_distance_m = float(get("obstacle_stop_distance_m").value)
+        self.obstacle_check_half_width_rad = math.radians(
+            float(get("obstacle_check_half_width_deg").value))
+        self.scan_yaw_offset_rad = math.radians(float(get("scan_yaw_offset_deg").value))
 
         self.mode = None
         self._particles = None        # list[(x, y, yaw)] | None
+        self._particles_updated_at = None  # time.monotonic() | None
         self._latest_scan = None
         self._latest_odom_xy = None    # (x, y) | None
         self._latest_odom_yaw = None   # radians | None
@@ -140,9 +168,11 @@ class AutoLocalizeNode(Node):
         self.reset_client = self.create_client(Empty, RESET_SERVICE)
         self.create_service(Trigger, TRIGGER_SERVICE, self._on_trigger_request)
 
-        # nav2_simple_commander.BasicNavigator.waitUntilNav2Active() 대신 직접
-        # GetState 를 부른다. BasicNavigator 는 내부에서 자기 노드를 또
-        # spin() 하려고 해서 문제가 됐다 (아래 스레드 설명 참고).
+        # amcl/bt_navigator 가 active 인지 직접 GetState 로 확인한다.
+        # nav2_simple_commander.BasicNavigator 는 내부에서 spin 계열 함수를
+        # 광범위하게 써서 "Executor is already spinning" 으로 반복해서
+        # 죽었다 (별도 스레드로 옮겨도 재현됨 -- 문제가 콜백 중첩이 아니라
+        # 라이브러리 자체의 spin 사용에 있었다). 그래서 여기서도 안 쓴다.
         self.lifecycle_clients = {
             name: self.create_client(GetState, f'/{name}/get_state')
             for name in ('amcl', 'bt_navigator')
@@ -170,6 +200,7 @@ class AutoLocalizeNode(Node):
              _quat_to_yaw(p.pose.orientation.z, p.pose.orientation.w))
             for p in msg.particles
         ]
+        self._particles_updated_at = time.monotonic()
 
     def _on_scan(self, msg: LaserScan):
         self._latest_scan = msg
@@ -187,8 +218,6 @@ class AutoLocalizeNode(Node):
     # rclpy.spin_once 로 직접 펌프하지 않고 그냥 time.sleep 으로 기다린다 --
     # 메인 스레드의 rclpy.spin(self) 가 이미 계속 돌면서 구독·서비스 응답을
     # 처리해주고 있어서, 결과(예: future.done())는 기다리기만 하면 된다.
-    # (콜백 안에서 rclpy.spin_once(self, ...) 를 또 부르면 "Executor is
-    # already spinning" 으로 죽는다 -- 로봇에서 실제로 두 번 재현된 문제다.)
 
     def _wait_for_mode_then_start(self):
         if self.mode is None and time.monotonic() < self._startup_wait_deadline:
@@ -251,6 +280,7 @@ class AutoLocalizeNode(Node):
         deadline = time.monotonic() + self.overall_timeout_sec
         self._call_reset_async()
 
+        failures: dict = {}  # 방향 이름 -> 시도했는데도 안 된 횟수
         for attempt in range(self.max_probe_attempts + 1):
             if self.mode != AUTO_MODE:
                 msg = "진행 중 모드가 바뀌어 중단합니다."
@@ -259,13 +289,8 @@ class AutoLocalizeNode(Node):
                            '{"reason": "mode_changed"}')
                 return False, msg
 
-            self._spin_for(self.observe_seconds if attempt > 0 else 2.0)
-
-            result = evaluate_convergence(
-                self._particles or [],
-                threshold_m=self.convergence_threshold_m,
-                yaw_threshold_rad=self.yaw_threshold_rad,
-            )
+            result = self._observe_convergence(
+                self.observe_seconds if attempt > 0 else 2.0)
 
             if result.converged:
                 self.get_logger().info(
@@ -283,8 +308,15 @@ class AutoLocalizeNode(Node):
 
             self.get_logger().warn(
                 f"미수렴 (위치 퍼짐 {result.spread_m:.2f}m) — 탐색 이동 {attempt + 1}회차")
-            if not self._probe_once():
+            tried_name = self._probe_once(failures)
+            if tried_name is None:
                 self.get_logger().warn("안전한 탐색 방향이 없어 이동을 건너뜁니다.")
+            else:
+                # 이번에도 안 됐다는 게 다음 루프 시작에서 드러난다 (여기서는
+                # 아직 관찰 전이라 모른다). 일단 시도했다는 사실 자체를
+                # 기록해두고, 다음 관찰에서도 여전히 미수렴이면 그 시도가
+                # 헛수고였다는 뜻이니 감점을 유지한다.
+                failures[tried_name] = failures.get(tried_name, 0) + 1
 
         msg = (f"{self.max_probe_attempts}회 시도 후에도 수렴하지 않았습니다. "
                "사람 확인이 필요합니다.")
@@ -297,9 +329,7 @@ class AutoLocalizeNode(Node):
         """lifecycle 노드들이 전부 active 가 될 때까지 기다린다.
 
         각 노드의 get_state 서비스를 call_async 로 부르고 time.sleep 으로
-        기다린다. 이 메서드는 별도 스레드에서 실행되므로 (위 트리거 설명
-        참고), 메인 스레드의 rclpy.spin(self) 가 응답을 처리해줄 때까지 그냥
-        기다리기만 하면 된다.
+        기다린다 (spin 계열 함수를 안 쓰는 이유는 위 독스트링 참고).
         """
         deadline = time.monotonic() + timeout_sec
         pending = set(names)
@@ -335,48 +365,65 @@ class AutoLocalizeNode(Node):
         if not future.done():
             self.get_logger().warn(f"{RESET_SERVICE} 응답을 못 받았습니다 (타임아웃).")
 
-    def _probe_once(self) -> bool:
+    def _probe_once(self, failures: dict) -> "str | None":
+        """방향을 골라 이동한다. 고른 방향 이름을 돌려준다 (없으면 None).
+
+        failures 는 "이 방향 이름을 최근에 몇 번 시도했는데도 안 됐는가"
+        를 담는다. select_escape_candidates 에 그대로 넘기면 반복 실패한
+        방향에 감점을 줘서 다음엔 다른 방향을 우선한다 -- 실제 로봇에서
+        같은 방향(left_015)을 3번 반복하고도 퍼짐이 거의 안 줄어든 걸
+        보고 추가했다 (mingky_smart_recovery 가 원래 갖고 있던 기능인데
+        안 쓰고 있었다).
+        """
         scan = self._latest_scan
         if scan is None:
-            return False
+            return None
         config = SelectorConfig(
             nominal_distance_m=self.probe_distance_m,
             minimum_distance_m=self.probe_min_distance_m,
+            # 이동 중 감시(_sector_min_range)와 같은 폭을 써야 한다 -- 위
+            # obstacle_check_half_width_deg 파라미터 설명 참고.
+            sector_half_width_rad=self.obstacle_check_half_width_rad,
         )
+        # scan.angle_min 은 라이다 센서 기준이다. scan_yaw_offset_rad(180도)
+        # 를 더해 로봇 몸체(base_footprint) 기준 각도로 바꾼 뒤 후보를
+        # 고른다 -- 안 하면 정면/후면이 뒤바뀐다.
         candidates = select_diverse_candidates(
             select_escape_candidates(
                 scan.ranges,
-                angle_min=float(scan.angle_min),
+                angle_min=float(scan.angle_min) + self.scan_yaw_offset_rad,
                 angle_increment=float(scan.angle_increment),
                 range_min=float(scan.range_min),
                 range_max=float(scan.range_max),
                 goal_bearing_rad=0.0,
+                failures=failures,
                 config=config,
             ),
             limit=1,
         )
         if not candidates:
-            return False
+            return None
         candidate = candidates[0]
         self.get_logger().info(
             f"탐색 방향: {candidate.name}, 거리={candidate.distance_m:.2f}m, "
-            f"여유={candidate.clearance_m:.2f}m")
+            f"여유={candidate.clearance_m:.2f}m"
+            + (f" (이전 실패 {failures[candidate.name]}회)"
+               if failures.get(candidate.name) else ""))
         self._move_relative(candidate.bearing_rad, candidate.distance_m)
-        return True
+        return candidate.name
 
     def _move_relative(self, bearing_rad: float, distance_m: float):
         """지정 방향으로 이동한 뒤 정확히 반대로 돌아온다.
 
         핑키는 바퀴 2개짜리 차동구동이라 옆으로 못 간다 (linear.y 는
         무시당한다). 그래서 "왼쪽 30도로 0.4m" 같은 대각선 이동을 한 번에
-        하지 않고, **제자리 회전 → 직진 → 후진 → 반대로 회전해서 원래
-        방향으로 복귀** 로 나눈다. 실제 로봇에서 대각선 이동을 시도했다가
-        로봇이 회전을 무시하고 정면으로 그대로 가버려 벽에 부딪힌 것을
-        보고서야 발견한 문제라, 여기서 고친다.
+        하지 않고, 제자리 회전 → 직진 → 후진 → 반대로 회전해서 원래 방향
+        복귀로 나눈다.
 
         map 좌표가 아니라 odom(누적 주행거리·각도)으로 잰다. 지금 위치
         자체가 불확실해서 하는 이동이니, 상대 이동량만 맞추면 원위치로
-        돌아온다.
+        돌아온다 -- Nav2 의 지도좌표 이동과 달리 AMCL 확신도에 의존하지
+        않는다.
         """
         if self._latest_odom_xy is None or self._latest_odom_yaw is None:
             return
@@ -384,13 +431,18 @@ class AutoLocalizeNode(Node):
 
         if need_turn and not self._rotate_relative(bearing_rad):
             return
-        self._drive_straight(distance_m)
-        self._drive_straight(-distance_m)
+        # 장애물 때문에 목표 거리에 못 미쳤을 수 있다. 실제로 간 만큼만
+        # 되돌아와야 원위치로 정확히 복귀한다 (계획한 거리로 되돌리면
+        # 못 간 만큼 반대쪽으로 더 밀려난다).
+        traveled = self._drive_straight(distance_m)
+        self._drive_straight(-traveled)
         if need_turn:
             self._rotate_relative(-bearing_rad)
 
-    def _rotate_relative(self, delta_rad: float, angular_speed: float = 0.4) -> bool:
+    def _rotate_relative(self, delta_rad: float, angular_speed: float = None) -> bool:
         """odom 각도 기준으로 제자리에서 delta_rad 만큼 돈다."""
+        if angular_speed is None:
+            angular_speed = self.probe_angular_speed
         if self._latest_odom_yaw is None:
             return False
         target_yaw = _wrap_angle(self._latest_odom_yaw + delta_rad)
@@ -414,19 +466,37 @@ class AutoLocalizeNode(Node):
         self._publish_probe(Twist())
         return True
 
-    def _drive_straight(self, distance_m: float):
-        """현재 향하고 있는 방향 그대로 직진(양수)·후진(음수) 한다."""
+    def _drive_straight(self, distance_m: float) -> float:
+        """현재 향하고 있는 방향 그대로 직진(양수)·후진(음수) 한다.
+
+        출발 전 잰 여유만 믿지 않는다. 매 루프마다 진행 방향(후진이면
+        후면)의 라이다 최소거리를 다시 재서, obstacle_stop_distance_m 보다
+        가까워지면 목표 거리 전이라도 즉시 멈춘다. 실제 로봇이 "출발 전
+        확인 → 이동 중엔 안 봄" 구조 때문에 벽에 부딪힌 뒤 추가했다.
+
+        Returns:
+            실제로 이동한 거리(부호 있음, distance_m 과 같은 부호).
+        """
         start = self._latest_odom_xy
         if start is None:
-            return
+            return 0.0
         target = abs(distance_m)
-        speed = self.probe_linear_speed if distance_m >= 0 else -self.probe_linear_speed
+        forward = distance_m >= 0
+        speed = self.probe_linear_speed if forward else -self.probe_linear_speed
+        check_center = 0.0 if forward else math.pi
         deadline = time.monotonic() + (target / self.probe_linear_speed) * 2.0 + 2.0
         twist = Twist()
         twist.linear.x = speed
+        traveled = 0.0
         while rclpy.ok() and time.monotonic() < deadline:
             if self.mode != AUTO_MODE:
                 self.get_logger().warn("모드가 바뀌어 탐색 이동을 중단합니다.")
+                break
+            clearance = self._sector_min_range(check_center)
+            if clearance < self.obstacle_stop_distance_m:
+                self.get_logger().warn(
+                    f"이동 중 장애물 감지({clearance:.2f}m) — 목표 거리 전이지만 "
+                    "즉시 정지합니다.")
                 break
             self._publish_probe(twist)
             time.sleep(0.05)
@@ -437,6 +507,28 @@ class AutoLocalizeNode(Node):
             if traveled >= target:
                 break
         self._publish_probe(Twist())
+        return traveled if forward else -traveled
+
+    def _sector_min_range(self, center_rad: float) -> float:
+        """지금 이 순간, 로봇 기준 center_rad 방향 좁은 부채꼴의 라이다 최소거리(m).
+
+        scan.angle_min 에 scan_yaw_offset_rad 를 더해 로봇 몸체 기준으로
+        바꾼 뒤 잰다 (_probe_once 의 후보 선택과 같은 보정).
+        """
+        scan = self._latest_scan
+        if scan is None:
+            return float("inf")
+        angle_min = float(scan.angle_min) + self.scan_yaw_offset_rad
+        increment = float(scan.angle_increment)
+        half_width = self.obstacle_check_half_width_rad
+        best = float("inf")
+        for i, r in enumerate(scan.ranges):
+            if r is None or r != r or not (scan.range_min <= r <= scan.range_max):
+                continue
+            angle = _wrap_angle(angle_min + i * increment)
+            if abs(_wrap_angle(angle - center_rad)) <= half_width:
+                best = min(best, float(r))
+        return best
 
     def _publish_probe(self, twist: Twist):
         """워커 스레드에서 부른다. 메인 스레드가 종료 처리 중(퍼블리셔가 이미
@@ -454,6 +546,38 @@ class AutoLocalizeNode(Node):
         while rclpy.ok() and time.monotonic() < deadline:
             time.sleep(0.1)
 
+    def _observe_convergence(self, max_seconds: float):
+        """최대 max_seconds 동안 새로 들어오는 파티클로 수렴 여부를 계속 잰다.
+
+        예전엔 max_seconds 를 무조건 다 채운 뒤 딱 한 번 확인했다 -- 2초
+        만에 이미 수렴했어도 5초를 다 기다려야 했다. 이제는 0.3초마다
+        다시 재고, 수렴하면 그 즉시 반환한다.
+
+        _particles_updated_at 로 "신선한" 데이터인지 확인한다 -- 방금 한
+        이동/리셋 이전의 오래된 파티클로 잘못 "수렴했다" 고 판단하는 것을
+        막는다.
+        """
+        start = time.monotonic()
+        deadline = start + max_seconds
+        result = None
+        while rclpy.ok() and time.monotonic() < deadline:
+            if self._particles_updated_at is not None and self._particles_updated_at >= start:
+                result = evaluate_convergence(
+                    self._particles or [],
+                    threshold_m=self.convergence_threshold_m,
+                    yaw_threshold_rad=self.yaw_threshold_rad,
+                )
+                if result.converged:
+                    return result
+            time.sleep(0.3)
+        if result is None:
+            result = evaluate_convergence(
+                self._particles or [],
+                threshold_m=self.convergence_threshold_m,
+                yaw_threshold_rad=self.yaw_threshold_rad,
+            )
+        return result
+
     def _emit(self, code: str, level: int, payload: str):
         event = Event()
         event.event_id = str(uuid.uuid4())
@@ -464,7 +588,10 @@ class AutoLocalizeNode(Node):
         event.event_code = code
         event.source_node = "auto_localize_node"
         event.payload = payload
-        self.event_pub.publish(event)
+        try:
+            self.event_pub.publish(event)
+        except rclpy._rclpy_pybind11.InvalidHandle:
+            self.get_logger().debug("종료 중이라 이벤트 발행을 건너뜁니다.")
 
 
 def main():
