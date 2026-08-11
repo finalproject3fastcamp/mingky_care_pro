@@ -113,7 +113,7 @@ QR 노드가 로봇 안에서 Flask 내장 서버로 프레임을 밀어낸다. 
 | ---------------- | ---------------------------------------------------- | ----------------------- |
 | qr_reader_node   | `/qr_reader_node/session_start` (`SessionStart.msg`) | guide_manager           |
 | guide_manager 등 | `/events` (`Event.msg`)                              | event_gateway           |
-| guide_manager    | `/guide_manager/state` (`GuideState.msg`)            | (예정: LCD, 게이트웨이) |
+| guide_manager    | `/guide_manager/state` (`GuideState.msg`)            | lcd_status, qr_reader, navigation_manager |
 | event_gateway    | `/guide_manager/start_guidance` (`String/session_id`) | guide_manager           |
 | event_gateway    | `/navigation_manager/goto_pose` (`String/JSON`)       | navigation_manager      |
 | navigation_manager | `/navigation_manager/result` (`String/JSON`)       | guide_manager           |

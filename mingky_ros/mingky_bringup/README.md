@@ -5,7 +5,7 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 ## 운영 통합 실행
 
 실제 로봇 베이스, Nav2, 속도 명령 중재기, 배터리 감시, 비상정지 안전 게이트,
-Guide Manager와 Navigation Manager를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
+Guide Manager, Navigation Manager와 LCD 상태 표시를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
 조작 bridge·모드 관리자·속도 제한기는 로봇 설치 시 등록한 systemd 상시
 서비스를 사용합니다.
 
@@ -23,6 +23,12 @@ Guide Manager는 환자 세션과 검사실 순서를 관리합니다. 엔지니
 Waypoint·임시 좌표 시험 주행은 별도 Navigation Manager가 담당합니다. 시험
 주행은 한 번에 하나만 허용하며 환자 안내, 저전압 또는 비상정지 상태에서는
 시작하지 않습니다. 시험 중 환자 세션이 확인되면 시험 목표를 취소합니다.
+
+LCD는 환자 확인, `출발 위치 → X-ray` 또는 `X-ray → CT` 안내, 검사실 도착,
+대기 장소 이동·도착과 안내 완료를 표시합니다. 비상정지와 배터리 부족은 안내
+문구보다 우선합니다. LCD를 쓰지 않는 개발 PC에서는
+`start_lcd_status:=false`를 전달합니다. 같은 SPI 장치를 사용하는
+`pinky_emotion emotion_server`와 동시에 실행하면 안 됩니다.
 
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면

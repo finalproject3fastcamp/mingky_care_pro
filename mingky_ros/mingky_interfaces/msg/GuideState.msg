@@ -35,8 +35,11 @@ string session_state
 # guidance_sessions.session_id. 세션이 없으면 0.
 int64 session_id
 
-# 현재 안내 중인 환자와 목적지. 세션이 없으면 빈 문자열.
+# 현재 안내 중인 환자와 이동 구간. 세션이 없으면 빈 문자열.
 string patient_id
+# 첫 목적지로 출발할 때는 빈 문자열. 두 번째 목적지부터는 직전 검사실 이름.
+# LCD처럼 늦게 뜨는 구독자도 "X-ray → CT"를 복원할 수 있도록 상태에 포함한다.
+string previous_visit
 string current_visit
 
 # 배터리. percentage 는 파생값이라 없을 수 있으므로 -1 을 '모름' 으로 쓴다.
