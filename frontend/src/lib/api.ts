@@ -36,7 +36,12 @@ export async function disarmRobot(robotId: string): Promise<Robot> {
 }
 
 /** 로봇에 내리는 명령. schemas.py 의 OrderIn 과 같은 목록이다. */
-export type RobotCommand = 'goto' | 'goto_pose' | 'start_session' | 'set_mode'
+export type RobotCommand =
+  | 'goto'
+  | 'goto_pose'
+  | 'start_session'
+  | 'start_guidance'
+  | 'set_mode'
 
 /** mode_manager 가 인정하는 값. 그 외는 로봇이 무시한다. */
 export type RobotMode = 'auto' | 'manual' | 'estop'

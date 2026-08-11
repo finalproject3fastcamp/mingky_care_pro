@@ -469,36 +469,44 @@ class GuideManager(Node):
         try:
             requested_session_id = int(requested)
         except ValueError:
-            self.get_logger().warn(
+            self._reject_start_guidance(
+                'invalid_session_id',
                 f'출발 명령의 session_id가 올바르지 않습니다: {requested!r}')
             return
 
         if requested_session_id <= 0 or requested_session_id != self.session_id:
-            self.get_logger().warn(
+            self._reject_start_guidance(
+                'session_mismatch',
                 f'출발 명령 세션 불일치: 요청={requested_session_id}, '
                 f'현재={self.session_id}')
             return
         if self.session_state != GuideState.SESSION_CONFIRMED:
-            self.get_logger().warn(
+            self._reject_start_guidance(
+                'invalid_state',
                 f'환자 확인 상태에서만 출발할 수 있습니다: {self.session_state}')
             return
         if self._battery_alarm:
-            self.get_logger().warn('배터리 부족 상태에서는 출발할 수 없습니다.')
+            self._reject_start_guidance(
+                'battery_low', '배터리 부족 상태에서는 출발할 수 없습니다.')
             return
         if self._emergency_engaged:
-            self.get_logger().warn('비상정지 상태에서는 출발할 수 없습니다.')
+            self._reject_start_guidance(
+                'emergency_stop', '비상정지 상태에서는 출발할 수 없습니다.')
             return
         if self._maintenance_nav_active:
-            self.get_logger().warn(
+            self._reject_start_guidance(
+                'waypoint_test_active',
                 'Waypoint 시험 주행이 끝나기 전에는 환자 안내를 시작할 수 없습니다.')
             return
         if not self.current_visit:
-            self.get_logger().error('현재 세션에 방문할 검사실이 없습니다.')
+            self._reject_start_guidance(
+                'missing_visit', '현재 세션에 방문할 검사실이 없습니다.')
             return
 
         waypoint_name = self._visit_waypoint(self.current_visit, 'goal')
         if not waypoint_name:
-            self.get_logger().error(
+            self._reject_start_guidance(
+                'missing_waypoint',
                 f'방문지 goal 매핑이 없습니다: {self.current_visit!r}')
             return
 
@@ -506,6 +514,14 @@ class GuideManager(Node):
             f'안내 출발 승인: session_id={self.session_id} '
             f'{self.current_visit!r} -> {waypoint_name!r}')
         self.send_goal(waypoint_name)
+
+    def _reject_start_guidance(self, reason: str, message: str) -> None:
+        self.get_logger().warn(message)
+        self.events.publish(
+            'session.start_rejected',
+            {'reason': reason},
+            self.session_id,
+        )
 
     def _on_session_start(self, msg: SessionStart):
         """최초 QR은 세션을 확인하고, 검사실 재스캔은 현재 단계를 완료한다."""
@@ -569,6 +585,12 @@ class GuideManager(Node):
             f'patient={self.patient_id} step={msg.current_step_order}/'
             f'{len(self.session_visits)} current_visit={self.current_visit!r} '
             f'visits={self.session_visits}')
+        if self.session_state == GuideState.SESSION_CONFIRMED:
+            self.events.publish(
+                'session.ready',
+                {'current_visit': self.current_visit},
+                self.session_id,
+            )
 
     def _complete_current_step_from_qr(self) -> None:
         """waiting spot에서 같은 환자 QR을 현재 검사 완료로 해석한다."""
@@ -753,6 +775,10 @@ class GuideManager(Node):
             elif is_waiting:
                 self._waiting_spot_failed(
                     self.current_visit, waypoint_name, -2)
+            else:
+                self._goal_failed(
+                    waypoint_name, False, session_id, -2,
+                    '안내 Waypoint를 찾을 수 없습니다.')
             return
         if not self.nav.wait_for_server(timeout_sec=3.0):
             self.get_logger().error('navigate_to_pose 액션 서버가 없습니다.')
@@ -761,6 +787,10 @@ class GuideManager(Node):
             elif is_waiting:
                 self._waiting_spot_failed(
                     self.current_visit, waypoint_name, -3)
+            else:
+                self._goal_failed(
+                    waypoint_name, False, session_id, -3,
+                    'Nav2 없이는 안내를 시작할 수 없습니다.')
             return
 
         goal = NavigateToPose.Goal()
@@ -1163,6 +1193,7 @@ class GuideManager(Node):
                 self.current_visit, waypoint_name, error_code)
         else:
             self.robot_state = GuideState.ROBOT_IDLE
+            self.session_state = GuideState.SESSION_CONFIRMED
             self.events.publish(
                 'nav.goal_aborted',
                 {

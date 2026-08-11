@@ -136,7 +136,11 @@ QR 페이로드는 지금은 `patient_id` 평문(예: `p001`)입니다. MVP 데�
 - `visit_names[]` — step_order 순서의 방문지 이름 배열
 
 `guide_manager` 는 최초 메시지를 받으면 `patient_confirmed`로 저장하고
-관제 출발 명령을 기다립니다. 출발 후에는 각 검사실의 `goal` 도착을
+`session.ready`를 발행한 뒤 관제 출발 명령을 기다립니다. 의료진 화면에서
+**안내 시작**을 누르면 백엔드가 활성 세션과 로봇의 일치 여부를 검증하고,
+Event Gateway가 `/guide_manager/start_guidance`로 세션 ID를 전달합니다.
+Guide Manager가 세션 상태·배터리·비상정지·Waypoint를 다시 검증한 뒤
+첫 목적지로 출발합니다. 출발 후에는 각 검사실의 `goal` 도착을
 기록하고 `waiting` 위치로 이동합니다. 이 상태에서만 QR 스캔을 다시
 열며, 같은 환자·세션이 재인식되면 `session.step_completed`를
 발행하고 다음 검사실로 출발합니다. 마지막 단계에서는
@@ -148,13 +152,15 @@ QR 페이로드는 지금은 `patient_id` 평문(예: `p001`)입니다. MVP 데�
 
 - `GET /api/sessions/active` — 활성 세션 목록
 - `GET /api/robots` — 로봇 상태 + armed 여부
-- `GET /api/events?limit=30` — 최근 이벤트
+- `GET /api/events?robot_id={id}&limit=100` — 선택 로봇의 최근 이벤트
 
 QR 이 인식된 순간의 흐름:
 
 1. 로봇의 `active_session_id` 가 `null → 값 있음` 으로 바뀐 tick 을 감지
 2. 이걸 "방금 새 스캔이 성공했다" 로 판단해 `ScanConfirmation` 화면을 2.2초 노출
 3. 이후 세션 뷰(환자 정보·진행 스텝·알림) 로 전환
+4. `session.ready`, 자동 주행 모드, 로봇 연결이 모두 확인되면 **안내 시작** 활성화
+5. 버튼 응답은 `nav.goal_sent`, `nav.goal_aborted`, `session.start_rejected`로 판정
 
 **왜 WebSocket 이 아니라 폴링인가:** 관제 화면의 요구는 초 단위 반응이면
 충분하고, MVP 단계에서 실시간 push 채널은 오버엔지니어링이라 판단했습니다.

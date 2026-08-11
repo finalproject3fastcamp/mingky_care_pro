@@ -843,6 +843,65 @@
   color: var(--text-muted);
 }
 
+.guidance-start {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 72%);
+}
+
+.guidance-start__copy {
+  display: grid;
+  gap: 6px;
+}
+
+.guidance-start__eyebrow {
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.guidance-start h2,
+.guidance-start p {
+  margin: 0;
+}
+
+.guidance-start h2 {
+  font-size: 1.15rem;
+}
+
+.guidance-start__note {
+  color: var(--warning);
+  font-size: 0.84rem;
+}
+
+.guidance-start__error {
+  color: var(--danger);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.guidance-start__button {
+  min-width: 150px;
+  min-height: 48px;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .guidance-start {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .guidance-start__button {
+    width: 100%;
+  }
+}
+
 @keyframes scanConfirmIn {
   from {
     opacity: 0;

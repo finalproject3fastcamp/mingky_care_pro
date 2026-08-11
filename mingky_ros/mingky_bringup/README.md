@@ -54,8 +54,11 @@ Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`�
 ## QR 안내 상태머신 테스트
 
 QR을 인식하면 Guide Manager는 세션을 `patient_confirmed` 상태로 저장하고
-관제 출발 명령을 기다립니다. 관제 시작 버튼이 연결되기 전에는 현재 세션 ID를
-확인한 뒤 테스트 명령으로 동일한 출발 신호를 보낼 수 있습니다.
+`session.ready` 이벤트를 발행한 뒤 관제 출발 명령을 기다립니다. 의료진 화면에서
+로봇을 자동 주행 모드로 전환하고 **안내 시작**을 누르면 현재 세션 ID가
+HTTP 명령 큐와 Event Gateway를 거쳐 Guide Manager로 전달됩니다.
+
+아래 스크립트는 대시보드 없이 ROS 배관만 점검할 때 사용합니다.
 
 ```bash
 ros2 topic echo --once /guide_manager/state
