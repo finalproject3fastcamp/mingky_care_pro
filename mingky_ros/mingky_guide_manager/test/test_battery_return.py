@@ -123,9 +123,25 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
     assert node.nav.sent[0].pose.pose.position.x == 1.0
     assert node.robot_state == GuideState.ROBOT_MOVING
     assert node.session_state == GuideState.SESSION_GUIDING
+    assert node.previous_visit == ''
     assert node.current_visit == 'X-ray'
     assert published == [
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
+
+
+def test_resumed_session_restores_previous_visit_for_display(manager):
+    node, _ = manager
+
+    node._on_session_start(SessionStart(
+        session_id=73,
+        patient_id='patient-resumed',
+        current_step_order=2,
+        visit_names=['X-ray', 'CT', '물리치료실'],
+    ))
+
+    assert node.previous_visit == 'X-ray'
+    assert node.current_visit == 'CT'
+    assert node.session_state == GuideState.SESSION_CONFIRMED
 
 
 def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
@@ -331,6 +347,7 @@ def test_waiting_qr_completes_step_and_starts_next_visit(manager):
     ))
 
     assert node.current_step_order == 2
+    assert node.previous_visit == 'X-ray'
     assert node.current_visit == 'CT'
     assert node.session_state == GuideState.SESSION_GUIDING
     assert node.robot_state == GuideState.ROBOT_MOVING
@@ -360,6 +377,7 @@ def test_waiting_qr_completes_final_step_and_session(manager):
     ))
 
     assert node.current_step_order == 0
+    assert node.previous_visit == 'CT'
     assert node.session_state == GuideState.SESSION_COMPLETED
     assert node.robot_state == GuideState.ROBOT_IDLE
     assert node.nav.sent == []

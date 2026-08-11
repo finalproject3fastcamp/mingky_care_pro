@@ -66,6 +66,20 @@ def test_non_clinical_navigation_has_a_separate_manager() -> None:
     assert managers['navigation_manager'].get('pkg') == 'mingky_navigation_manager'
 
 
+def test_lcd_status_is_the_only_integrated_lcd_owner() -> None:
+    root = _root()
+
+    assert _argument(root, 'start_lcd_status').get('default') == 'true'
+    lcd_nodes = [
+        item for item in root.findall('node')
+        if item.get('name') == 'lcd_status'
+    ]
+    assert len(lcd_nodes) == 1
+    assert lcd_nodes[0].get('pkg') == 'mingky_lcd_status'
+    assert lcd_nodes[0].get('if') == '$(var start_lcd_status)'
+    assert all(item.get('pkg') != 'pinky_emotion' for item in root.findall('node'))
+
+
 def test_systemd_owned_publishers_are_not_duplicated() -> None:
     root = _root()
 

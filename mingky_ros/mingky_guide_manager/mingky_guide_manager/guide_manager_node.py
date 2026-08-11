@@ -133,6 +133,7 @@ class GuideManager(Node):
         self.session_id = 0
         self.patient_id = ''
         self.current_step_order = 0
+        self.previous_visit = ''
         self.current_visit = ''
         self.voltage = float('nan')
         self.percent = -1
@@ -364,6 +365,7 @@ class GuideManager(Node):
         self.session_state = GuideState.SESSION_NONE
         self.patient_id = ''
         self.current_step_order = 0
+        self.previous_visit = ''
         self.current_visit = ''
         self._dock_attempt = 0
         if self._emergency_engaged:
@@ -456,6 +458,7 @@ class GuideManager(Node):
         if self._maintenance_nav_active:
             self.navigation_cancel_pub.publish(Bool(data=True))
         self.patient_id = msg.data.strip()
+        self.previous_visit = ''
         self.session_state = GuideState.SESSION_CONFIRMED
         self.events.publish(
             'session.started',
@@ -559,6 +562,9 @@ class GuideManager(Node):
         # 보정하면 완료된 세션을 재스캔했을 때 첫 검사실로 다시 출발한다.
         self.current_step_order = int(msg.current_step_order)
         idx = self.current_step_order - 1
+        self.previous_visit = (
+            self.session_visits[idx - 1]
+            if 0 < idx < len(self.session_visits) else '')
         self.current_visit = (
             self.session_visits[idx] if 0 <= idx < len(self.session_visits) else '')
         self.session_state = (
@@ -592,6 +598,7 @@ class GuideManager(Node):
         )
 
         if completed_order >= len(self.session_visits):
+            self.previous_visit = self.current_visit
             self.current_step_order = 0
             self.session_state = GuideState.SESSION_COMPLETED
             self.robot_state = GuideState.ROBOT_IDLE
@@ -600,6 +607,7 @@ class GuideManager(Node):
             self.get_logger().info(f'안내 세션 완료: session_id={self.session_id}')
             return
 
+        self.previous_visit = self.current_visit
         self.current_step_order = completed_order + 1
         self.current_visit = self.session_visits[self.current_step_order - 1]
         waypoint_name = self._visit_waypoint(self.current_visit, 'goal')
@@ -1180,6 +1188,7 @@ class GuideManager(Node):
         msg.session_state = self.session_state
         msg.session_id = self.session_id
         msg.patient_id = self.patient_id
+        msg.previous_visit = self.previous_visit
         msg.current_visit = self.current_visit
         msg.battery_voltage = float(self.voltage)
         msg.battery_percent = self.percent
