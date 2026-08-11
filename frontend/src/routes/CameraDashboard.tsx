@@ -142,7 +142,8 @@ export function CameraDashboard() {
         </div>
 
         <p className="camera-view__note">
-          기본 전송 설정: 최대 640px · 3 FPS · JPEG 품질 60
+          설정 상한: 최대 640px · 최대 10 FPS · JPEG 품질 60
+          (실제 FPS는 네트워크 상태에 따라 달라질 수 있습니다.)
         </p>
         {streamState === 'error' && (
           <p className="camera-view__error">

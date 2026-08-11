@@ -9,6 +9,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
+    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -90,9 +91,21 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument('start_aruco_detector', default_value='true'),
         DeclareLaunchArgument('rear_preview_port', default_value='8092'),
+        DeclareLaunchArgument(
+            'start_delay',
+            default_value='0.0',
+            description=(
+                'CSI 카메라와 동시 초기화를 피하기 위한 후방 카메라 시작 지연(초)'
+            ),
+        ),
         DeclareLaunchArgument('preview_max_fps', default_value='10.0'),
         DeclareLaunchArgument('preview_max_width', default_value='640'),
         DeclareLaunchArgument('preview_jpeg_quality', default_value='60'),
-        OpaqueFunction(function=_rear_camera_actions),
-        rear_stream,
+        TimerAction(
+            period=LaunchConfiguration('start_delay'),
+            actions=[
+                OpaqueFunction(function=_rear_camera_actions),
+                rear_stream,
+            ],
+        ),
     ])

@@ -22,6 +22,9 @@
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
     <arg name="camera_profile" default=""/>
     <arg name="rear_preview_port" default="8092"/>
+    <!-- Pi 5에서 CSI와 USB 카메라를 동시에 초기화하면 videobuf2 드라이버가
+         멈출 수 있다. QR용 CSI 카메라가 안정된 뒤 후방 카메라를 시작한다. -->
+    <arg name="rear_camera_start_delay" default="10.0"/>
     <arg name="camera_preview_max_fps" default="10.0"/>
     <arg name="camera_preview_max_width" default="640"/>
     <arg name="camera_preview_jpeg_quality" default="60"/>
@@ -73,6 +76,7 @@
         <arg name="camera_profile" value="$(var camera_profile)"/>
         <arg name="start_aruco_detector" value="$(var start_rear_aruco_detector)"/>
         <arg name="rear_preview_port" value="$(var rear_preview_port)"/>
+        <arg name="start_delay" value="$(var rear_camera_start_delay)"/>
         <arg name="preview_max_fps" value="$(var camera_preview_max_fps)"/>
         <arg name="preview_max_width" value="$(var camera_preview_max_width)"/>
         <arg name="preview_jpeg_quality" value="$(var camera_preview_jpeg_quality)"/>

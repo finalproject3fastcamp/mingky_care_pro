@@ -54,6 +54,7 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
 
     assert _argument(root, 'qr_preview_port').get('default') == '8091'
     assert _argument(root, 'rear_preview_port').get('default') == '8092'
+    assert _argument(root, 'rear_camera_start_delay').get('default') == '10.0'
     assert _argument(root, 'camera_preview_max_fps').get('default') == '10.0'
     assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
     aruco_arg = _argument(root, 'start_rear_aruco_detector')
@@ -69,6 +70,7 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     }
     assert forwarded['robot_id'] == '$(var robot_id)'
     assert forwarded['camera_profile'] == '$(var camera_profile)'
+    assert forwarded['start_delay'] == '$(var rear_camera_start_delay)'
     assert (
         forwarded['start_aruco_detector']
         == '$(var start_rear_aruco_detector)'
