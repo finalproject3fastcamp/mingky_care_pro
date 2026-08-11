@@ -23,6 +23,35 @@ async def _require_robot(robot_id: str) -> None:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
 
+async def _require_active_session(robot_id: str, argument: str) -> None:
+    """출발 명령이 현재 로봇의 활성 세션을 정확히 가리키는지 확인한다."""
+    try:
+        session_id = int(argument)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="start_guidance requires a session_id") from exc
+    if session_id <= 0:
+        raise HTTPException(
+            status_code=422, detail="start_guidance requires a positive session_id")
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        matches = await conn.fetchval(
+            """
+            SELECT 1
+            FROM guidance_sessions
+            WHERE session_id = $1 AND robot_id = $2 AND ended_at IS NULL
+            """,
+            session_id,
+            robot_id,
+        )
+    if not matches:
+        raise HTTPException(
+            status_code=409,
+            detail="session is not active for this robot",
+        )
+
+
 @router.post("/{robot_id}/orders", response_model=OrderOut, status_code=201)
 async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
     """명령을 건다. 대시보드가 호출한다.
@@ -32,6 +61,8 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
     소화하는 쪽이 오히려 위험하다.
     """
     await _require_robot(robot_id)
+    if body.command == "start_guidance":
+        await _require_active_session(robot_id, body.argument)
     return orders.put(robot_id, body.command, body.argument)
 
 

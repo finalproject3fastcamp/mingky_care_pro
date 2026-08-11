@@ -130,6 +130,16 @@ dock.return_failed:
 
 # === 세션 ===================================================================
 
+session.ready:
+  level: info
+  payload: { current_visit: string }
+  # QR 응답이 로봇의 guide_manager까지 전달되어 첫 출발 명령을 받을 준비가 됨.
+
+session.start_rejected:
+  level: warning
+  payload: { reason: string }
+  # 관제에서 보낸 출발 요청을 로봇 상태머신이 거부한 이유.
+
 session.started:
   level: info
   payload: { patient_id: string, marker_id: int }

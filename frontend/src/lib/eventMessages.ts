@@ -36,6 +36,10 @@ function messageFor(code: string, payload: Record<string, unknown>): string {
       return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 실패 (코드 ${p.error_code ?? '?'})`
     case 'session.started':
       return `안내 시작: ${p.patient_id ?? ''}`
+    case 'session.ready':
+      return `${p.current_visit ?? '첫 목적지'} 안내 준비 완료`
+    case 'session.start_rejected':
+      return `안내 시작 거부: ${p.reason ?? '알 수 없는 이유'}`
     case 'session.step_completed':
       return `단계 ${p.step_order ?? '?'} 완료 (${p.source ?? '?'})`
     case 'session.ended':

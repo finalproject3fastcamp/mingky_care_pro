@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
+import { GuidanceStartCard } from '../components/GuidanceStartCard'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -46,7 +47,12 @@ export function MedicalDashboard() {
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
   const events = usePolling(
-    async (signal) => (await listEvents({ limit: 30 }, { signal })).items,
+    async (signal) => (
+      await listEvents(
+        { robot_id: selectedRobotId ?? undefined, limit: 100 },
+        { signal },
+      )
+    ).items,
     POLL_MS,
   )
 
@@ -54,7 +60,8 @@ export function MedicalDashboard() {
   // 조작이라 할 수 없고, 위치도 지도 위에서 끊겨 보인다.
   const teleop = useTeleopSocket(selectedRobotId)
 
-  // 모드는 대시보드의 이벤트 목록에서 찾지 않는다. 그 목록은 최근 30건이라
+  // 모드는 대시보드의 이벤트 목록에서 찾지 않는다. 그 목록은 선택 로봇의 최근
+  // 100건이라
   // nav.* 이 쌓이면 모드 변경이 창 밖으로 밀려 "확인 중" 으로 돌아간다.
   const mode = useRobotMode(selectedRobotId, POLL_MS)
 
@@ -240,6 +247,8 @@ export function MedicalDashboard() {
           session={activeSession}
           robot={selectedRobot}
           events={sessionEvents}
+          mode={mode}
+          robotConnected={teleop.robotConnected}
         />
       ) : (
         // 스캔 대기 순간엔 카메라가 카드 안에 들어가 있어야 "여기에 QR 을
@@ -258,9 +267,17 @@ interface SessionViewProps {
   session: ActiveSession
   robot: Robot
   events: EventOut[]
+  mode: 'auto' | 'manual' | 'estop' | null
+  robotConnected: boolean
 }
 
-function SessionView({ session, robot, events }: SessionViewProps) {
+function SessionView({
+  session,
+  robot,
+  events,
+  mode,
+  robotConnected,
+}: SessionViewProps) {
   const derivedState = deriveRobotState(events, {
     session_id: session.session_id,
     robot_id: session.robot_id,
@@ -286,6 +303,12 @@ function SessionView({ session, robot, events }: SessionViewProps) {
           currentDestination={derivedDestination}
         />
       </div>
+      <GuidanceStartCard
+        session={session}
+        events={sessionOnlyEvents}
+        mode={mode}
+        robotConnected={robotConnected}
+      />
       <ProgressStepper
         steps={session.steps}
         currentStepOrder={session.current_step_order}
@@ -311,7 +334,9 @@ function ScanConfirmation({ session }: { session: ActiveSession }) {
         {session.patient.name}
         <span className="scan-confirm-id mono">{session.patient.patient_id}</span>
       </div>
-      <div className="scan-confirm-hint">안내를 시작합니다…</div>
+      <div className="scan-confirm-hint">
+        환자가 확인되었습니다. 안내 시작 버튼을 눌러주세요.
+      </div>
     </div>
   )
 }
