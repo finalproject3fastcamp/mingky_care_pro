@@ -18,7 +18,7 @@ class MjpegServer:
         *,
         max_width: int = 640,
         quality: int = 60,
-        max_fps: float = 3.0,
+        max_fps: float = 10.0,
     ) -> None:
         from flask import Flask, Response, jsonify
 

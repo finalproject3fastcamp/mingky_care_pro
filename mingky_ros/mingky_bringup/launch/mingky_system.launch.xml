@@ -18,8 +18,11 @@
     <!-- 전방은 QR Reader가 카메라를 단독 소유하면서 관제 미리보기도 제공한다. -->
     <arg name="qr_preview_port" default="8091"/>
     <arg name="start_rear_camera_stream" default="true"/>
+    <arg name="start_rear_aruco_detector" default="true"/>
+    <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
+    <arg name="camera_profile" default=""/>
     <arg name="rear_preview_port" default="8092"/>
-    <arg name="camera_preview_max_fps" default="3.0"/>
+    <arg name="camera_preview_max_fps" default="10.0"/>
     <arg name="camera_preview_max_width" default="640"/>
     <arg name="camera_preview_jpeg_quality" default="60"/>
     <!-- 로봇 설치 시 gateway와 teleop bridge는 systemd 상시 서비스다. gateway를
@@ -66,6 +69,9 @@
          축소 JPEG를 낮은 FPS로 보낸다. -->
     <include file="$(find-pkg-share mingky_bringup)/launch/camera_streams.launch.py"
              if="$(var start_rear_camera_stream)">
+        <arg name="robot_id" value="$(var robot_id)"/>
+        <arg name="camera_profile" value="$(var camera_profile)"/>
+        <arg name="start_aruco_detector" value="$(var start_rear_aruco_detector)"/>
         <arg name="rear_preview_port" value="$(var rear_preview_port)"/>
         <arg name="preview_max_fps" value="$(var camera_preview_max_fps)"/>
         <arg name="preview_max_width" value="$(var camera_preview_max_width)"/>

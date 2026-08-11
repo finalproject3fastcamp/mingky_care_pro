@@ -53,7 +53,7 @@ class QrReaderNode(Node):
         # 0 이면 축소하지 않는다.
         self.declare_parameter("preview_max_width", 640)
         self.declare_parameter("preview_jpeg_quality", 60)
-        self.declare_parameter("preview_max_fps", 3.0)
+        self.declare_parameter("preview_max_fps", 10.0)
         # arming 폴링 주기. 백엔드에 GET /robots/<id>/arming 을 주기로 던져
         # 의료진이 이 로봇을 활성화했는지 확인한다. armed 가 아니면 QR 을
         # 디코드/전송하지 않는다.

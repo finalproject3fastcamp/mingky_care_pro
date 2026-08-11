@@ -88,7 +88,7 @@ def generate_launch_description() -> LaunchDescription:
     )
     preview_max_fps_arg = DeclareLaunchArgument(
         'preview_max_fps',
-        default_value='3.0',
+        default_value='10.0',
         description='관제 미리보기 최대 FPS',
     )
     arming_poll_seconds_arg = DeclareLaunchArgument(

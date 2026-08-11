@@ -17,7 +17,7 @@ class ImageStreamerNode(Node):
         super().__init__('camera_image_streamer')
         self.declare_parameter('image_topic', '/rear_camera/image_raw')
         self.declare_parameter('port', 8092)
-        self.declare_parameter('max_fps', 3.0)
+        self.declare_parameter('max_fps', 10.0)
         self.declare_parameter('max_width', 640)
         self.declare_parameter('jpeg_quality', 60)
 

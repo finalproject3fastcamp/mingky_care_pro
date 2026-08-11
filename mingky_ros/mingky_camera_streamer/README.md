@@ -7,7 +7,7 @@ ROS Image 토픽을 관제용 저대역폭 MJPEG로 변환합니다. 원본 영�
 ```bash
 ros2 run mingky_camera_streamer image_streamer --ros-args \
   -p image_topic:=/rear_camera/image_raw \
-  -p port:=8092 -p max_fps:=3.0 -p max_width:=640 -p jpeg_quality:=60
+  -p port:=8092 -p max_fps:=10.0 -p max_width:=640 -p jpeg_quality:=60
 ```
 
 스트림은 로봇의 loopback에만 열립니다. `mingky-camera-tunnel.service`가
