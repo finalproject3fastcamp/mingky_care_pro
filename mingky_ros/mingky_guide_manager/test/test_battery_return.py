@@ -126,6 +126,8 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
     assert node.previous_visit == ''
     assert node.current_visit == 'X-ray'
     assert published == [
+        ('session.ready', {'current_visit': 'X-ray'}, 71),
+        ('session.start_rejected', {'reason': 'session_mismatch'}, 71),
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
 
 
@@ -233,7 +235,7 @@ def test_explicit_no_waiting_spot_waits_at_clinical_goal(manager):
 
 
 def test_start_guidance_rejects_unknown_visit_mapping(manager):
-    node, _ = manager
+    node, published = manager
     node.session_id = 72
     node.session_state = GuideState.SESSION_CONFIRMED
     node.current_visit = '등록되지 않은 검사실'
@@ -242,6 +244,8 @@ def test_start_guidance_rejects_unknown_visit_mapping(manager):
 
     assert node.nav.sent == []
     assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert published == [
+        ('session.start_rejected', {'reason': 'missing_waypoint'}, 72)]
 
 
 def test_completed_schedule_does_not_restart_first_visit(manager):
@@ -293,7 +297,7 @@ def test_waypoint_result_updates_robot_but_not_session_state(manager):
 
 
 def test_guidance_does_not_start_while_waypoint_test_is_active(manager):
-    node, _ = manager
+    node, published = manager
     node.session_id = 80
     node.session_state = GuideState.SESSION_CONFIRMED
     node.current_visit = 'X-ray'
@@ -304,6 +308,28 @@ def test_guidance_does_not_start_while_waypoint_test_is_active(manager):
     node._on_start_guidance(String(data='80'))
 
     assert node.nav.sent == []
+    assert published == [
+        ('session.start_rejected', {'reason': 'waypoint_test_active'}, 80)]
+
+
+def test_nav2_unavailable_returns_session_to_confirmed_for_retry(manager):
+    node, published = manager
+    node.session_id = 86
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = 'X-ray'
+    node.visit_waypoints['X-ray'] = {'goal': 'xray_room_goal'}
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node.nav.wait_for_server = lambda timeout_sec: False
+
+    node._on_start_guidance(String(data='86'))
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert published == [('nav.goal_aborted', {
+        'visit_name': 'X-ray',
+        'error_code': -3,
+    }, 86)]
 
 
 def test_rejected_second_waypoint_does_not_clear_active_robot_state(manager):

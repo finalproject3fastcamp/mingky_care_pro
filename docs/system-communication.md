@@ -15,6 +15,8 @@
 | 로봇 (event_gateway) | 백엔드       | HTTP POST `/events` (배치)               | 발행      | 배치 주기 (수 초) |
 | 로봇 (event_gateway) | 백엔드       | HTTP POST `/robots/{id}/battery`          | 발행      | 2분 주기          |
 | 프론트               | 백엔드       | HTTP GET                                 | 폴링      | 최대 3초          |
+| 프론트               | 백엔드       | HTTP POST `/robots/{id}/orders`           | 명령      | 즉시              |
+| 로봇 (event_gateway) | 백엔드       | HTTP GET `/robots/{id}/orders/next`       | 롱폴링    | 명령 즉시 응답    |
 | 로봇 (qr_reader)     | 프론트       | HTTP `multipart/x-mixed-replace` (MJPEG) | 스트림    | 실시간            |
 | 로봇 노드 간         | 로봇 노드 간 | DDS / UDP                                | pub/sub   | 밀리초            |
 
@@ -58,7 +60,7 @@
 
 - `GET /api/sessions/active` — 환자 정보 카드 · 진행 상황 스텝
 - `GET /api/robots` — 로봇 상태 카드의 배터리 (`session.robot_id` 매칭)
-- `GET /api/events?limit=30` — 알림 영역(최근 10건 슬라이스) + 로봇 상태·현재 목적지 파생
+- `GET /api/events?robot_id={id}&limit=100` — 알림 영역 + 로봇 상태·현재 목적지 파생
 
 **로봇 실시간 상태 API 는 별도로 두지 않는다.** 대신 이벤트 스트림에서
 파생한다 ([`lib/derivedStatus.ts`](../frontend/src/lib/derivedStatus.ts)).
@@ -79,7 +81,10 @@ WebSocket / SSE 는 MVP 오버엔지니어링이라 판단했고, 관제 화면�
 속도(초 단위)면 충분하다. 실시간 요구가 커지면 SSE 로 전환 예정.
 
 의료진 화면은 `POST/DELETE /api/robots/{id}/arm`으로 로봇을 활성화하거나
-취소한다. 세션 종료 · 단계 수동 완료 같은 쓰기 액션은 아직 UI가 없다.
+취소한다. QR 세션이 준비되면 `POST /api/robots/{id}/orders`에
+`start_guidance(session_id)`를 넣으며, 로봇 Event Gateway의 롱폴링이 명령을
+받아 `/guide_manager/start_guidance`로 전달한다. 단계 수동 완료 같은 쓰기
+액션은 아직 UI가 없다.
 
 ## 채널 3 · 로봇 → 프론트 (MJPEG 직접)
 
@@ -109,6 +114,7 @@ QR 노드가 로봇 안에서 Flask 내장 서버로 프레임을 밀어낸다. 
 | qr_reader_node   | `/qr_reader_node/session_start` (`SessionStart.msg`) | guide_manager           |
 | guide_manager 등 | `/events` (`Event.msg`)                              | event_gateway           |
 | guide_manager    | `/guide_manager/state` (`GuideState.msg`)            | lcd_status, qr_reader, navigation_manager |
+| event_gateway    | `/guide_manager/start_guidance` (`String/session_id`) | guide_manager           |
 | event_gateway    | `/navigation_manager/goto_pose` (`String/JSON`)       | navigation_manager      |
 | navigation_manager | `/navigation_manager/result` (`String/JSON`)       | guide_manager           |
 
@@ -125,8 +131,13 @@ t=0.1s   qr_reader: QR 인식 → POST /qr/scan
 t=0.3s   백엔드: INSERT guidance_sessions, INSERT session_steps → 200 응답
 t=0.3s   qr_reader: SessionStart 발행 (ROS2 토픽)
 t=0.3s   guide_manager: 수신 · 저장 · 로그
+         guide_manager: session.ready 발행 → event_gateway가 백엔드로 전송
               (백엔드에는 이미 저장됨. 프론트는 다음 폴링에 봄)
 t≤3.0s   프론트: GET /api/sessions/active → 카드 리렌더
+t≤3.0s   프론트: session.ready 확인 → 안내 시작 버튼 활성화
+버튼 클릭 프론트: POST /api/robots/{id}/orders start_guidance(session_id)
+즉시      event_gateway: 롱폴링 응답 수신 → /guide_manager/start_guidance 발행
+          guide_manager: 안전 조건 재검증 → 첫 검사실 Nav2 목표 전송
 ```
 
 프론트 지연 최대 3초. 이는 폴링 주기의 특성이지 통신 성능 문제가 아니다.
