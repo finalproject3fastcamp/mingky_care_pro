@@ -1,0 +1,23 @@
+[Unit]
+Description=Pinky camera reverse tunnels (front and rear MJPEG)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+EnvironmentFile=/etc/mingky/robot.env
+ExecStart=/usr/bin/ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=20 -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=accept-new \
+  -o IdentitiesOnly=yes \
+  -i /home/pinky/.ssh/id_fgtunnel \
+  -R 127.0.0.1:${MINGKY_CAMERA_FRONT_TUNNEL_PORT}:127.0.0.1:8091 \
+  -R 127.0.0.1:${MINGKY_CAMERA_REAR_TUNNEL_PORT}:127.0.0.1:8092 \
+  fgtunnel@161.118.208.109
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

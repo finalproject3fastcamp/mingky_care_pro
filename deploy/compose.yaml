@@ -54,7 +54,6 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_BASE_URL: /api
-        VITE_CAMERA_STREAM_URL: ${VITE_CAMERA_STREAM_URL:-}
     ports:
       - "${WEB_PORT:-8080}:80"
     depends_on:

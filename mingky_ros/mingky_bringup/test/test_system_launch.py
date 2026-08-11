@@ -43,7 +43,25 @@ def test_qr_reader_is_enabled_for_robot_operation() -> None:
         'robot_id': '$(var robot_id)',
         'backend_url': '$(var backend_url)',
         'preview_port': '$(var qr_preview_port)',
+        'preview_max_fps': '$(var camera_preview_max_fps)',
+        'preview_max_width': '$(var camera_preview_max_width)',
+        'preview_jpeg_quality': '$(var camera_preview_jpeg_quality)',
     }
+
+
+def test_low_bandwidth_camera_streams_are_integrated() -> None:
+    root = _root()
+
+    assert _argument(root, 'qr_preview_port').get('default') == '8091'
+    assert _argument(root, 'rear_preview_port').get('default') == '8092'
+    assert _argument(root, 'camera_preview_max_fps').get('default') == '3.0'
+    assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
+
+    rear = next(
+        item for item in root.findall('include')
+        if item.get('file', '').endswith('/launch/camera_streams.launch.py')
+    )
+    assert rear.get('if') == '$(var start_rear_camera_stream)'
 
 
 def test_adaptive_recovery_is_the_integrated_default() -> None:

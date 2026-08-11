@@ -26,11 +26,6 @@ const POLL_MS = 3000
 // 그냥 바뀌면 환자·의료진 모두 "인식이 된 건가?" 를 판단할 근거가 없다.
 // 너무 길면 안내 시작이 늦어지므로 읽고 넘어갈 만큼만 잡는다.
 const SCAN_FLASH_MS = 2200
-// 로봇 QR 리더의 MJPEG 미리보기 URL. 미설정이면 카메라 카드를 숨긴다.
-// 지금은 단일 로봇 전제라 env 하나만 있다. 다중 로봇을 실제로 굴리게 되면
-// 로봇별 URL 매핑이 필요하다 (예: GET /robots 응답에 preview_url 추가).
-const CAMERA_STREAM_URL = import.meta.env.VITE_CAMERA_STREAM_URL as string | undefined
-
 export function MedicalDashboard() {
   // "지금 어떤 로봇을 담당하고 있는가" 는 URL 이 갖는다 (/medical/:robotId).
   // 서버 상태가 아니라 이 탭의 시야다 — 의료진이 탭을 각자 열어 각자 다른
@@ -255,7 +250,7 @@ export function MedicalDashboard() {
         // 대세요" 안내와 시선이 한 곳에 모인다.
         <ArmedWaiting
           robot={selectedRobot}
-          cameraStreamUrl={CAMERA_STREAM_URL}
+          cameraStreamUrl={`/camera/${encodeURIComponent(selectedRobot.robot_id)}/front/stream`}
           onDisarmed={handleDisarmed}
         />
       )}

@@ -86,6 +86,11 @@ def generate_launch_description() -> LaunchDescription:
         default_value='60',
         description='미리보기 JPEG 품질 (낮출수록 지연·대역폭 감소)',
     )
+    preview_max_fps_arg = DeclareLaunchArgument(
+        'preview_max_fps',
+        default_value='3.0',
+        description='관제 미리보기 최대 FPS',
+    )
     arming_poll_seconds_arg = DeclareLaunchArgument(
         'arming_poll_seconds',
         default_value='2.0',
@@ -117,6 +122,7 @@ def generate_launch_description() -> LaunchDescription:
                 'preview_port': LaunchConfiguration('preview_port'),
                 'preview_max_width': LaunchConfiguration('preview_max_width'),
                 'preview_jpeg_quality': LaunchConfiguration('preview_jpeg_quality'),
+                'preview_max_fps': LaunchConfiguration('preview_max_fps'),
                 'arming_poll_seconds': LaunchConfiguration('arming_poll_seconds'),
                 'arming_fail_disarm_after': LaunchConfiguration(
                     'arming_fail_disarm_after'),
@@ -137,6 +143,7 @@ def generate_launch_description() -> LaunchDescription:
         preview_port_arg,
         preview_max_width_arg,
         preview_jpeg_quality_arg,
+        preview_max_fps_arg,
         arming_poll_seconds_arg,
         arming_fail_disarm_after_arg,
         qr_node,

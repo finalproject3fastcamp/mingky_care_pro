@@ -139,11 +139,12 @@ echo $ROS_DOMAIN_ID     # 본인 번호가 나와야 합니다
 | `mingky-ssh-tunnel` | 이 접속 경로를 여는 터널 |
 | `mingky-gateway` | 이벤트·heartbeat 를 관제로, 명령을 받아옴 |
 | `mingky-teleop-bridge` | 대시보드 실시간 조작·위치 |
+| `mingky-camera-tunnel` | 전·후방 카메라 미리보기 역터널 |
 | `fg-bridge` · `fg-tunnel` | Foxglove 원격 관측 |
 | `fg-teleop` | 주행 모드·속도 상한 |
 
 ```bash
-systemctl status mingky-ssh-tunnel
+systemctl status mingky-ssh-tunnel mingky-camera-tunnel
 journalctl -u mingky-gateway -n 50
 ```
 
