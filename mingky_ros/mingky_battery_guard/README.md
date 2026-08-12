@@ -136,9 +136,22 @@ CSV 한 줄이 표본 하나이고, 조건이 함께 기록됩니다.
 연산·LCD가 상시 먹는 전류가 훨씬 큽니다. 조건을 나눠 재면 **어디서 전기를
 쓰는지**가 드러나고, 그래야 절약할 곳을 정할 수 있습니다.
 
+> ⚠️ **`battery/voltage` 발행자는 반드시 하나여야 합니다.**
+> 운영에서는 `mingky-battery-pub.service`(`mingky_sensors/adc_reader`)가 상시
+> 발행합니다. `bringup_robot.launch.xml` 을 따로 띄우면 기본값이
+> `start_battery_publisher:=true` 라 **중복 발행**이 되고, I2C 채널 선택이 서로
+> 덮어써서 **다른 센서 값이 배터리 전압으로 들어옵니다.** 통신은 성공하고 예외도
+> 나지 않아 값만 보고는 알아챌 수 없습니다.
+>
+> ```bash
+> ros2 topic info /battery/voltage    # Publisher count: 1 이어야 함
+> ```
+>
+> 기록기도 발행자 수를 확인해 둘 이상이면 경고를 냅니다.
+
 ```bash
 # ① 최소 구성 — 기준선
-ros2 launch pinky_bringup bringup_robot.launch.xml
+ros2 launch pinky_bringup bringup_robot.launch.xml start_battery_publisher:=false
 ros2 run mingky_battery_guard battery_logger --ros-args -p session_label:=idle_only
 
 # ② 통합 실행, 정지 상태 — 센서·연산 부하
@@ -148,6 +161,9 @@ ros2 run mingky_battery_guard battery_logger --ros-args -p session_label:=full_s
 # ③ 통합 실행 + 주행 — 실제 운용 부하
 ros2 run mingky_battery_guard battery_logger --ros-args -p session_label:=full_driving
 ```
+
+②는 통합 launch 가 `start_battery_publisher:=false` 를 직접 넘기므로 그대로
+쓰면 됩니다.
 
 ①과 ②의 차이가 **센서·연산이 먹는 양**, ②와 ③의 차이가 **모터가 먹는 양**
 입니다.

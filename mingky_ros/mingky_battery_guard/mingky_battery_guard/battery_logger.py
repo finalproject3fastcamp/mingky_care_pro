@@ -7,6 +7,16 @@
 
 이 노드는 조건을 나눠서 기록만 한다. 판정은 하지 않는다.
 
+전압은 mingky_sensors 의 adc_reader 가 발행한다. 그쪽이 이미 한 번 발행할
+때마다 5회 읽어 중앙값을 내므로, 여기 들어오는 값은 단발 ADC 오류가 걸러진
+뒤다. 그래도 부하에 따른 실제 강하는 그대로 남으므로 조건 분리는 여전히
+필요하다.
+
+발행자가 둘이면 기록 자체가 무의미하다. I2C ADC(0x08)는 선택된 채널을 하나만
+기억해서, write 와 read 사이에 다른 프로세스가 채널을 바꾸면 엉뚱한 채널 값이
+배터리 전압으로 들어온다. 통신은 성공하고 예외도 나지 않아 값만 보고는
+알아챌 수 없다. 그래서 발행자 수를 주기적으로 확인해 경고한다.
+
     휴지(rest)  모터가 rest_settle_sec 이상 멈춰 있던 구간
                 -> 이 값만 잔량 비교에 쓴다
     부하(load)  모터가 도는 구간
@@ -101,7 +111,14 @@ class BatteryLogger(Node):
         self.settle_rises = []      # (상승폭 V, 소요 초)
         self.prev_state = None
 
-        self.create_subscription(Float32, 'battery/voltage', self.on_voltage, 10)
+        # 발행자가 둘이면 측정값 자체를 믿을 수 없다. I2C ADC(0x08)는 채널을
+        # 하나만 기억해서, write 와 read 사이에 다른 프로세스가 채널을 바꾸면
+        # 엉뚱한 채널 값이 배터리 전압으로 들어온다. 통신은 성공하고 예외도
+        # 나지 않아 값만 보고는 알아챌 수 없다.
+        self.dup_warned = False
+
+        self.volt_sub = self.create_subscription(
+            Float32, 'battery/voltage', self.on_voltage, 10)
         self.create_subscription(Float32, 'battery/percent', self.on_percent, 10)
         # 모터가 도는지는 실제 명령으로 판단한다. 안전 게이트 출력이 최종이므로
         # 그쪽을 본다. 게이트를 안 쓰는 환경이면 그냥 cmd_vel 이 들어온다.
@@ -112,7 +129,8 @@ class BatteryLogger(Node):
             f'기록 시작 → {self.path}\n'
             f'  부하 조건: {self.label or "(라벨 없음)"}\n'
             f'  휴지 인정: 정지 후 {self.rest_settle:.0f}초 경과\n'
-            '  조건이 다르면 session_label 을 바꿔 따로 기록하세요.')
+            '  조건이 다르면 session_label 을 바꿔 따로 기록하세요.\n'
+            '  battery/voltage 발행자는 하나여야 합니다 (중복이면 경고합니다).')
 
     # ------------------------------------------------------------------
 
@@ -197,7 +215,28 @@ class BatteryLogger(Node):
 
     # ------------------------------------------------------------------
 
+    def check_publishers(self):
+        """battery/voltage 발행자가 하나인지 본다.
+
+        둘 이상이면 I2C 채널 선택이 서로 덮어써서 다른 채널 값이 배터리
+        전압으로 들어온다. 그 상태로 모은 기록은 근거로 쓸 수 없으므로,
+        조용히 진행하지 말고 크게 남긴다.
+        """
+        n = self.volt_sub.get_publisher_count()
+        if n > 1 and not self.dup_warned:
+            self.dup_warned = True
+            self.get_logger().error(
+                f'battery/voltage 발행자가 {n}개입니다. I2C 채널이 서로 덮어써서 '
+                '다른 센서 값이 배터리 전압으로 들어올 수 있습니다.\n'
+                '  이 상태의 기록은 근거로 쓸 수 없습니다. 하나만 남기세요.\n'
+                '  운영은 mingky-battery-pub.service 가 담당합니다. bringup 을 '
+                '따로 띄운다면 start_battery_publisher:=false 로 주세요.')
+        elif n <= 1 and self.dup_warned:
+            self.dup_warned = False
+            self.get_logger().info('발행자가 하나로 정리됐습니다.')
+
     def summary(self):
+        self.check_publishers()
         if not self.samples:
             self.get_logger().warn(
                 'battery/voltage 를 아직 못 받았습니다. '

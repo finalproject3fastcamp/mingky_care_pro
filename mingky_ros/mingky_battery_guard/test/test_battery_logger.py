@@ -172,6 +172,48 @@ def test_published_percent_is_recorded_for_comparison(logger):
     assert row['percent_linear'] == '75.0'
 
 
+# ---------------------------------------------- 중복 발행자 감지
+
+def test_duplicate_publishers_are_reported(logger):
+    """발행자가 둘이면 기록 자체가 무의미하므로 크게 남겨야 한다.
+
+    I2C ADC(0x08)는 선택된 채널을 하나만 기억한다. write 와 read 사이에 다른
+    프로세스가 채널을 바꾸면 엉뚱한 채널 값이 배터리 전압으로 들어오는데,
+    통신은 성공하고 예외도 나지 않아 값만 보고는 알아챌 수 없다.
+    """
+    errors = []
+    logger.get_logger().error = lambda m: errors.append(m)
+    logger.volt_sub.get_publisher_count = lambda: 2
+
+    logger.check_publishers()
+    assert len(errors) == 1
+    assert 'start_battery_publisher' in errors[0], '해결 방법이 안내되지 않는다'
+
+    logger.check_publishers()
+    assert len(errors) == 1, '같은 경고를 매번 반복하면 로그가 묻힌다'
+
+
+def test_recovering_to_one_publisher_is_reported(logger):
+    logger.volt_sub.get_publisher_count = lambda: 2
+    logger.check_publishers()
+    assert logger.dup_warned is True
+
+    infos = []
+    logger.get_logger().info = lambda m: infos.append(m)
+    logger.volt_sub.get_publisher_count = lambda: 1
+    logger.check_publishers()
+    assert logger.dup_warned is False
+    assert infos, '정리된 사실도 알려야 한다'
+
+
+def test_single_publisher_is_silent(logger):
+    errors = []
+    logger.get_logger().error = lambda m: errors.append(m)
+    logger.volt_sub.get_publisher_count = lambda: 1
+    logger.check_publishers()
+    assert errors == []
+
+
 def test_label_is_recorded_and_in_filename(tmp_path):
     """부하 조건이 다른 기록을 섞으면 비교가 무의미해진다. 라벨로 구분한다."""
     node = BatteryLogger(parameter_overrides=[
