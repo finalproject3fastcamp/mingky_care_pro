@@ -118,7 +118,11 @@ def test_arm_rejects_stale_battery_reading(monkeypatch):
         "active_patient_id": None,
     }
     monkeypatch.setattr(robots, "get_pool", lambda: ArmPool(row))
-    monkeypatch.setattr(robots.heartbeat, "snapshot", lambda: {})
+    monkeypatch.setattr(
+        robots.heartbeat,
+        "snapshot",
+        lambda: {"pinky-01": (datetime.now(timezone.utc), False)},
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(robots.arm_robot("pinky-01"))

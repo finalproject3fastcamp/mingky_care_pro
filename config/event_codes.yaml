@@ -188,7 +188,7 @@ session.step_completed:
 
 session.ended:
   level: info
-  payload: { end_reason: [completed, aborted, battery, patient_lost] }
+  payload: { end_reason: [completed, aborted, battery, patient_lost, robot_offline, system_failure] }
   applies_to: guidance_sessions.ended_at
 
 

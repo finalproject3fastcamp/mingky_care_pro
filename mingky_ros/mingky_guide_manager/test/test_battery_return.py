@@ -72,6 +72,27 @@ def test_low_battery_ends_active_session_before_dock_return(manager):
     assert len(node.nav.sent) == 1
 
 
+def test_long_communication_failure_ends_and_clears_active_session(manager):
+    node, published = manager
+    node.session_id = 43
+    node.session_state = GuideState.SESSION_GUIDING
+    node.patient_id = 'patient-1'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray']
+
+    node._on_cancel_session(String(data='robot_offline'))
+
+    assert published == [
+        ('session.ended', {'end_reason': 'robot_offline'}, 43),
+    ]
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_PAUSED
+
+
 def test_dock_success_never_emits_clinical_nav_success(manager):
     node, published = manager
     node._nav_generation = 7

@@ -23,3 +23,8 @@ HEARTBEAT_OFFLINE_AFTER_SEC = float(os.environ.get("HEARTBEAT_OFFLINE_AFTER_SEC"
 
 # 판정 주기. 두절 감지는 최대 이 값만큼 늦어진다.
 HEARTBEAT_CHECK_INTERVAL_SEC = float(os.environ.get("HEARTBEAT_CHECK_INTERVAL_SEC", 5))
+
+# 순간적인 Wi-Fi 손실이나 통합 서비스 재시작을 안내 취소로 오판하지 않도록
+# 통신 두절/시스템 장애가 이 시간 이상 연속될 때만 활성 세션을 종료한다.
+SESSION_FAILURE_CANCEL_AFTER_SEC = float(
+    os.environ.get("SESSION_FAILURE_CANCEL_AFTER_SEC", 30))

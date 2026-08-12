@@ -211,6 +211,8 @@ class GuideManager(Node):
         # 못하게 한다.
         self.create_subscription(
             String, '~/start_guidance', self._on_start_guidance, 10)
+        self.create_subscription(
+            String, '~/cancel_session', self._on_cancel_session, 10)
 
         # QR 노드가 백엔드 응답을 파싱해 흘려주는 세션 신호.
         # 최초 QR은 관제 출발을 기다리고, waiting spot에서 받은
@@ -398,6 +400,36 @@ class GuideManager(Node):
     def _on_emergency_reason(self, msg: String):
         if msg.data:
             self._emergency_reason = msg.data
+
+    def _on_cancel_session(self, msg: String) -> None:
+        """로봇 내부 안전 감시가 장기 장애를 판정하면 안내를 재개 없이 끝낸다."""
+        reason = msg.data.strip()
+        if reason not in ('robot_offline', 'system_failure'):
+            self.get_logger().warn(f'알 수 없는 세션 취소 사유를 무시합니다: {reason!r}')
+            return
+        if self.session_id <= 0 or self.session_state in (
+                GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+            return
+
+        active_session_id = self.session_id
+        self._nav_generation += 1
+        self._cancel_arrival_notice()
+        self._cancel_adaptive_retry()
+        self._cancel_dock_retry()
+        self.navigation_cancel_pub.publish(Bool(data=True))
+        self.events.publish(
+            'session.ended', {'end_reason': reason}, active_session_id)
+
+        self.session_id = 0
+        self.session_state = GuideState.SESSION_NONE
+        self.patient_id = ''
+        self.current_step_order = 0
+        self.previous_visit = ''
+        self.current_visit = ''
+        self.session_visits = []
+        self.robot_state = GuideState.ROBOT_PAUSED
+        self.get_logger().error(
+            f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
 
     def _on_emergency_state(self, msg: Bool):
         if msg.data == self._emergency_engaged:

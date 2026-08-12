@@ -34,8 +34,12 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from . import db
-from .config import HEARTBEAT_CHECK_INTERVAL_SEC, HEARTBEAT_OFFLINE_AFTER_SEC
+from . import db, robot_runtime
+from .config import (
+    HEARTBEAT_CHECK_INTERVAL_SEC,
+    HEARTBEAT_OFFLINE_AFTER_SEC,
+    SESSION_FAILURE_CANCEL_AFTER_SEC,
+)
 from .ingest import ingest
 from .registry import get_registry
 from .schemas import EventIn
@@ -87,11 +91,11 @@ def snapshot() -> dict[str, tuple[datetime, bool]]:
 
 
 def _event(robot_id: str, occurred_at: datetime, code: str,
-           level: str, payload: dict) -> EventIn:
+           level: str, payload: dict, session_id: int = 0) -> EventIn:
     return EventIn(
         event_id=uuid.uuid4(),
         robot_id=robot_id,
-        session_id=0,
+        session_id=session_id,
         # 마지막 heartbeat 로 소급하지 않는다. occurred_at 과 received_at 의
         # 차이는 게이트웨이 큐잉 지연을 뜻하는데, 서버가 방금 만든 이벤트에
         # 그 배지가 붙으면 거짓말이 된다. 두절 시작은 payload 로 역산한다.
@@ -126,13 +130,58 @@ def collect(now: datetime | None = None) -> list[EventIn]:
     return events
 
 
-async def _tick() -> None:
-    events = collect()
-    if not events:
-        return
+def cancellation_reasons(now: datetime | None = None) -> dict[str, str]:
+    """30초 이상 지속된 장애를 로봇별 세션 종료 사유로 돌려준다."""
+    now = now or _now()
+    reasons: dict[str, str] = {}
 
+    # 전원·네트워크·gateway 장애는 heartbeat 공백으로 함께 잡힌다.
+    for robot_id, seen in _last_seen.items():
+        if (now - seen).total_seconds() >= SESSION_FAILURE_CANCEL_AFTER_SEC:
+            reasons[robot_id] = "robot_offline"
+
+    # heartbeat 가 계속 오는 경우에만 통합 시스템 장애를 별도로 판정한다.
+    # offline 과 겹치면 더 근본적인 robot_offline 을 우선한다.
+    for robot_id, runtime in robot_runtime.snapshot().items():
+        if robot_id in reasons or robot_id not in _last_seen:
+            continue
+        if runtime.system_state not in ("inactive", "failed"):
+            continue
+        if ((now - runtime.state_since).total_seconds()
+                >= SESSION_FAILURE_CANCEL_AFTER_SEC):
+            reasons[robot_id] = "system_failure"
+
+    return reasons
+
+
+async def _session_cancel_events(conn, now: datetime) -> list[EventIn]:
+    reasons = cancellation_reasons(now)
+    if not reasons:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT session_id, robot_id
+        FROM guidance_sessions
+        WHERE ended_at IS NULL AND robot_id = ANY($1::varchar[])
+        """,
+        list(reasons),
+    )
+    return [
+        _event(
+            row["robot_id"], now, "session.ended", "error",
+            {"end_reason": reasons[row["robot_id"]]}, row["session_id"])
+        for row in rows
+    ]
+
+
+async def _tick() -> None:
+    now = _now()
+    events = collect(now)
     pool = db.get_pool()
     async with pool.acquire() as conn:
+        events.extend(await _session_cancel_events(conn, now))
+        if not events:
+            return
         await ingest(conn, events, get_registry())
 
     for event in events:
