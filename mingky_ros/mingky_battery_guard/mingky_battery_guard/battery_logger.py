@@ -21,10 +21,8 @@
 CSV 한 줄이 표본 하나다. 나중에 표계산으로 그대로 열린다.
 """
 
-from collections import deque
 import csv
 from datetime import datetime
-import math
 from pathlib import Path
 
 from geometry_msgs.msg import Twist
@@ -81,10 +79,27 @@ class BatteryLogger(Node):
         self.last_motion_at = None      # None = 시작 후 한 번도 안 움직임
         self.published_percent = None
 
-        # 조건별로 따로 모은다. 섞으면 비교가 무의미해진다.
-        self.rest_v = deque(maxlen=200)
-        self.load_v = deque(maxlen=200)
+        # 요약은 덱이 아니라 누적 집계로 낸다.
+        # 5초 주기에 덱 200 이면 약 17분치뿐이라, 30분 방치를 재는 동안 초기
+        # 고전압 표본이 밀려나간다. 그러면 요약의 '휴지 최대' 가 완충 전압이
+        # 아니라 '최근 17분 중 최고' 가 되고 ΔV 도 같이 어긋난다.
+        # CSV 는 전부 남으니 사후 계산은 정확하지만, 측정 중에 보는 건 요약이라
+        # 그걸 믿고 판단하면 틀린다.
+        self.rest_max = None
+        self.rest_min = None
+        self.rest_last = None
+        self.rest_n = 0
+        self.load_min = None
+        self.load_n = 0
         self.samples = 0
+
+        # settling 구간(정지 후 자연 회복)의 상승폭과 소요 시간.
+        # 이 값 자체가 데이터다. battery_guard 의 trend_rise 가 이보다 작으면
+        # 모터 부하 해제를 충전으로 오인해 저전압 경보가 영영 막힌다.
+        self.settle_from_v = None
+        self.settle_from_t = None
+        self.settle_rises = []      # (상승폭 V, 소요 초)
+        self.prev_state = None
 
         self.create_subscription(Float32, 'battery/voltage', self.on_voltage, 10)
         self.create_subscription(Float32, 'battery/percent', self.on_percent, 10)
@@ -110,6 +125,13 @@ class BatteryLogger(Node):
         return self.now() - base
 
     def state_now(self):
+        """표본의 부하 조건. 분류가 틀리면 수집한 데이터 전체가 무의미해진다."""
+        # 움직이는 걸 아직 못 봤다는 건 '정지' 가 아니라 '모름' 이다.
+        # 기동 직후를 load 로 넣으면 부하 최저 전압이 오염된다.
+        if self.last_motion_at is None:
+            if self.now() - self.started >= self.rest_settle:
+                return 'rest'       # 이만큼 지나도록 명령이 없었으면 정지로 본다
+            return 'unknown'        # 판단 보류. 어느 통계에도 넣지 않는다
         if self.idle_sec() < 1.0:
             return 'load'
         if self.idle_sec() >= self.rest_settle:
@@ -138,11 +160,40 @@ class BatteryLogger(Node):
         ])
         self.fh.flush()     # 로봇 전원이 갑자기 꺼져도 여기까지는 남는다
 
+        self.track_settling(state, v)
+
         if state == 'rest':
-            self.rest_v.append(v)
+            self.rest_max = v if self.rest_max is None else max(self.rest_max, v)
+            self.rest_min = v if self.rest_min is None else min(self.rest_min, v)
+            self.rest_last = v
+            self.rest_n += 1
         elif state == 'load':
-            self.load_v.append(v)
+            self.load_min = v if self.load_min is None else min(self.load_min, v)
+            self.load_n += 1
+        # unknown / settling 은 어느 통계에도 넣지 않는다.
         self.samples += 1
+
+    def track_settling(self, state, v):
+        """정지 후 자연 회복 구간의 상승폭과 소요 시간을 모은다.
+
+        휴지 전압 비교에서 settling 을 빼는 것과는 별개로, 이 구간 자체가
+        정해야 할 값이다. battery_guard 의 trend_rise 가 이 상승폭보다 작으면
+        모터 부하 해제를 충전으로 오인해 저전압 경보가 영영 막힌다.
+        """
+        prev, self.prev_state = self.prev_state, state
+
+        if state == 'settling':
+            if prev != 'settling':          # 회복 시작
+                self.settle_from_v = v
+                self.settle_from_t = self.now()
+            return
+
+        if prev == 'settling' and self.settle_from_v is not None:
+            # 회복이 끝났다. rest 로 갔든 다시 load 로 갔든 구간은 닫는다.
+            self.settle_rises.append(
+                (v - self.settle_from_v, self.now() - self.settle_from_t))
+            self.settle_from_v = None
+            self.settle_from_t = None
 
     # ------------------------------------------------------------------
 
@@ -154,16 +205,25 @@ class BatteryLogger(Node):
             return
 
         parts = [f'표본 {self.samples}개']
-        if self.rest_v:
+        if self.rest_n:
             parts.append(
-                f'휴지 {statmin(self.rest_v):.3f}~{max(self.rest_v):.3f}V '
-                f'(최근 {self.rest_v[-1]:.3f}V)')
-        if self.load_v:
-            parts.append(f'부하 최저 {min(self.load_v):.3f}V')
-        if self.rest_v and self.load_v:
+                f'휴지 {self.rest_min:.3f}~{self.rest_max:.3f}V '
+                f'(최근 {self.rest_last:.3f}V, {self.rest_n}개)')
+        if self.load_n:
+            parts.append(f'부하 최저 {self.load_min:.3f}V ({self.load_n}개)')
+        if self.rest_n and self.load_n:
             # 이 값이 팩 건강도다. 커질수록 힘을 못 낸다.
-            parts.append(f'ΔV {max(self.rest_v) - min(self.load_v):.3f}V')
+            parts.append(f'ΔV {self.rest_max - self.load_min:.3f}V')
         self.get_logger().info(' | '.join(parts))
+
+        if self.settle_rises:
+            rises = [r for r, _ in self.settle_rises]
+            durs = [d for _, d in self.settle_rises]
+            self.get_logger().info(
+                f'  정지 후 회복 {len(rises)}회 | '
+                f'상승 평균 +{sum(rises) / len(rises):.3f}V '
+                f'최대 +{max(rises):.3f}V | '
+                f'소요 평균 {sum(durs) / len(durs):.0f}초')
 
     def destroy_node(self):
         try:
@@ -172,11 +232,6 @@ class BatteryLogger(Node):
         except OSError:
             pass
         return super().destroy_node()
-
-
-def statmin(seq):
-    """빈 수열이 와도 죽지 않게 감싼다."""
-    return min(seq) if seq else math.nan
 
 
 def main(args=None):
