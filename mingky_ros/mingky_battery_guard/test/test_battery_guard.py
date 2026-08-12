@@ -180,6 +180,38 @@ def test_critical_voltage_fires_without_waiting(guard):
     assert node.fired is True
 
 
+def test_critical_still_works_with_median_filter_off(guard=None):
+    """median_samples=1 이어도 위험 판정이 살아 있어야 한다.
+
+    위험 판정 창을 중앙값 창과 겸용하면 필터를 껐을 때 창 크기가 1 이 되어
+    'N회 이상' 이 영영 성립하지 않는다. 안전 경로가 조용히 죽는 결함이라
+    로그에도 아무 흔적이 남지 않는다.
+    """
+    node, alerts = make_guard(median_samples=1)
+    feed_volts(node, [6.50, 6.40])
+    assert node.critical_now() is True
+    assert node.fired is True, 'median_samples=1 에서 위험 판정이 죽었다'
+    node.destroy_node()
+
+
+@pytest.mark.parametrize('median_samples', [1, 2, 3, 5, 7])
+def test_critical_works_at_every_median_size(median_samples):
+    """중앙값 창 크기와 무관하게 위험 판정이 동작해야 한다."""
+    node, alerts = make_guard(median_samples=median_samples)
+    feed_volts(node, [6.50, 6.40])
+    assert node.fired is True, f'median_samples={median_samples} 에서 죽었다'
+    node.destroy_node()
+
+
+def test_critical_window_never_smaller_than_confirm():
+    """창이 요구 횟수보다 작으면 영영 성립하지 않는다. 생성 시 보정해야 한다."""
+    node, alerts = make_guard(critical_confirm=4, critical_window=2)
+    assert node.crit_raw.maxlen >= 4
+    feed_volts(node, [6.5, 6.4, 6.3, 6.2])
+    assert node.fired is True
+    node.destroy_node()
+
+
 def test_single_critical_sample_does_not_fire(guard):
     """ADC 단발 오류 하나로는 발동하지 않는다."""
     node, alerts = guard

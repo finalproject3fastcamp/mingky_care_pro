@@ -60,6 +60,11 @@ class BatteryGuard(Node):
         # 로봇 기본 부저(battery-buzzer.service)의 danger 선과 같은 값.
         # 여기까지 내려간 전압은 확인 절차 없이 즉시 알린다.
         self.declare_parameter('critical_voltage', 6.80)
+        # 위험 판정 전용 창. 중앙값 필터 창과 겸용하면 안 된다.
+        # median_samples=1 로 필터를 끄면 창 크기가 1 이 되어 'N회 이상' 을
+        # 영영 만족하지 못하고, 안전 경로가 조용히 죽는다.
+        self.declare_parameter('critical_confirm', 2)
+        self.declare_parameter('critical_window', 3)
 
         self.declare_parameter('use_buzzer', True)
         self.declare_parameter('buzzer_script', '/home/pinky/ap/battery_buzzer.py')
@@ -71,6 +76,9 @@ class BatteryGuard(Node):
         self.confirm = int(g('confirm_count').value)
         self.confirm_window = max(self.confirm, int(g('confirm_window').value))
         self.critical_v = float(g('critical_voltage').value)
+        self.critical_confirm = max(1, int(g('critical_confirm').value))
+        self.critical_window = max(
+            self.critical_confirm, int(g('critical_window').value))
         self.trend_rise = g('trend_rise').value
         self.use_buzzer = g('use_buzzer').value
         self.buzzer_script = g('buzzer_script').value
@@ -98,6 +106,10 @@ class BatteryGuard(Node):
         # 읽어서 그대로 발행하므로, 샘플 하나가 튀면 그게 그대로 넘어온다.
         # 중앙값은 평균과 달리 튄 값 하나에 끌려가지 않아서 여기에 맞다.
         self.raw = deque(maxlen=max(1, int(g('median_samples').value)))
+
+        # 위험 판정은 원본을 따로 모아서 본다. 중앙값 창을 쓰면 필터를 껐을 때
+        # 창이 1 이 되어 판정이 성립하지 않는다.
+        self.crit_raw = deque(maxlen=self.critical_window)
 
         # 상태 변경은 늦게 뜬 GuideManager 도 마지막 값을 받도록 latched QoS 를 쓴다.
         state_qos = QoSProfile(
@@ -158,17 +170,22 @@ class BatteryGuard(Node):
 
         중앙값이 아니라 원본을 본다. 중앙값은 최저값을 버리기 때문에 위험한
         강하를 그대로 감춘다. 다만 ADC 단발 오류로 복귀까지 시키면 곤란하므로
-        창 안에서 2회 이상일 때만 인정한다 (약 10초).
+        critical_window 안에서 critical_confirm 회 이상일 때만 인정한다.
+
+        전용 창을 쓴다. 중앙값 창을 겸용하면 median_samples=1 일 때 창 크기가
+        1 이 되어 'N회 이상' 이 영영 성립하지 않고 안전 경로가 조용히 죽는다.
         """
-        if not self.saw_voltage or not self.raw:
+        if not self.saw_voltage or not self.crit_raw:
             return False
-        return sum(1 for v in self.raw if v <= self.critical_v) >= 2
+        below = sum(1 for v in self.crit_raw if v <= self.critical_v)
+        return below >= self.critical_confirm
 
     def on_voltage(self, msg: Float32):
         """1차 소스. 중앙값을 거른 뒤 퍼센트로 바꿔 판단한다."""
         self.saw_voltage = True
         self.voltage_raw = msg.data
         self.raw.append(msg.data)
+        self.crit_raw.append(msg.data)
         self.voltage = statistics.median(self.raw)
         self.vmin_pub.publish(Float32(data=float(min(self.raw))))
         self.evaluate(percent_from_voltage(self.voltage))
@@ -233,9 +250,11 @@ class BatteryGuard(Node):
             return
 
         if critical:
-            vmin = min(self.raw) if self.raw else float('nan')
+            vmin = min(self.crit_raw)
+            below = sum(1 for v in self.crit_raw if v <= self.critical_v)
             self.get_logger().error(
-                f'위험 전압 {vmin:.3f}V (기준 {self.critical_v:.2f}V) — 즉시 발동')
+                f'위험 전압 {vmin:.3f}V (기준 {self.critical_v:.2f}V, '
+                f'최근 {len(self.crit_raw)}회 중 {below}회) — 즉시 발동')
         else:
             # 6) 창 안에 충분히 쌓이지 않았으면 기다린다.
             if self.low_count < self.confirm:
