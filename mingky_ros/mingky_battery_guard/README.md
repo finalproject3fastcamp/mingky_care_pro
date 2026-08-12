@@ -107,6 +107,62 @@ Nav2 / teleop -> cmd_vel_safety_input -> emergency_stop -> cmd_vel -> motor
 또한 `pinky_bringup` 모터 드라이버에도 같은 워치독이 있어 게이트 프로세스 자체가
 죽은 경우 마지막 RPM을 계속 유지하지 않습니다.
 
+## 실기 검증 — 발행자가 하나인지 먼저 확인하세요
+
+`battery_publisher`는 I2C 장치 `0x08`을 직접 읽습니다. **이 노드가 두 개 뜨면
+전압이 실제보다 낮게 측정되고, 그 값으로 저전압 경보가 나갑니다.**
+
+`0x08`은 "커맨드 바이트로 채널 선택 → 변환 → 2바이트 읽기" 구조인데 선택된
+채널을 하나만 기억합니다. write와 read 사이에 다른 프로세스가 채널을 바꾸면
+엉뚱한 채널 값을 배터리 값으로 읽습니다. **통신은 성공하고 예외도 나지 않아
+호출한 쪽에서 알아챌 방법이 없습니다.**
+
+실측(2026-08-12, pinky2, 각 40표본):
+
+| 조건 | 중앙값 | 범위 | 이상치 |
+|---|---|---|---|
+| 리더 1개 | 8.168V | 37mV | 0/40 |
+| 리더 2개 | **7.771V** | **3.22V** | 26/40 |
+| 되돌린 뒤 | 8.166V | 26mV | 0/40 |
+
+되돌렸을 때 2mV 오차로 복귀했습니다. 오염은 값을 **낮추는 방향으로만**
+작용하며, 중앙값 자체가 이동하므로 필터로는 걸러지지 않습니다.
+
+### 검증 전 확인
+
+```bash
+ros2 topic info /battery/voltage
+# Publisher count: 1  이어야 합니다
+```
+
+`fake_battery`로 시나리오를 넣을 때는 실측 발행자를 반드시 내리세요.
+
+```bash
+sudo systemctl stop mingky-battery-pub
+ros2 topic info /battery/voltage      # Publisher count: 0
+```
+
+끝나면 되돌립니다. 관제는 배터리 값이 없으면 로봇 선택을 막습니다.
+
+```bash
+sudo systemctl start mingky-battery-pub
+```
+
+### 중복이 생기는 경로
+
+```
+mingky-battery-pub.service                      상시
+pinky_bringup/launch/bringup_robot.launch.xml   주행 스택
+```
+
+저장소의 `bringup_robot.launch.xml`에는 `start_battery_publisher` 스위치가
+있고 `mingky_system.launch.xml`이 `false`로 넘깁니다. **상류(pinky_pro) 원본
+런치에는 이 스위치가 없어 조건 없이 띄웁니다.** 원본 런치를 직접 쓰면 중복이
+생깁니다.
+
+`battery_publisher`는 기동 3초 뒤 다른 발행자를 확인하고, 있으면 오류를
+남기고 종료합니다. 이 동작은 `exit_on_duplicate:=false`로 끌 수 있습니다.
+
 ## 테스트
 
 ROS 2 Jazzy 환경에서 실행합니다.
