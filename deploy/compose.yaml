@@ -32,6 +32,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      SESSION_FAILURE_CANCEL_AFTER_SEC: ${SESSION_FAILURE_CANCEL_AFTER_SEC:-30}
       EVENT_CODES_FILE: /srv/mingky/config/event_codes.yaml
       WAYPOINTS_FILE: /srv/mingky/waypoints/yun_map_highres_clean_waypoints.yaml
     depends_on:

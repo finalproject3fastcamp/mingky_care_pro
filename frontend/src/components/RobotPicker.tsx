@@ -19,6 +19,7 @@ interface Props {
 // 버튼 자체를 비활성화하고, 백엔드가 마지막 안전망이다.
 const MIN_BATTERY_PERCENT = 40
 const MAX_BATTERY_AGE_MS = 5 * 60 * 1000
+const RECENT_CANCELLATION_MS = 10 * 60 * 1000
 
 interface Candidate {
   robot: Robot
@@ -34,6 +35,29 @@ interface Candidate {
 function categorize(robot: Robot): Candidate {
   if (!robot.is_active) return { robot, eligible: false, reason: '비활성' }
   if (robot.robot_type !== 'mobile') return { robot, eligible: false, reason: '주행 로봇 아님' }
+  // 통신이 확인되지 않은 로봇은 기존 세션/arming 표시와 무관하게 선택하지
+  // 못하게 한다. 상태 라벨은 카드 상단에서 별도로 항상 보여준다.
+  if (robot.link_state === 'offline') {
+    return {
+      robot,
+      eligible: false,
+      reason: robot.active_session_id != null
+        ? '통신 두절 · 안내 취소 대기'
+        : '통신 두절',
+    }
+  }
+  if (robot.link_state === 'unknown') {
+    return { robot, eligible: false, reason: '연결 이력 없음' }
+  }
+  if (robot.system_state === 'inactive' || robot.system_state === 'failed') {
+    return {
+      robot,
+      eligible: false,
+      reason: robot.active_session_id != null
+        ? '시스템 장애 · 안내 취소 대기'
+        : '안내 시스템 중지',
+    }
+  }
   // 이미 활성화됐거나 안내 중인 로봇도 고를 수 있어야 한다. 막아두면 한 번
   // 나온 뒤에는 되돌아갈 방법이 없어 취소조차 못 한다. 이 화면은 "새로 켜는
   // 곳" 이 아니라 "담당할 로봇을 고르는 곳" 이다 — 여러 대를 번갈아 본다.
@@ -41,10 +65,7 @@ function categorize(robot: Robot): Candidate {
     return { robot, eligible: true, resume: true, status: '안내 중' }
   }
   if (robot.armed_at != null) {
-    return { robot, eligible: true, resume: true, status: '활성화됨' }
-  }
-  if (robot.link_state === 'offline') {
-    return { robot, eligible: false, reason: '통신 두절' }
+    return { robot, eligible: true, resume: true, status: 'QR 스캔 대기' }
   }
   if (robot.battery_percent == null) {
     return { robot, eligible: false, reason: '배터리 정보 없음' }
@@ -63,6 +84,27 @@ function categorize(robot: Robot): Candidate {
     return { robot, eligible: false, reason: '배터리 정보가 오래됨' }
   }
   return { robot, eligible: true }
+}
+
+function linkLabel(robot: Robot) {
+  if (robot.link_state === 'online') return '온라인'
+  if (robot.link_state === 'offline') return '오프라인'
+  return '연결 이력 없음'
+}
+
+function cancellationLabel(robot: Robot) {
+  if (robot.active_session_id != null || robot.armed_at != null) return null
+  if (
+    robot.last_session_ended_at == null ||
+    Date.now() - new Date(robot.last_session_ended_at).getTime() > RECENT_CANCELLATION_MS
+  ) return null
+  if (robot.last_session_end_reason === 'robot_offline') {
+    return '최근 안내 취소 · 통신 두절'
+  }
+  if (robot.last_session_end_reason === 'system_failure') {
+    return '최근 안내 취소 · 시스템 장애'
+  }
+  return null
 }
 
 export function RobotPicker({ robots, onArmed }: Props) {
@@ -112,6 +154,7 @@ export function RobotPicker({ robots, onArmed }: Props) {
           {candidates.map(({ robot, eligible, resume, status, reason }) => {
             const isPending = pending === robot.robot_id
             const clickable = eligible && !isPending
+            const canceled = cancellationLabel(robot)
             // 버튼 대신 카드 전체를 <button> 으로 만든다. 표시는 카드지만
             // 시맨틱은 버튼이라 스페이스·엔터·포커스링·스크린리더 라벨이 공짜다.
             return (
@@ -125,7 +168,12 @@ export function RobotPicker({ robots, onArmed }: Props) {
                   onClick={() => handlePick(robot)}
                   aria-label={`${robot.display_name} 선택`}
                 >
-                  <div className="robot-card-name">{robot.display_name}</div>
+                  <div className="robot-card-heading">
+                    <div className="robot-card-name">{robot.display_name}</div>
+                    <div className={`robot-card-link robot-card-link--${robot.link_state}`}>
+                      {linkLabel(robot)}
+                    </div>
+                  </div>
                   <div className="robot-card-id mono">{robot.robot_id}</div>
                   <div className="robot-card-battery">
                     <span className="robot-card-battery-value">
@@ -139,6 +187,9 @@ export function RobotPicker({ robots, onArmed }: Props) {
                     <div className={`robot-card-reason${status ? ' active' : ''}`}>
                       {reason ?? status}
                     </div>
+                  )}
+                  {canceled && (
+                    <div className="robot-card-cancellation">{canceled}</div>
                   )}
                   <div className="robot-card-cta">
                     {isPending

@@ -29,7 +29,9 @@ _SQL = """
            b.battery_percent,
            b.recorded_at    AS battery_recorded_at,
            s.session_id     AS active_session_id,
-           s.patient_id     AS active_patient_id
+           s.patient_id     AS active_patient_id,
+           last_session.ended_at AS last_session_ended_at,
+           last_session.end_reason AS last_session_end_reason
     FROM robots r
     LEFT JOIN LATERAL (
         SELECT voltage, battery_percent, recorded_at
@@ -42,6 +44,13 @@ _SQL = """
     -- 이 조인이 행을 늘리지 않는다.
     LEFT JOIN guidance_sessions s
         ON s.robot_id = r.robot_id AND s.ended_at IS NULL
+    LEFT JOIN LATERAL (
+        SELECT ended_at, end_reason
+        FROM guidance_sessions
+        WHERE robot_id = r.robot_id AND ended_at IS NOT NULL
+        ORDER BY ended_at DESC
+        LIMIT 1
+    ) last_session ON TRUE
     ORDER BY r.robot_id
 """
 
@@ -145,7 +154,10 @@ async def arm_robot(robot_id: str) -> RobotOut:
                     status_code=409,
                     detail=f"robot busy with session {row['active_session_id']}")
             seen = heartbeat.snapshot().get(robot_id)
-            if seen is not None and seen[1]:
+            if seen is None:
+                raise HTTPException(
+                    status_code=409, detail="robot connection is unknown")
+            if seen[1]:
                 raise HTTPException(status_code=409, detail="robot is offline")
             percent = row["battery_percent"]
             if percent is None or percent < MIN_BATTERY_PERCENT:

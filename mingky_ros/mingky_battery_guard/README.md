@@ -95,6 +95,7 @@ Nav2 / teleop -> cmd_vel_safety_input -> emergency_stop -> cmd_vel -> motor
 
 - `/emergency_stop` (`Bool=true`): 운영자 비상정지
 - `/emergency_stop/obstacle` (`Bool=true`): 장애물 비상정지
+- `/emergency_stop/communication` (`Bool=true`): 장기 관제 통신 두절 정지
 - `/emergency_stop/release` (`Trigger`): 명시적 해제
 - `/emergency_stop/state` (`Bool`, latched): 현재 정지 상태
 - `/emergency_stop/reason` (`String`, latched): `operator` 또는 `obstacle`

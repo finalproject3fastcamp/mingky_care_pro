@@ -397,6 +397,23 @@
   letter-spacing: -0.01em;
 }
 
+.robot-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.robot-card-link {
+  flex: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.robot-card-link--online { color: var(--success); }
+.robot-card-link--offline { color: var(--danger); }
+.robot-card-link--unknown { color: var(--text-subtle); }
+
 .robot-card-id {
   font-size: 0.82rem;
   color: var(--text-subtle);
@@ -426,6 +443,15 @@
   border-radius: var(--radius-sm);
   background: var(--warning-bg);
   color: var(--warning);
+  font-size: 0.82rem;
+  align-self: flex-start;
+}
+
+.robot-card-cancellation {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
   font-size: 0.82rem;
   align-self: flex-start;
 }

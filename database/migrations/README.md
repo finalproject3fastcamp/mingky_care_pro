@@ -7,3 +7,4 @@ PostgreSQL 스키마 변경 파일을 실행 순서대로 관리합니다.
 - `003_sessions_and_events.sql`: 로봇 마스터, 안내 세션, 방문 단계, 배터리 로그, 이벤트 로그
 - `004_battery_voltage.sql`: 배터리 로그 전압 컬럼
 - `005_patient_photos.sql`: 환자 프로필 사진(BYTEA) 테이블
+- `006_session_failure_reasons.sql`: 로봇 두절·시스템 장애 안내 종료 사유

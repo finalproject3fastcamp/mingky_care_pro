@@ -51,6 +51,7 @@ ros2 run mingky_event_gateway event_gateway --ros-args \
 | `robot_id` | `pinky-01` | heartbeat·배터리 대상. `robots` 테이블에 있어야 함 |
 | `heartbeat_interval_sec` | `5.0` | 생존 신호 주기. `0` 이면 보내지 않음 |
 | `heartbeat_timeout_sec` | `2.0` | heartbeat HTTP 타임아웃 |
+| `heartbeat_session_cancel_after_sec` | `30.0` | 안내 중 연속 실패 시 로컬 세션 취소·정지까지 기다릴 시간 |
 | `battery_interval_sec` | `120.0` | 배터리 저장 주기. 첫 표본은 즉시 전송, `0`이면 끔 |
 
 `max_queue_rows` 는 디스크가 차서 로봇이 멈추는 것보다 오래된 이벤트를
@@ -78,6 +79,10 @@ ERROR 로그를 남깁니다. 그 경우 `robot_id` 파라미터와
 
 판정 임계값은 서버 쪽 설정입니다 (`backend/README.md`). 기본 15초라
 5초 주기면 3회 연속 유실에 두절로 잡힙니다.
+
+안내 중에는 별도의 30초 안전 임계값도 적용합니다. 연속 실패가 이 값을
+넘으면 Guide Manager가 현재 안내를 종료하고 Emergency Stop이 Nav2 목표와
+모터 출력을 정지합니다. 연결이 돌아와도 자동으로 주행을 재개하지 않습니다.
 
 ## 실패 처리
 

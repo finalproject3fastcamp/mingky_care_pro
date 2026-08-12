@@ -174,6 +174,8 @@ class RobotOut(BaseModel):
     battery_recorded_at: datetime | None = None
     active_session_id: int | None = None
     active_patient_id: str | None = None
+    last_session_ended_at: datetime | None = None
+    last_session_end_reason: str | None = None
     # 의료진이 이 로봇을 활성화한 시각. NULL = 대기 중.
     # DB 컬럼이 아니라 app/arming.py 인메모리 레지스트리에서 조립한다.
     armed_at: datetime | None = None

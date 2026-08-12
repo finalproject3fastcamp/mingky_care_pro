@@ -55,6 +55,32 @@ ACTIVE_GUIDE_SESSION_STATES = (
 )
 
 
+class HeartbeatFailureGuard:
+    """연속 heartbeat 실패가 세션 안전 임계값을 넘었는지 한 번만 알린다."""
+
+    def __init__(self, timeout_sec: float):
+        self.timeout_sec = max(0.0, timeout_sec)
+        self.failed_since: float | None = None
+        self.triggered = False
+
+    def failure(self, now: float, clinical_active: bool) -> bool:
+        if not clinical_active:
+            self.success()
+            return False
+        if self.failed_since is None:
+            self.failed_since = now
+        if self.triggered:
+            return False
+        if now - self.failed_since < self.timeout_sec:
+            return False
+        self.triggered = True
+        return True
+
+    def success(self) -> None:
+        self.failed_since = None
+        self.triggered = False
+
+
 def _iso(stamp) -> str:
     """builtin_interfaces/Time → ISO8601 UTC.
 
@@ -84,6 +110,9 @@ class EventGateway(Node):
         self.declare_parameter("heartbeat_interval_sec", 5.0)
         # 주기보다 짧아야 한다. 길면 응답을 기다리는 사이 다음 차례가 밀린다.
         self.declare_parameter("heartbeat_timeout_sec", 2.0)
+        # 서버의 세션 장애 취소 임계값과 맞춘다. 이 시간 동안 관제 연결이
+        # 계속 끊기면 로봇 안에서도 안내를 종료하고 Nav2를 정지한다.
+        self.declare_parameter("heartbeat_session_cancel_after_sec", 30.0)
         # 배터리 추이는 이벤트가 아니라 별도 로그에 저빈도로 저장한다.
         # 0 이면 전송하지 않는다. 첫 표본은 즉시, 이후에는 이 주기로 보낸다.
         self.declare_parameter("battery_interval_sec", 120.0)
@@ -109,6 +138,8 @@ class EventGateway(Node):
             self.get_parameter("heartbeat_interval_sec").value)
         self.heartbeat_timeout = float(
             self.get_parameter("heartbeat_timeout_sec").value)
+        self.heartbeat_session_cancel_after = float(
+            self.get_parameter("heartbeat_session_cancel_after_sec").value)
         self.battery_url = f"{base}/robots/{self.robot_id}/battery"
         self.battery_interval = float(
             self.get_parameter("battery_interval_sec").value)
@@ -161,6 +192,10 @@ class EventGateway(Node):
             # 모드는 mode_manager 가 정본을 들고 있다. 여기서는 요청만 넘긴다.
             "set_mode": self.create_publisher(String, "/mode/set", 10),
         }
+        self._session_cancel_pub = self.create_publisher(
+            String, "/guide_manager/cancel_session", 10)
+        self._communication_stop_pub = self.create_publisher(
+            Bool, "/emergency_stop/communication", 10)
         self._localize_client = self.create_client(
             Trigger, "/auto_localize/trigger")
 
@@ -332,6 +367,17 @@ class EventGateway(Node):
             f"heartbeat 시작 ({self.heartbeat_url}, {self.heartbeat_interval:.0f}초 주기)")
 
         failing = False
+        guard = HeartbeatFailureGuard(self.heartbeat_session_cancel_after)
+
+        def failed() -> None:
+            nonlocal failing
+            if guard.failure(time.monotonic(), self._clinical_active):
+                self.get_logger().error(
+                    "heartbeat가 계속 실패해 안내 세션을 취소하고 정지합니다.")
+                self._session_cancel_pub.publish(String(data="robot_offline"))
+                self._communication_stop_pub.publish(Bool(data=True))
+            failing = True
+
         while not self._stop.wait(self.heartbeat_interval):
             try:
                 response = session.post(
@@ -345,7 +391,7 @@ class EventGateway(Node):
                 if not failing:
                     # 두절 중에는 매 주기 찍히면 로그가 도배된다. 전이할 때만.
                     self.get_logger().warn(f"heartbeat 실패: {exc}")
-                    failing = True
+                failed()
                 continue
 
             if response.status_code == 404:
@@ -354,19 +400,20 @@ class EventGateway(Node):
                 self.get_logger().error(
                     f"heartbeat 거부: {self.robot_id} 가 서버에 등록되지 않았습니다. "
                     "robot_id 파라미터와 robots 시드를 확인하세요.")
-                failing = True
+                failed()
                 continue
 
             if not response.ok:
                 if not failing:
                     self.get_logger().warn(
                         f"heartbeat 실패: HTTP {response.status_code}")
-                    failing = True
+                failed()
                 continue
 
             if failing:
                 self.get_logger().info("heartbeat 복구")
                 failing = False
+            guard.success()
 
         session.close()
 
