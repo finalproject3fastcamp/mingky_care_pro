@@ -20,6 +20,7 @@
 import json
 import math
 from pathlib import Path
+import threading
 from typing import Mapping
 
 import rclpy
@@ -41,6 +42,7 @@ from mingky_smart_recovery.selector import (
     select_escape_candidates,
 )
 
+from .arrival_chime import play_arrival_chime
 from .event_publisher import EventPublisher
 
 
@@ -79,6 +81,8 @@ class GuideManager(Node):
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
         self.declare_parameter('recovery_retry_delay_sec', 5.0)
+        self.declare_parameter('arrival_notice_sec', 3.0)
+        self.declare_parameter('use_arrival_chime', True)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
@@ -118,6 +122,10 @@ class GuideManager(Node):
         ))
         self.recovery_retry_delay_sec = max(
             0.5, float(self.get_parameter('recovery_retry_delay_sec').value))
+        self.arrival_notice_sec = max(
+            0.0, float(self.get_parameter('arrival_notice_sec').value))
+        self.use_arrival_chime = bool(
+            self.get_parameter('use_arrival_chime').value)
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -148,6 +156,8 @@ class GuideManager(Node):
         self._latest_nav_pose = None
         self._latest_nav_pose_received_ns = 0
         self._adaptive_retry_timer = None
+        self._arrival_notice_timer = None
+        self._pending_waiting_move = None
         self._maintenance_nav_active = False
         self._localization_active = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
@@ -350,6 +360,7 @@ class GuideManager(Node):
             self.get_logger().info(f'배터리 저전압 상태 해제 ({self.percent}%)')
             return
 
+        self._cancel_arrival_notice()
         self._cancel_adaptive_retry()
         active_session_id = self.session_id
         self.robot_state = GuideState.ROBOT_BATTERY_LOW
@@ -393,6 +404,7 @@ class GuideManager(Node):
             # 진행 중인 Nav2 콜백은 EmergencyStop 이 취소한 뒤 늦게 도착할 수 있다.
             # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
             self._nav_generation += 1
+            self._cancel_arrival_notice()
             self._cancel_adaptive_retry()
             self._cancel_dock_retry()
             self._dock_pending = self._battery_alarm
@@ -719,6 +731,60 @@ class GuideManager(Node):
             announce=False,
         )
 
+    def _play_arrival_chime(self) -> None:
+        """GPIO 음 재생이 ROS 콜백을 막지 않도록 별도 스레드에서 실행한다."""
+        if not self.use_arrival_chime:
+            return
+
+        def run() -> None:
+            try:
+                play_arrival_chime()
+            except Exception as exc:  # noqa: BLE001
+                # 소리 실패가 안내 주행을 막아서는 안 된다.
+                self.get_logger().warn(f'도착 알림음 재생 실패: {exc}')
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _schedule_waiting_move(self, visit_name: str, session_id: int) -> None:
+        """도착 안내를 보여준 뒤 waiting waypoint 이동을 예약한다."""
+        self._cancel_arrival_notice()
+        self._pending_waiting_move = (visit_name, session_id)
+        if self.arrival_notice_sec <= 0.0:
+            self._finish_arrival_notice()
+            return
+        self._arrival_notice_timer = self.create_timer(
+            self.arrival_notice_sec, self._finish_arrival_notice)
+        self.get_logger().info(
+            f'도착 안내 후 {self.arrival_notice_sec:.1f}초 뒤 '
+            f'waiting spot으로 이동합니다: {visit_name}')
+
+    def _cancel_arrival_notice(self) -> None:
+        if self._arrival_notice_timer is not None:
+            self._arrival_notice_timer.cancel()
+            self.destroy_timer(self._arrival_notice_timer)
+            self._arrival_notice_timer = None
+        self._pending_waiting_move = None
+
+    def _finish_arrival_notice(self) -> None:
+        pending = self._pending_waiting_move
+        if self._arrival_notice_timer is not None:
+            self._arrival_notice_timer.cancel()
+            self.destroy_timer(self._arrival_notice_timer)
+            self._arrival_notice_timer = None
+        self._pending_waiting_move = None
+        if pending is None:
+            return
+        visit_name, session_id = pending
+        if self._battery_alarm or self._emergency_engaged:
+            return
+        if (session_id != self.session_id
+                or visit_name != self.current_visit
+                or self.session_state != GuideState.SESSION_ARRIVED):
+            self.get_logger().warn(
+                '안내 세션 상태가 바뀌어 waiting spot 이동을 취소합니다.')
+            return
+        self._move_to_waiting_spot(visit_name, session_id)
+
     def _waiting_spot_failed(
             self, visit_name: str, waypoint_name: str, error_code: int) -> None:
         # 설정 누락이나 실제 주행 실패를 정상 대기로 숨기면 출입구를 막은 채
@@ -919,6 +985,7 @@ class GuideManager(Node):
                     f'waiting spot 도착: {self.current_visit}')
             else:
                 self._cancel_adaptive_retry()
+                self.robot_state = GuideState.ROBOT_WAITING
                 self.session_state = GuideState.SESSION_ARRIVED
                 visit_name = self._visit_name_for_waypoint(waypoint_name)
                 self.events.publish(
@@ -926,7 +993,8 @@ class GuideManager(Node):
                     {'visit_name': visit_name},
                     session_id)
                 self.get_logger().info(f'도착: {waypoint_name}')
-                self._move_to_waiting_spot(visit_name, session_id)
+                self._play_arrival_chime()
+                self._schedule_waiting_move(visit_name, session_id)
         else:
             if (not is_dock and not is_waiting and status == 6
                     and self._start_adaptive_recovery(

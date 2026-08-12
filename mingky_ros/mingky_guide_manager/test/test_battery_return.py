@@ -40,7 +40,10 @@ def ros():
 
 @pytest.fixture
 def manager():
-    node = GuideManager(parameter_overrides=[Parameter('robot_id', value='pinky-01')])
+    node = GuideManager(parameter_overrides=[
+        Parameter('robot_id', value='pinky-01'),
+        Parameter('use_arrival_chime', value=False),
+    ])
     node.nav = FakeNav()
     published = []
     node.events.publish = lambda code, payload=None, session_id=0, level=None: (
@@ -162,7 +165,7 @@ def test_resumed_session_restores_previous_visit_for_display(manager):
     assert node.session_state == GuideState.SESSION_CONFIRMED
 
 
-def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
+def test_clinical_goal_waits_for_notice_before_moving_to_waiting_spot(manager):
     node, published = manager
     node.session_id = 74
     node.current_visit = 'X-ray'
@@ -178,6 +181,15 @@ def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
 
     node._on_goal_result(
         succeeded, 5, 'xray_room_goal', False, 74)
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_ARRIVED
+    assert node._arrival_notice_timer is not None
+    assert published == [
+        ('nav.goal_succeeded', {'visit_name': 'X-ray'}, 74)]
+
+    node._finish_arrival_notice()
 
     assert len(node.nav.sent) == 1
     assert node.nav.sent[0].pose.pose.position.x == 3.0
@@ -206,6 +218,9 @@ def test_missing_waiting_spot_pauses_for_operator(manager):
     succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
 
     node._on_goal_result(succeeded, 8, 'ct_room_goal', False, 75)
+
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    node._finish_arrival_notice()
 
     assert node.nav.sent == []
     assert node.robot_state == GuideState.ROBOT_PAUSED
@@ -242,12 +257,47 @@ def test_explicit_no_waiting_spot_waits_at_clinical_goal(manager):
         session_id,
     )
 
+    assert node.session_state == GuideState.SESSION_ARRIVED
+    node._finish_arrival_notice()
+
     assert node.nav.sent == []
     assert node.robot_state == GuideState.ROBOT_WAITING
     assert node.session_state == GuideState.SESSION_IN_ROOM
     assert published == [
         ('nav.goal_succeeded', {'visit_name': visit_name}, session_id),
     ]
+
+
+def test_emergency_stop_cancels_pending_waiting_move(manager):
+    node, _ = manager
+    node.session_id = 77
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_ARRIVED
+    node._schedule_waiting_move('X-ray', 77)
+
+    node._on_emergency_state(Bool(data=True))
+
+    assert node._arrival_notice_timer is None
+    assert node._pending_waiting_move is None
+    assert node.nav.sent == []
+
+
+def test_low_battery_cancels_pending_waiting_move(manager):
+    node, _ = manager
+    node.session_id = 78
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_ARRIVED
+    node.percent = 35
+    node._schedule_waiting_move('X-ray', 78)
+
+    node._on_battery_low(Bool(data=True))
+
+    assert node._arrival_notice_timer is None
+    assert node._pending_waiting_move is None
+    assert all(
+        goal.pose.pose.position.x != 3.0
+        for goal in node.nav.sent
+    )
 
 
 def test_start_guidance_rejects_unknown_visit_mapping(manager):

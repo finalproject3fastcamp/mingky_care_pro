@@ -41,6 +41,14 @@ def test_arrival_and_waiting_spot_have_distinct_messages():
     assert 'QR 카드' in waiting.instruction
 
 
+def test_arrival_notice_asks_patient_to_clear_robot_front():
+    """The stopped arrival notice explains why the robot pauses briefly."""
+    arrived = view('waiting', 'arrived', current='CT')
+
+    assert arrived.title == 'CT에 도착했습니다'
+    assert arrived.instruction == '안전을 위해 로봇 앞을 비워 주세요'
+
+
 def test_completed_session_thanks_patient():
     """The final state clearly tells the patient the guidance is finished."""
     result = view('idle', 'completed', previous='CT', current='CT')
