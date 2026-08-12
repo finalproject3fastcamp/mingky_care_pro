@@ -20,6 +20,7 @@ I2C 를 만지는 노드다. 이 노드가 두 개 뜨면 측정값이 조용히
 
 from pinkylib import Battery
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Float32
 
@@ -117,7 +118,9 @@ def main(args=None):
     try:
         publisher = BatteryPublisher()
         rclpy.spin(publisher)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # systemctl stop 은 SIGTERM 을 보낸다. 잡지 않으면 종료할 때마다
+        # traceback 이 서비스 로그에 남는다.
         pass
     except SystemExit as e:
         code = getattr(e, 'code', 0) or 0
@@ -135,4 +138,6 @@ def main(args=None):
 
 
 if __name__ == '__main__':
-    main()
+    # ros2 run 은 setuptools 래퍼가 sys.exit(main()) 로 감싸주지만,
+    # 스크립트로 직접 실행하면 반환값이 버려져 종료코드가 항상 0이 된다.
+    raise SystemExit(main())
