@@ -59,6 +59,9 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
     aruco_arg = _argument(root, 'start_rear_aruco_detector')
     assert aruco_arg.get('default') == 'true'
+    qr_distance_arg = _argument(root, 'start_rear_qr_distance')
+    assert qr_distance_arg.get('default') == 'true'
+    assert _argument(root, 'rear_qr_size').get('default') == '0.028'
 
     rear = next(
         item for item in root.findall('include')
@@ -79,6 +82,11 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
         forwarded['start_aruco_detector']
         == '$(var start_rear_aruco_detector)'
     )
+    assert (
+        forwarded['start_qr_distance']
+        == '$(var start_rear_qr_distance)'
+    )
+    assert forwarded['qr_size'] == '$(var rear_qr_size)'
 
 
 def test_adaptive_recovery_is_the_integrated_default() -> None:

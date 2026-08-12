@@ -166,6 +166,7 @@ sudo apt install ros-jazzy-v4l2-camera
 ```text
 /rear_camera/image_raw
 /rear_camera/camera_info
+/rear_qr/observation
 ```
 
 실행과 확인:
@@ -174,6 +175,7 @@ sudo apt install ros-jazzy-v4l2-camera
 ros2 launch mingky_bringup rear_camera.launch.py
 ros2 topic hz /rear_camera/image_raw
 ros2 topic echo /rear_camera/camera_info --once
+ros2 topic echo /rear_qr/observation
 ```
 
 다른 장치를 시험할 때만 launch 인자로 덮어씁니다.

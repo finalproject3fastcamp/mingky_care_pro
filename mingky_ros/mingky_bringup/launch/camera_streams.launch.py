@@ -1,4 +1,4 @@
-"""Rear camera, ArUco detector, and low-bandwidth MJPEG preview."""
+"""Rear camera, marker detectors, and low-bandwidth MJPEG preview."""
 
 from pathlib import Path
 
@@ -65,7 +65,19 @@ def _rear_camera_actions(context):
             'calibration_file': calibration_file,
         }.items(),
     )
-    return [rear_camera, aruco_detector]
+    qr_distance = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(PathJoinSubstitution([
+            FindPackageShare('mingky_qr_distance'),
+            'launch',
+            'qr_distance.launch.py',
+        ])),
+        condition=IfCondition(LaunchConfiguration('start_qr_distance')),
+        launch_arguments={
+            'calibration_file': calibration_file,
+            'qr_size': LaunchConfiguration('qr_size'),
+        }.items(),
+    )
+    return [rear_camera, aruco_detector, qr_distance]
 
 
 def _rear_stream_action() -> Node:
@@ -114,6 +126,11 @@ def generate_launch_description() -> LaunchDescription:
             ),
         ),
         DeclareLaunchArgument('start_aruco_detector', default_value='true'),
+        DeclareLaunchArgument('start_qr_distance', default_value='true'),
+        DeclareLaunchArgument(
+            'qr_size', default_value='0.028',
+            description='Printed QR symbol side length in metres',
+        ),
         DeclareLaunchArgument('rear_preview_port', default_value='8092'),
         DeclareLaunchArgument(
             'wait_for_front_camera',

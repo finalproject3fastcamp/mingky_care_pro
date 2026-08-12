@@ -8,9 +8,16 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import arming, heartbeat, robot_runtime
+from .. import arming, heartbeat, qr_runtime, robot_runtime
 from ..db import get_pool
-from ..schemas import BatterySampleIn, RobotArmingOut, RobotHeartbeatIn, RobotOut
+from ..schemas import (
+    BatterySampleIn,
+    QrObservationIn,
+    QrObservationOut,
+    RobotArmingOut,
+    RobotHeartbeatIn,
+    RobotOut,
+)
 
 router = APIRouter(prefix="/robots", tags=["robots"])
 
@@ -263,3 +270,28 @@ async def post_battery(robot_id: str, sample: BatterySampleIn) -> Response:
     if not inserted:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
     return Response(status_code=204)
+
+
+@router.post("/{robot_id}/qr-observation", status_code=204)
+async def post_qr_observation(
+    robot_id: str, observation: QrObservationIn,
+) -> Response:
+    """후방 QR 거리 최신값을 갱신한다. 이벤트·DB에는 저장하지 않는다."""
+    if not heartbeat.is_tracked(robot_id):
+        raise HTTPException(status_code=409, detail="robot is not connected")
+    qr_runtime.update(robot_id, observation.visible, observation.distance)
+    return Response(status_code=204)
+
+
+@router.get("/{robot_id}/qr-observation", response_model=QrObservationOut)
+async def get_qr_observation(robot_id: str) -> QrObservationOut:
+    """관제 화면에 현재 QR 인식 여부와 거리만 제공한다."""
+    observation = qr_runtime.get(robot_id)
+    if observation is None:
+        return QrObservationOut(robot_id=robot_id)
+    return QrObservationOut(
+        robot_id=robot_id,
+        visible=observation.visible,
+        distance=observation.distance,
+        observed_at=observation.observed_at,
+    )

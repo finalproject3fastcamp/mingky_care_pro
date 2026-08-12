@@ -124,6 +124,53 @@
   object-fit: contain;
 }
 
+.guidance-rear-camera {
+  display: grid;
+  gap: 14px;
+}
+
+.guidance-rear-camera__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.guidance-rear-camera__header .card-title {
+  margin-bottom: 6px;
+}
+
+.guidance-rear-camera__distance {
+  color: var(--text);
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.guidance-rear-camera__stream {
+  max-width: none;
+}
+
+.guidance-rear-camera__notice,
+.guidance-rear-camera__hint {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: 0.85rem;
+}
+
+.guidance-rear-camera__notice {
+  color: var(--warning);
+}
+
+.guidance-rear-camera__unavailable {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: #111827;
+  color: #cbd5e1;
+  gap: 12px;
+}
+
 /* Patient */
 .patient-name {
   font-size: 1.65rem;
@@ -1410,6 +1457,7 @@
   font-weight: 700;
 }
 .camera-state--live { background: #dcfce7; color: #15803d; }
+.camera-state--waiting { background: var(--surface-2); color: var(--text-muted); }
 .camera-state--connecting { background: var(--warning-bg); color: var(--warning); }
 .camera-state--error { background: var(--danger-bg); color: var(--danger); }
 .camera-view__frame {

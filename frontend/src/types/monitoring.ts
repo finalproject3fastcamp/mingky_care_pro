@@ -72,6 +72,13 @@ export interface Robot {
   runtime_reported_at: string | null
 }
 
+export interface QrObservation {
+  robot_id: string
+  visible: boolean
+  distance: number | null
+  observed_at: string | null
+}
+
 export type NotificationLevel = 'info' | 'warning' | 'error'
 
 export interface NotificationEvent {
