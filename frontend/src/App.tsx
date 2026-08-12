@@ -5,6 +5,7 @@ import { EngineerDashboard } from './routes/EngineerDashboard'
 import { EngineerLayout } from './routes/EngineerLayout'
 import { WaypointDashboard } from './routes/WaypointDashboard'
 import { CameraDashboard } from './routes/CameraDashboard'
+import { SystemDashboard } from './routes/SystemDashboard'
 import './App.css'
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
           <Route path="engineer" element={<EngineerLayout />}>
             <Route index element={<Navigate to="events" replace />} />
             <Route path="events" element={<EngineerDashboard />} />
+            <Route path="system" element={<SystemDashboard />} />
             <Route path="waypoints" element={<WaypointDashboard />} />
             <Route path="cameras" element={<CameraDashboard />} />
           </Route>

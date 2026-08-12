@@ -131,6 +131,22 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
 
 
+def test_auto_localization_blocks_confirmed_session_departure(manager):
+    node, published = manager
+    node.session_id = 72
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = 'X-ray'
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node.visit_waypoints['X-ray'] = {'goal': 'xray_room_goal'}
+    node._on_localization_active(Bool(data=True))
+
+    node._on_start_guidance(String(data='72'))
+
+    assert node.nav.sent == []
+    assert published == [
+        ('session.start_rejected', {'reason': 'localization_active'}, 72)]
+
+
 def test_resumed_session_restores_previous_visit_for_display(manager):
     node, _ = manager
 

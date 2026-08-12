@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import arming, heartbeat
+from .. import arming, heartbeat, robot_runtime
 from ..db import get_pool
-from ..schemas import BatterySampleIn, RobotArmingOut, RobotOut
+from ..schemas import BatterySampleIn, RobotArmingOut, RobotHeartbeatIn, RobotOut
 
 router = APIRouter(prefix="/robots", tags=["robots"])
 
@@ -88,6 +88,7 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
     그 순간의 생존 여부가 관심사가 아닌 경로에서 굳이 조회하지 않기 위해서다.
     """
     last_seen, offline = (seen or {}).get(row["robot_id"], (None, False))
+    runtime = robot_runtime.snapshot().get(row["robot_id"])
     return RobotOut(
         **dict(row),
         armed_at=armed_map.get(row["robot_id"]),
@@ -97,6 +98,9 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
         # 링크가 없다. 이걸 두절로 표시하면 타임라인이 오탐으로 덮인다.
         link_state=("unknown" if last_seen is None
                     else "offline" if offline else "online"),
+        system_state=runtime.system_state if runtime else "unknown",
+        localization_active=runtime.localization_active if runtime else False,
+        runtime_reported_at=runtime.reported_at if runtime else None,
     )
 
 
@@ -194,7 +198,9 @@ async def get_arming(robot_id: str) -> RobotArmingOut:
 
 
 @router.post("/{robot_id}/heartbeat", status_code=204)
-async def post_heartbeat(robot_id: str) -> Response:
+async def post_heartbeat(
+    robot_id: str, body: RobotHeartbeatIn | None = None,
+) -> Response:
     """로봇 생존 신호.
 
     게이트웨이의 이벤트 큐를 타지 않는 별도 경로다. 실패하면 로봇 쪽에서
@@ -214,6 +220,9 @@ async def post_heartbeat(robot_id: str) -> Response:
             raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
     heartbeat.touch(robot_id)
+    if body is not None:
+        robot_runtime.update(
+            robot_id, body.system_state, body.localization_active)
     return Response(status_code=204)
 
 

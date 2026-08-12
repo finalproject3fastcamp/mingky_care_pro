@@ -593,6 +593,11 @@
   border-color: var(--accent);
   color: var(--accent-strong);
 }
+.btn.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
 
 .toolbar {
   display: flex;
@@ -1438,7 +1443,28 @@
 }
 
 /* Waypoint tool */
-.waypoint-dashboard { display: grid; gap: 18px; }
+.waypoint-dashboard,
+.system-dashboard { display: grid; gap: 18px; }
+.system-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.waypoint-localize-control { display: grid; gap: 10px; }
+.waypoint-system-control { display: grid; gap: 10px; }
+.waypoint-system-status,
+.waypoint-system-actions { display: flex; align-items: center; gap: 8px; }
+.waypoint-system-status { justify-content: space-between; }
+.waypoint-system-status strong[data-state='active'] { color: var(--success); }
+.waypoint-system-status strong[data-state='failed'] { color: var(--danger); }
+.waypoint-system-control p,
+.waypoint-localize-control p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.waypoint-localize-running { color: var(--accent-strong); font-size: 0.85rem; }
 .waypoint-page-header {
   display: flex;
   justify-content: space-between;
@@ -1586,6 +1612,31 @@
   .waypoint-page-header { align-items: stretch; flex-direction: column; }
   .waypoint-robot-picker__heading { align-items: flex-start; flex-direction: column; gap: 3px; }
   .waypoint-robot-cards { grid-template-columns: 1fr; }
+  .system-control-grid { grid-template-columns: 1fr; }
+}
+
+.medical-location-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
+  margin-bottom: 18px;
+}
+.medical-location-control .card-title { margin-bottom: 6px; }
+.medical-location-control p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.medical-location-control__action { display: grid; justify-items: end; gap: 8px; }
+.medical-location-control__action strong { color: var(--text-subtle); font-size: 0.8rem; }
+.medical-location-control__notice { grid-column: 1 / -1; color: var(--accent-strong) !important; }
+.medical-location-control__disabled { grid-column: 1 / -1; color: var(--warning) !important; }
+
+@media (max-width: 720px) {
+  .medical-location-control { grid-template-columns: 1fr; }
+  .medical-location-control__action { justify-items: stretch; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -6,6 +6,7 @@ from mingky_interfaces.msg import GuideState
 from mingky_navigation_manager.navigation_manager_node import (
     BUSY_ERROR,
     CLINICAL_ERROR,
+    LOCALIZATION_ERROR,
     NavigationManager,
     SAFETY_ERROR,
 )
@@ -117,6 +118,28 @@ def test_patient_session_cancels_running_waypoint_test(manager):
     assert node._active is False
     assert published[-1]['status'] == 'failed'
     assert published[-1]['error_code'] == CLINICAL_ERROR
+
+
+def test_localization_blocks_waypoint_test(manager):
+    node, published = manager
+    node._on_localization(Bool(data=True))
+
+    node._on_goto_pose(_pose())
+
+    assert node.nav.sent == []
+    assert published[-1]['status'] == 'rejected'
+    assert published[-1]['error_code'] == LOCALIZATION_ERROR
+
+
+def test_localization_cancels_running_waypoint_test(manager):
+    node, published = manager
+    node._on_goto_pose(_pose())
+
+    node._on_localization(Bool(data=True))
+
+    assert node._active is False
+    assert published[-1]['status'] == 'failed'
+    assert published[-1]['error_code'] == LOCALIZATION_ERROR
 
 
 @pytest.mark.parametrize('callback', ['battery', 'emergency'])

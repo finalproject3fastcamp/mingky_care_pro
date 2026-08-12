@@ -98,6 +98,7 @@ export function WaypointDashboard() {
   const selectedCheck = checkResult?.items.find((item) => item.name === selectedName) ?? null
   const testEnabled = Boolean(
     selectedRobotId && teleop.robotConnected && !activeSession && mode === 'auto'
+      && selectedRobot?.system_state === 'active'
       && selectedCheck && !['blocked', 'outside'].includes(selectedCheck.status),
   )
 
@@ -261,7 +262,7 @@ export function WaypointDashboard() {
                 : mode === 'estop'
                   ? '비상정지가 걸려 있습니다.'
                   : '수동 조작 모드로 전환하세요.'}
-          />
+              />
         </section>
 
         <RobotMap

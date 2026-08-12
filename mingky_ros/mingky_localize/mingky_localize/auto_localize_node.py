@@ -51,9 +51,12 @@ twist_mux 채널 우선순위(probe=20 > nav=10)만 믿으면, 우리가 명령�
 갑자기 제자리에서 돌기 시작"하는 그림 자체는 막지 못한다. 그래서
 guide_manager/navigation_manager 가 서로에게 쓰는 것과 같은 상태 토픽
 (``/guide_manager/state`` 의 ``ROBOT_MOVING``, ``/navigation_manager/active``)
-을 구독해 주행 중이면 trigger 자체를 거부한다. 그 확인과 실제 이동 사이의
-시간차(경쟁 상태)에 새 목표가 들어오는 경우까지 막기 위해, 실제로 움직이기
-직전에 Nav2 의 현재 목표를 ``CancelGoal`` 로 한 번 더 강제로 취소한다.
+을 구독한다. 환자 안내는 실제 이동 순간뿐 아니라 환자 확인부터 검사실 QR
+대기까지 세션 전체를 잠그며, Waypoint 시험 주행도 active 동안 trigger를
+거부한다. 반대로 ``/auto_localize/active``를 latched 상태로 공개해 두 주행
+관리자가 재탐색 도중 새 목표를 받지 못하게 한다. 그 확인과 실제 이동 사이의
+경쟁 상태에 외부 목표가 직접 들어오는 경우까지 막기 위해, 실제로 움직이기
+직전에 Nav2의 현재 목표를 ``CancelGoal``로 한 번 더 강제로 취소한다.
 """
 
 import math
@@ -88,6 +91,7 @@ SCAN_TOPIC = "/scan"
 ODOM_TOPIC = "/odom"
 NAV_MANAGER_ACTIVE_TOPIC = "/navigation_manager/active"
 GUIDE_STATE_TOPIC = "/guide_manager/state"
+ACTIVE_TOPIC = "/auto_localize/active"
 PROBE_CMD_TOPIC = "cmd_vel_localize_probe"
 RESET_SERVICE = "/reinitialize_global_localization"
 CANCEL_NAV_SERVICE = "/navigate_to_pose/_action/cancel_goal"
@@ -95,6 +99,17 @@ TRIGGER_SERVICE = "auto_localize/trigger"
 EVENT_TOPIC = "/events"
 
 AUTO_MODE = "auto"
+
+ACTIVE_GUIDE_SESSION_STATES = (
+    GuideState.SESSION_CONFIRMED,
+    GuideState.SESSION_GUIDING,
+    GuideState.SESSION_ARRIVED,
+    GuideState.SESSION_IN_ROOM,
+)
+
+
+def _guide_session_active(session_id: int, session_state: str) -> bool:
+    return session_id > 0 and session_state in ACTIVE_GUIDE_SESSION_STATES
 
 
 def _latched(depth: int = 1) -> QoSProfile:
@@ -186,8 +201,10 @@ class AutoLocalizeNode(Node):
         self._latest_odom_xy = None    # (x, y) | None
         self._latest_odom_yaw = None   # radians | None
         self._nav_manager_active = False   # navigation_manager 의 Waypoint 시험 주행
-        self._guide_robot_state = None     # guide_manager 의 GuideState.ROBOT_* 값
+        self._guide_session_id = 0
+        self._guide_session_state = GuideState.SESSION_NONE
         self._busy = False
+        self._busy_lock = threading.Lock()
 
         self.create_subscription(String, MODE_TOPIC, self._on_mode, _latched())
         self.create_subscription(
@@ -209,12 +226,16 @@ class AutoLocalizeNode(Node):
 
         self.probe_pub = self.create_publisher(Twist, PROBE_CMD_TOPIC, 10)
         self.event_pub = self.create_publisher(Event, EVENT_TOPIC, 10)
+        # 관제와 다른 주행 노드가 재탐색의 전체 실행 구간을 알 수 있게 한다.
+        # 늦게 뜬 노드도 현재 상태를 즉시 받아야 하므로 latched QoS를 쓴다.
+        self.active_pub = self.create_publisher(Bool, ACTIVE_TOPIC, _latched())
         self.reset_client = self.create_client(Empty, RESET_SERVICE)
         # 우리 쪽 사전 확인과 실제 이동 사이에 새 주행 목표가 끼어들 수
         # 있다. 이동 직전에 한 번 더 이걸로 Nav2 의 현재 목표를 강제로
         # 취소해 확실히 막는다 (_move_relative 참고).
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
         self.create_service(Trigger, TRIGGER_SERVICE, self._on_trigger_request)
+        self._publish_active()
 
         # amcl/bt_navigator 가 active 인지 직접 GetState 로 확인한다.
         # nav2_simple_commander.BasicNavigator 는 내부에서 spin 계열 함수를
@@ -263,7 +284,8 @@ class AutoLocalizeNode(Node):
         self._nav_manager_active = bool(msg.data)
 
     def _on_guide_state(self, msg: GuideState):
-        self._guide_robot_state = msg.robot_state
+        self._guide_session_id = int(msg.session_id)
+        self._guide_session_state = msg.session_state
 
     def _nav_goal_active(self) -> bool:
         """Nav2 가 지금 실제로 로봇을 주행시키고 있는가.
@@ -272,7 +294,26 @@ class AutoLocalizeNode(Node):
         주행(navigation_manager)이든, 그 도중에 재탐색 이동을 겹쳐 보내면
         두 명령이 같은 로봇 위에서 충돌한다.
         """
-        return self._nav_manager_active or self._guide_robot_state == GuideState.ROBOT_MOVING
+        guide_session_active = _guide_session_active(
+            self._guide_session_id, self._guide_session_state)
+        return self._nav_manager_active or guide_session_active
+
+    def _publish_active(self) -> None:
+        self.active_pub.publish(Bool(data=self._busy))
+
+    def _reserve_run(self) -> bool:
+        """한 실행만 예약하고 즉시 잠금 상태를 외부에 공개한다."""
+        with self._busy_lock:
+            if self._busy:
+                return False
+            self._busy = True
+            self._publish_active()
+            return True
+
+    def _release_run(self) -> None:
+        with self._busy_lock:
+            self._busy = False
+            self._publish_active()
 
     def _scan_is_fresh(self) -> bool:
         return (self._latest_scan is not None
@@ -312,32 +353,35 @@ class AutoLocalizeNode(Node):
             response.success = False
             response.message = "주행 목표가 진행 중이라 지금은 재탐색을 시작할 수 없습니다."
             return response
+        if not self._reserve_run():
+            response.success = False
+            response.message = "이미 실행 중입니다."
+            return response
         # 서비스 콜백은 빨리 반환해야 한다 (여기서 결과까지 기다리면 이 콜백을
         # 처리하는 메인 스레드가 막혀 절차 자체가 못 돈다). 실제 결과는
         # /events 의 localize.converged / localize.failed 로 확인한다.
         threading.Thread(
-            target=self._start_sequence, args=("manual",), daemon=True).start()
+            target=self._start_sequence, args=("manual", True), daemon=True).start()
         response.success = True
         response.message = "시작했습니다. 결과는 /events 에서 확인하세요."
         return response
 
-    def _start_sequence(self, source: str):
-        if self.mode != AUTO_MODE:
-            msg = f"현재 모드가 '{self.mode}' 라 자동 로컬라이제이션을 건너뜁니다."
-            self.get_logger().warn(msg)
-            return False, msg
-        if self._nav_goal_active():
-            # 여기서 다시 확인하는 이유: _on_trigger_request 가 통과시킨
-            # 뒤에도 이 스레드가 실제로 돌기 전까지는 시간차가 있고, 그
-            # 사이에 새 주행 목표가 들어올 수 있다.
-            msg = "주행 목표가 진행 중이라 자동 로컬라이제이션을 건너뜁니다."
-            self.get_logger().warn(msg)
-            return False, msg
-        self._busy = True
+    def _start_sequence(self, source: str, reserved: bool = False):
+        if not reserved and not self._reserve_run():
+            return False, "이미 실행 중입니다."
         try:
+            if self.mode != AUTO_MODE:
+                msg = f"현재 모드가 '{self.mode}' 라 자동 로컬라이제이션을 건너뜁니다."
+                self.get_logger().warn(msg)
+                return False, msg
+            if self._nav_goal_active():
+                # 서비스 승인 직후 세션이 생긴 경쟁 상황도 여기서 막는다.
+                msg = "안내 세션 또는 주행 목표가 활성 상태라 자동 로컬라이제이션을 건너뜁니다."
+                self.get_logger().warn(msg)
+                return False, msg
             return self._run_sequence(source)
         finally:
-            self._busy = False
+            self._release_run()
 
     # ------------------------------------------------------------ 본 절차
 

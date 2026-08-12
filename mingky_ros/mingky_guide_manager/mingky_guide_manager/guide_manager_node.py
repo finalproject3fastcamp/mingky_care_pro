@@ -149,6 +149,7 @@ class GuideManager(Node):
         self._latest_nav_pose_received_ns = 0
         self._adaptive_retry_timer = None
         self._maintenance_nav_active = False
+        self._localization_active = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -187,6 +188,9 @@ class GuideManager(Node):
         self.create_subscription(
             String, '/navigation_manager/result',
             self._on_navigation_result, 10)
+        self.create_subscription(
+            Bool, '/auto_localize/active',
+            self._on_localization_active, state_qos)
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
@@ -413,6 +417,9 @@ class GuideManager(Node):
     def _on_navigation_active(self, msg: Bool) -> None:
         self._maintenance_nav_active = bool(msg.data)
 
+    def _on_localization_active(self, msg: Bool) -> None:
+        self._localization_active = bool(msg.data)
+
     def _on_navigation_result(self, msg: String) -> None:
         """navigation_manager의 시험 주행 결과를 관제 이벤트와 상태로 반영한다."""
         try:
@@ -475,6 +482,11 @@ class GuideManager(Node):
             self._reject_start_guidance(
                 'invalid_session_id',
                 f'출발 명령의 session_id가 올바르지 않습니다: {requested!r}')
+            return
+        if self._localization_active:
+            self._reject_start_guidance(
+                'localization_active',
+                'AMCL 자동 재탐색 중에는 환자 안내를 시작할 수 없습니다.')
             return
 
         if requested_session_id <= 0 or requested_session_id != self.session_id:
