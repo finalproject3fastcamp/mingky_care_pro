@@ -47,6 +47,10 @@ class BatteryLogger(Node):
         super().__init__('battery_logger', **kwargs)
 
         self.declare_parameter('out_dir', '~')
+        # 어떤 부하 조건에서 잰 기록인지 표시한다. 조건이 다른 기록을 나중에
+        # 한 축에 섞으면 비교가 무의미해지므로, 파일 이름과 칼럼 양쪽에 남긴다.
+        #   예: idle_only / full_system / full_system_driving
+        self.declare_parameter('session_label', '')
         # 모터를 멈춘 뒤 전압이 회복되는 데 시간이 걸린다. 멈추자마자 잰 값은
         # 아직 처져 있어서 휴지 전압이 아니다. 이만큼 지나야 인정한다.
         self.declare_parameter('rest_settle_sec', 60.0)
@@ -58,15 +62,18 @@ class BatteryLogger(Node):
         self.rest_settle = float(g('rest_settle_sec').value)
         self.motion_eps = float(g('motion_epsilon').value)
 
+        self.label = str(g('session_label').value).strip()
+
         out_dir = Path(g('out_dir').value).expanduser()
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.path = out_dir / f'battery_{stamp}.csv'
+        suffix = f'_{self.label}' if self.label else ''
+        self.path = out_dir / f'battery_{stamp}{suffix}.csv'
         self.fh = open(self.path, 'w', newline='', encoding='utf-8')
         self.csv = csv.writer(self.fh)
         self.csv.writerow([
             'time', 'elapsed_sec', 'voltage', 'percent_linear',
-            'percent_published', 'state', 'idle_sec',
+            'percent_published', 'state', 'idle_sec', 'label',
         ])
         self.fh.flush()
 
@@ -88,8 +95,9 @@ class BatteryLogger(Node):
         self.create_timer(float(g('summary_period_sec').value), self.summary)
         self.get_logger().info(
             f'기록 시작 → {self.path}\n'
+            f'  부하 조건: {self.label or "(라벨 없음)"}\n'
             f'  휴지 인정: 정지 후 {self.rest_settle:.0f}초 경과\n'
-            '  완충 직후 / 방치 / 주행 을 각각 충분히 담아 주세요.')
+            '  조건이 다르면 session_label 을 바꿔 따로 기록하세요.')
 
     # ------------------------------------------------------------------
 
@@ -126,7 +134,7 @@ class BatteryLogger(Node):
             datetime.now().isoformat(timespec='seconds'),
             f'{elapsed:.1f}', f'{v:.3f}', f'{percent_from_voltage(v):.1f}',
             '' if self.published_percent is None else f'{self.published_percent:.1f}',
-            state, f'{self.idle_sec():.1f}',
+            state, f'{self.idle_sec():.1f}', self.label,
         ])
         self.fh.flush()     # 로봇 전원이 갑자기 꺼져도 여기까지는 남는다
 

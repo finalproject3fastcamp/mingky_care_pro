@@ -89,15 +89,41 @@ CSV 한 줄이 표본 하나이고, 조건이 함께 기록됩니다.
 | 파라미터 | 기본값 | 설명 |
 |---|---:|---|
 | `out_dir` | `~` | CSV 저장 위치 |
+| `session_label` | `''` | 부하 조건 이름. 파일명과 칼럼에 남음 |
 | `rest_settle_sec` | `60.0` | 이만큼 정지해야 휴지로 인정 |
 | `motion_epsilon` | `0.01` | 이 이상이면 움직이는 것으로 판단 |
+
+### 부하 조건을 나눠서 재세요
+
+**모터만 돌리면 실제 부하가 안 나옵니다.** 라이다·카메라 스트리밍·Nav2
+연산·LCD가 상시 먹는 전류가 훨씬 큽니다. 조건을 나눠 재면 **어디서 전기를
+쓰는지**가 드러나고, 그래야 절약할 곳을 정할 수 있습니다.
+
+```bash
+# ① 최소 구성 — 기준선
+ros2 launch pinky_bringup bringup_robot.launch.xml
+ros2 run mingky_battery_guard battery_logger --ros-args -p session_label:=idle_only
+
+# ② 통합 실행, 정지 상태 — 센서·연산 부하
+ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=pinky-01
+ros2 run mingky_battery_guard battery_logger --ros-args -p session_label:=full_system
+
+# ③ 통합 실행 + 주행 — 실제 운용 부하
+ros2 run mingky_battery_guard battery_logger --ros-args -p session_label:=full_driving
+```
+
+①과 ②의 차이가 **센서·연산이 먹는 양**, ②와 ③의 차이가 **모터가 먹는 양**
+입니다.
 
 ### 측정 절차
 
 1. **완충 후 30분 이상 방치** → 이 팩의 진짜 100% 휴지 전압
-2. **정지 상태로 방치**하며 계속 기록 → 휴지 곡선
-3. **주행 구간**을 섞어 기록 → 부하 최저 전압
-4. **로봇이 실제로 못 움직일 때까지** → 이 팩의 진짜 0%
+2. 위 ①②③을 각각 충분히 기록 → 조건별 소모량 비교
+3. 주행 구간마다 **멈추고 2분 이상** 대기 → `rest` 표본 확보
+4. **로봇 기본 부저가 계속 울리면(6.8V) 중단**하고 충전
+
+> ⚠️ 완전 방전까지 가지 마세요. 리튬이온은 깊게 방전시키면 팩이 더 상합니다.
+> 6.8V가 실용적인 하한이고, 그 지점만 알아도 충분합니다.
 
 ### 무엇을 보나
 

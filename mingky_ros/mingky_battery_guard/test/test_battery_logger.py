@@ -101,3 +101,18 @@ def test_published_percent_is_recorded_for_comparison(logger):
         row = list(csv.DictReader(f))[0]
     assert row['percent_published'] == '73.0'
     assert row['percent_linear'] == '75.0'
+
+
+def test_label_is_recorded_and_in_filename(tmp_path):
+    """부하 조건이 다른 기록을 섞으면 비교가 무의미해진다. 라벨로 구분한다."""
+    node = BatteryLogger(parameter_overrides=[
+        Parameter('out_dir', value=str(tmp_path)),
+        Parameter('session_label', value='full_system'),
+    ])
+    node.last_motion_at = node.now() - 120.0
+    node.on_voltage(Float32(data=7.4))
+    node.fh.flush()
+    assert 'full_system' in node.path.name
+    with open(node.path, encoding='utf-8') as f:
+        assert list(csv.DictReader(f))[0]['label'] == 'full_system'
+    node.destroy_node()
