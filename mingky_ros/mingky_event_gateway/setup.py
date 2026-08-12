@@ -16,6 +16,7 @@ setup(
     maintainer_email='mingky-care@example.com',
     description='Forwards robot events to the control server with a local retry queue.',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'event_gateway = mingky_event_gateway.gateway_node:main',

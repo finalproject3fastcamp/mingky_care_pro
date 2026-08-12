@@ -65,6 +65,9 @@ export interface Robot {
   armed_at: string | null
   last_seen_at: string | null
   link_state: 'online' | 'offline' | 'unknown'
+  system_state: 'active' | 'activating' | 'deactivating' | 'inactive' | 'failed' | 'unknown'
+  localization_active: boolean
+  runtime_reported_at: string | null
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error'

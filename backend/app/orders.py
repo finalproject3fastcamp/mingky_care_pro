@@ -41,6 +41,7 @@ log = logging.getLogger("mingky")
 # **덮어써진다.** 조작자는 정지를 눌렀는데 로봇은 그 명령을 본 적이 없다.
 # 로그에만 남고 화면에는 성공으로 보이므로 알아채기도 어렵다.
 _SAFETY_COMMANDS = frozenset({"set_mode"})
+_SYSTEM_COMMANDS = frozenset({"system_start", "system_stop", "system_restart"})
 
 # robot_id → 대기 중인 주행 명령. 로봇당 하나만 둔다.
 #
@@ -54,6 +55,10 @@ _pending: dict[str, OrderOut] = {}
 # 안전 명령끼리는 최신 것이 이긴다. estop 뒤에 오는 해제 요청은 조작자의
 # 명시적 판단이므로 덮어쓰는 것이 맞다.
 _safety: dict[str, OrderOut] = {}
+
+# 통합 launch 제어는 주행 명령과 별도 슬롯이다. 시스템 시작 요청이 아직
+# 전달되지 않았다고 해서 뒤이어 누른 Waypoint 명령이 이를 지우면 안 된다.
+_system: dict[str, OrderOut] = {}
 
 # robot_id → 그 로봇의 명령을 기다리고 있는 대기자들.
 #
@@ -72,7 +77,11 @@ def _now() -> datetime:
 
 
 def _slot(command: str) -> dict[str, OrderOut]:
-    return _safety if command in _SAFETY_COMMANDS else _pending
+    if command in _SAFETY_COMMANDS:
+        return _safety
+    if command in _SYSTEM_COMMANDS:
+        return _system
+    return _pending
 
 
 def put(robot_id: str, command: str, argument: str) -> OrderOut:
@@ -139,7 +148,8 @@ def peek(robot_id: str) -> OrderOut | None:
     정지가 먼저 가야 한다. 반대 순서면 로봇이 목적지로 출발한 뒤에야
     정지를 받는다.
     """
-    return _safety.get(robot_id) or _pending.get(robot_id)
+    return (_safety.get(robot_id) or _system.get(robot_id)
+            or _pending.get(robot_id))
 
 
 def ack(robot_id: str, order_id: uuid.UUID) -> bool:
@@ -148,12 +158,17 @@ def ack(robot_id: str, order_id: uuid.UUID) -> bool:
     지운 경우 True. order_id 가 안 맞으면 지우지 않고 False —
     그 사이 새 명령으로 덮어써진 경우이므로 새 것을 살려둬야 한다.
     """
-    for slot in (_safety, _pending):
+    for slot in (_safety, _system, _pending):
         order = slot.get(robot_id)
         if order is not None and order.order_id == order_id:
             del slot[robot_id]
             return True
     return False
+
+
+def clear_motion(robot_id: str) -> None:
+    """시스템 중지·재시작 전에 아직 전달되지 않은 주행 명령을 폐기한다."""
+    _pending.pop(robot_id, None)
 
 
 def snapshot() -> dict[str, list[OrderOut]]:
@@ -163,8 +178,9 @@ def snapshot() -> dict[str, list[OrderOut]]:
     peek 과 같은 순서(안전 먼저)로 담는다.
     """
     result: dict[str, list[OrderOut]] = {}
-    for robot_id in set(_safety) | set(_pending):
-        orders = [s[robot_id] for s in (_safety, _pending) if robot_id in s]
+    for robot_id in set(_safety) | set(_system) | set(_pending):
+        orders = [
+            s[robot_id] for s in (_safety, _system, _pending) if robot_id in s]
         result[robot_id] = orders
     return result
 
@@ -173,3 +189,4 @@ def reset() -> None:
     """테스트용."""
     _pending.clear()
     _safety.clear()
+    _system.clear()

@@ -98,6 +98,7 @@ export function WaypointDashboard() {
   const selectedCheck = checkResult?.items.find((item) => item.name === selectedName) ?? null
   const testEnabled = Boolean(
     selectedRobotId && teleop.robotConnected && !activeSession && mode === 'auto'
+      && selectedRobot?.system_state === 'active'
       && selectedCheck && !['blocked', 'outside'].includes(selectedCheck.status),
   )
 
@@ -158,6 +159,46 @@ export function WaypointDashboard() {
       setNotice('시험 주행 명령을 보냈습니다. 지도 경로와 비상정지를 확인하세요.')
     } catch {
       setNotice('시험 주행 명령을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function runAutoLocalize() {
+    if (!selectedRobotId || activeSession || mode !== 'auto') return
+    if (!window.confirm(
+      `${selectedRobotId}의 현재 위치 추정을 초기화하고 자동 재탐색할까요?\n` +
+      '로봇이 주변을 확인하며 회전·왕복 이동할 수 있습니다.',
+    )) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      await sendOrder(selectedRobotId, 'localize', 'run')
+      setNotice('자동 재탐색을 요청했습니다. 안내 또는 시험 주행 중이면 로봇이 거부합니다.')
+    } catch {
+      setNotice('자동 재탐색 요청을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function controlSystem(
+    command: 'system_start' | 'system_stop' | 'system_restart',
+  ) {
+    if (!selectedRobotId || selectedRobot?.link_state !== 'online') return
+    const label = command === 'system_start' ? '가동' : command === 'system_stop' ? '중지' : '재시작'
+    if (command !== 'system_start' && activeSession) {
+      setNotice('환자 안내 중에는 통합 시스템을 중지하거나 재시작할 수 없습니다.')
+      return
+    }
+    if (!window.confirm(`${selectedRobotId} 통합 시스템을 ${label}할까요?`)) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      await sendOrder(selectedRobotId, command, 'run')
+      setNotice(`통합 시스템 ${label} 명령을 보냈습니다. 상태 반영에는 수 초 걸릴 수 있습니다.`)
+    } catch {
+      setNotice(`통합 시스템 ${label} 명령을 보내지 못했습니다.`)
     } finally {
       setBusy(false)
     }
@@ -251,6 +292,37 @@ export function WaypointDashboard() {
           {selectedRobotId && (
             <RobotModeControl robotId={selectedRobotId} mode={mode} robotConnected={teleop.robotConnected} />
           )}
+          <section className="card waypoint-system-control">
+            <div className="card-title">통합 시스템</div>
+            <div className="waypoint-system-status">
+              <span>상태</span>
+              <strong data-state={selectedRobot?.system_state ?? 'unknown'}>
+                {selectedRobot?.system_state === 'active' ? '가동 중'
+                  : selectedRobot?.system_state === 'activating' ? '시작 중'
+                    : selectedRobot?.system_state === 'deactivating' ? '종료 중'
+                      : selectedRobot?.system_state === 'inactive' ? '중지됨'
+                        : selectedRobot?.system_state === 'failed' ? '실패'
+                          : '확인 불가'}
+              </strong>
+            </div>
+            <p>Nav2·안내 상태머신·카메라를 한 번에 관리합니다. 관제 통신과 배터리 보고는 계속 유지됩니다.</p>
+            <div className="waypoint-system-actions">
+              <button type="button" className="btn primary"
+                disabled={busy || selectedRobot?.link_state !== 'online'
+                  || selectedRobot?.system_state === 'active'}
+                onClick={() => controlSystem('system_start')}>가동</button>
+              <button type="button" className="btn"
+                disabled={busy || activeSession || selectedRobot?.link_state !== 'online'
+                  || selectedRobot?.system_state !== 'active'
+                  || selectedRobot?.localization_active}
+                onClick={() => controlSystem('system_restart')}>재시작</button>
+              <button type="button" className="btn danger"
+                disabled={busy || activeSession || selectedRobot?.link_state !== 'online'
+                  || selectedRobot?.system_state === 'inactive'
+                  || selectedRobot?.localization_active}
+                onClick={() => controlSystem('system_stop')}>중지</button>
+            </div>
+          </section>
           <TeleopPad
             drive={drive}
             enabled={teleopEnabled}
@@ -261,7 +333,25 @@ export function WaypointDashboard() {
                 : mode === 'estop'
                   ? '비상정지가 걸려 있습니다.'
                   : '수동 조작 모드로 전환하세요.'}
-          />
+              />
+          <section className="card waypoint-localize-control">
+            <div className="card-title">AMCL 위치 재탐색</div>
+            <p>위치가 크게 어긋났을 때만 실행하세요. 재탐색 중에는 안내와 시험 주행이 차단됩니다.</p>
+            {selectedRobot?.localization_active && (
+              <strong className="waypoint-localize-running">재탐색 실행 중</strong>
+            )}
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || !selectedRobotId || activeSession || mode !== 'auto'
+                || selectedRobot?.system_state !== 'active'
+                || selectedRobot?.localization_active
+                || selectedRobot?.link_state !== 'online'}
+              onClick={runAutoLocalize}
+            >
+              자동 재탐색 실행
+            </button>
+          </section>
         </section>
 
         <RobotMap

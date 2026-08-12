@@ -1,0 +1,17 @@
+[Unit]
+Description=Mingky Care 통합 주행 시스템 (Nav2, 안내, 카메라)
+After=network-online.target mingky-battery-pub.service fg-teleop.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+EnvironmentFile=-/etc/environment
+EnvironmentFile=/etc/mingky/robot.env
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=${MINGKY_ROBOT_ID} backend_url:=${MINGKY_BACKEND_URL}'
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

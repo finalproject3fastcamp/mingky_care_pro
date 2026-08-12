@@ -24,6 +24,7 @@ import yaml
 BUSY_ERROR = -5
 SAFETY_ERROR = -6
 CLINICAL_ERROR = -7
+LOCALIZATION_ERROR = -8
 
 
 def _yaw_to_quat(yaw: float) -> tuple[float, float]:
@@ -48,6 +49,7 @@ class NavigationManager(Node):
         self._clinical_active = False
         self._battery_low = False
         self._emergency = False
+        self._localization_active = False
         self._active = False
         self._generation = 0
         self._goal_handle = None
@@ -68,6 +70,8 @@ class NavigationManager(Node):
         self.create_subscription(Bool, '/battery/low', self._on_battery, state_qos)
         self.create_subscription(
             Bool, '/emergency_stop/state', self._on_emergency, state_qos)
+        self.create_subscription(
+            Bool, '/auto_localize/active', self._on_localization, state_qos)
 
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self._publish_active()
@@ -125,6 +129,13 @@ class NavigationManager(Node):
         self._emergency = bool(msg.data)
         if self._emergency and self._active:
             self._cancel_active(SAFETY_ERROR, '비상정지로 시험 주행을 취소했습니다.')
+
+    def _on_localization(self, msg: Bool) -> None:
+        self._localization_active = bool(msg.data)
+        if self._localization_active and self._active:
+            self._cancel_active(
+                LOCALIZATION_ERROR,
+                'AMCL 자동 재탐색이 시작되어 시험 주행을 취소했습니다.')
 
     def _on_cancel(self, msg: Bool) -> None:
         if msg.data and self._active:
@@ -198,6 +209,13 @@ class NavigationManager(Node):
                 'waypoint_name': name,
                 'error_code': CLINICAL_ERROR,
                 'message': '환자 안내 중에는 Waypoint 시험 주행을 시작할 수 없습니다.',
+            })
+            return
+        if self._localization_active:
+            self._publish_result('rejected', {
+                'waypoint_name': name,
+                'error_code': LOCALIZATION_ERROR,
+                'message': 'AMCL 자동 재탐색 중에는 Waypoint 시험 주행을 시작할 수 없습니다.',
             })
             return
         if self._battery_low or self._emergency:

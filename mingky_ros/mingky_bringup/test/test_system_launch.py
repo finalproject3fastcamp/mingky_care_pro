@@ -178,3 +178,4 @@ def test_systemd_starts_the_teleop_control_nodes() -> None:
         'cat <<EOF', 1)[0]
     assert 'mingky-teleop-bridge' in enable_block
     assert 'fg-teleop' in enable_block
+    assert 'mingky-system' in enable_block

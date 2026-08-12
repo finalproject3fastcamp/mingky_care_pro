@@ -42,6 +42,10 @@ export type RobotCommand =
   | 'start_session'
   | 'start_guidance'
   | 'set_mode'
+  | 'localize'
+  | 'system_start'
+  | 'system_stop'
+  | 'system_restart'
 
 /** mode_manager 가 인정하는 값. 그 외는 로봇이 무시한다. */
 export type RobotMode = 'auto' | 'manual' | 'estop'
