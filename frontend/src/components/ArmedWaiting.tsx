@@ -5,8 +5,8 @@ import type { Robot } from '../types/monitoring'
 
 interface Props {
   robot: Robot
-  /** 로봇 QR 리더가 송출하는 MJPEG 미리보기 URL. 없으면 안내 문구를 대신 띄운다. */
-  cameraStreamUrl?: string
+  /** 선택한 로봇의 전방 QR 카메라 MJPEG 경로. */
+  cameraStreamUrl: string
   onDisarmed?: () => void
 }
 
@@ -50,22 +50,11 @@ export function ArmedWaiting({ robot, cameraStreamUrl, onDisarmed }: Props) {
         </button>
       </div>
       {error && <p className="picker-error">{error}</p>}
-      {cameraStreamUrl ? (
-        <img
-          className="camera-stream armed-camera"
-          src={cameraStreamUrl}
-          alt="로봇 카메라 실시간"
-        />
-      ) : (
-        <div className="armed-camera-missing">
-          카메라 URL 이 설정되지 않았습니다.
-          <div className="armed-camera-missing-hint">
-            <code>frontend/.env</code> 의 <code>VITE_CAMERA_STREAM_URL</code> 에
-            로봇 QR 리더 노드의 미리보기 주소를 채우고 dev 서버를 재시작하세요.
-          </div>
-        </div>
-      )}
+      <img
+        className="camera-stream armed-camera"
+        src={cameraStreamUrl}
+        alt="로봇 전방 카메라 실시간"
+      />
     </div>
   )
 }
-

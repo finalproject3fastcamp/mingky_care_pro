@@ -10,6 +10,7 @@ import rclpy
 from rclpy.parameter import Parameter
 from std_msgs.msg import Float32
 
+
 def make_guard(**overrides):
     """부저를 끈 guard 를 만든다. 발행된 상태 변화를 리스트로 같이 준다."""
     params = {
@@ -139,6 +140,74 @@ def test_low_state_is_published_as_boolean(guard):
 
 # ---------------------------------------------------------------- 충전 감지
 
+# ---------------------------------------------- 주행 중 왕복 (관제 보고 사례)
+
+def test_fires_when_battery_swings_between_high_and_low(guard):
+    """70% <-> 8% 를 왕복해도 경보가 나가야 한다.
+
+    방전이 진행된 배터리는 주행하면 처지고 멈추면 회복하기를 반복한다.
+    연속 카운터를 쓰면 기준치 위를 한 번 볼 때마다 0 이 되어 영영 쌓이지
+    않는다. 실제로 이 상태에서 로봇 기본 부저는 계속 울리는데 이 노드는
+    한 번도 발동하지 않는 일이 있었다.
+    """
+    node, alerts = guard
+    feed_percents(node, [70, 8] * 8)
+    assert node.fired is True, '왕복하는 동안 경보가 나가지 않았다'
+    # 회복 하나로 풀렸다 다시 걸리기를 반복하면 관제에 이벤트 폭풍이 나고
+    # 충전소 복귀도 계속 취소·재시도된다.
+    assert alerts == [True], f'상태가 반복해서 뒤집혔다: {alerts}'
+
+
+def test_single_high_reading_does_not_reset_progress(guard):
+    """기준치 위 표본 하나가 그동안의 저전압 기록을 지우면 안 된다."""
+    node, alerts = guard
+    feed_percents(node, [70, 65, 60, 55, 50])
+    feed_percents(node, [30, 30])          # 창에 2회 쌓임
+    before = node.low_count
+    feed_percents(node, [70])              # 회복 한 번
+    assert node.low_count >= before - 1, '높은 값 하나로 기록이 초기화됐다'
+
+
+# ---------------------------------------------- 위험선 즉시 대응
+
+def test_critical_voltage_fires_without_waiting(guard):
+    """위험선(6.80V)까지 내려가면 확인 절차를 기다리지 않는다.
+
+    로봇 기본 부저가 이미 울리는 구간이라 여기서 더 기다릴 이유가 없다.
+    """
+    node, alerts = guard
+    feed_volts(node, [7.36, 6.75, 6.72])   # 원본 2회가 위험선 이하
+    assert node.fired is True
+
+
+def test_single_critical_sample_does_not_fire(guard):
+    """ADC 단발 오류 하나로는 발동하지 않는다."""
+    node, alerts = guard
+    feed_volts(node, [7.36, 7.36, 6.75, 7.36, 7.36])
+    assert node.fired is False
+
+
+def test_critical_fires_even_while_charging():
+    """충전 중으로 보여도 위험선이면 알린다."""
+    node, alerts = make_guard(median_samples=3)
+    feed_percents(node, [5, 10, 15, 20, 25])   # 상승 추세 = 충전 중 판정
+    assert node.is_charging() is True
+    feed_volts(node, [6.75, 6.72])
+    assert node.fired is True, '충전 중이라는 이유로 위험 전압을 무시했다'
+    node.destroy_node()
+
+
+# ---------------------------------------------- 최저 전압 노출
+
+def test_minimum_voltage_is_published(guard):
+    """중앙값이 가리는 최저 전압을 따로 볼 수 있어야 한다."""
+    node, alerts = guard
+    seen = []
+    node.vmin_pub.publish = lambda msg: seen.append(round(msg.data, 3))
+    feed_volts(node, [7.36, 6.75, 7.36])
+    assert min(seen) == 6.75, '최저 전압이 노출되지 않는다'
+
+
 def test_recovery_after_load_is_not_mistaken_for_charging():
     """모터가 멈추며 전압이 기준선으로 돌아오는 것은 충전이 아니다.
 
@@ -171,7 +240,9 @@ def test_rearms_after_recovery_and_can_fire_again(guard):
     node, alerts = guard
     feed_percents(node, [70, 65, 60, 55, 50, 38, 37, 36, 35])
     assert len(alerts) == 1
-    feed_percents(node, [45, 55, 65, 70, 75])     # 충전
+    # 재무장은 창(confirm_window)이 전부 기준치 위여야 인정된다.
+    # 회복 표본 하나로 풀어주면 왕복하는 배터리에서 발동·해제가 반복된다.
+    feed_percents(node, [45, 55, 65, 70, 75, 80, 85])   # 충전
     assert node.fired is False
     feed_percents(node, [39, 38, 37, 36])         # 다시 떨어짐
     assert alerts == [True, False, True]
@@ -186,7 +257,8 @@ def test_rearms_even_when_charging_has_finished():
     feed_percents(node, [70, 65, 60, 55, 50, 38, 37, 36])   # 필터 꺼서 지연 없음
     assert node.fired is True
     # 완충 후 평평한 구간만 들어온다 -> is_charging() 은 False
-    feed_percents(node, [95, 95, 95, 95, 95])
+    # 창이 전부 기준치 위가 되도록 confirm_window 만큼 넣는다.
+    feed_percents(node, [95] * 8)
     assert node.is_charging() is False
     assert node.fired is False, '평평한 완충 상태에서 재무장되지 않았다'
     node.destroy_node()

@@ -48,4 +48,30 @@ server {
         proxy_send_timeout 3600s;
     }
 
+    # 카메라 원본 ROS 토픽은 클라우드로 보내지 않는다. 로봇에서 3 FPS로 만든
+    # MJPEG만 역터널로 받아 같은 오리진에서 전달한다.
+    location /camera/pinky-01/front/ {
+        proxy_pass http://127.0.0.1:18801/;
+        proxy_buffering off;
+        proxy_read_timeout 30s;
+    }
+
+    location /camera/pinky-01/rear/ {
+        proxy_pass http://127.0.0.1:18802/;
+        proxy_buffering off;
+        proxy_read_timeout 30s;
+    }
+
+    location /camera/pinky-02/front/ {
+        proxy_pass http://127.0.0.1:18803/;
+        proxy_buffering off;
+        proxy_read_timeout 30s;
+    }
+
+    location /camera/pinky-02/rear/ {
+        proxy_pass http://127.0.0.1:18804/;
+        proxy_buffering off;
+        proxy_read_timeout 30s;
+    }
+
 }

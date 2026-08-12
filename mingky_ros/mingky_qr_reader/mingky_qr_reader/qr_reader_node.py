@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 import time
 from dataclasses import dataclass
 
@@ -13,8 +12,10 @@ from pyzbar import pyzbar
 from pyzbar.pyzbar import ZBarSymbol
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool
 
 from mingky_interfaces.msg import GuideState, SessionStart
+from mingky_camera_streamer.mjpeg_server import MjpegServer
 
 from .scan_policy import completion_scan_enabled
 
@@ -23,114 +24,6 @@ from .scan_policy import completion_scan_enabled
 class LastScan:
     value: str
     ts: float
-
-
-class _PreviewServer:
-    """노드가 잡은 프레임을 MJPEG 로 송출하는 경량 미리보기 서버.
-
-    카메라는 한 프로세스만 열 수 있어(스캔 중 별도 camera_server 사용 불가) 노드가
-    직접 최신 프레임을 공유 버퍼에 넣고, 접속한 뷰어들이 그 버퍼를 나눠 받는다.
-    대시보드에서 `<img src=".../stream">` 로 바로 임베드한다.
-    """
-
-    def __init__(self, port: int, logger, max_width: int = 640,
-                 quality: int = 60) -> None:
-        from flask import Flask, Response  # 미리보기 켤 때만 필요
-
-        # 새 프레임이 들어온 것을 대기 중인 뷰어들에게 알린다. 조건변수를 쓰는
-        # 이유는 아래 _frames 주석 참고 — 같은 프레임 재송출이 지연의 원인이다.
-        self._cond = threading.Condition()
-        self._jpeg: bytes | None = None
-        self._seq = 0
-        self._max_width = max_width
-        self._quality = quality
-
-        app = Flask(__name__)
-
-        @app.route("/")
-        def _index():
-            return ('<html><body style="margin:0;background:#000">'
-                    '<img src="/stream" style="width:100%"></body></html>')
-
-        @app.route("/stream")
-        def _stream():
-            return Response(self._frames(),
-                            mimetype="multipart/x-mixed-replace; boundary=frame")
-
-        self._thread = threading.Thread(
-            target=lambda: app.run(host="0.0.0.0", port=port,
-                                   threaded=True, use_reloader=False),
-            daemon=True,
-        )
-        self._thread.start()
-        logger.info(f"미리보기 MJPEG 서버 시작: http://0.0.0.0:{port}/stream")
-
-    def _frames(self):
-        """새로 잡힌 프레임만, 프레임당 한 번씩 내보낸다.
-
-        고정 주기로 버퍼를 다시 쏘면 같은 그림이 중복 전송된다. 2.4GHz 무선에서는
-        그 여분이 링크를 채우고 소켓 버퍼에 밀려서, 뷰어가 보는 화면이 실제보다
-        몇 초 뒤처진다 (보내는 쪽은 최신인데 받는 쪽이 큐를 소화하는 중).
-        새 프레임을 기다렸다 보내면 큐가 쌓일 여지 자체가 없어진다.
-        """
-        last = -1
-        while True:
-            with self._cond:
-                # 타임아웃은 카메라가 멎어도 이 스레드가 영원히 잠들지 않게 하는
-                # 안전장치다. 깨어나도 보낼 게 없으면 그냥 다시 기다린다.
-                if not self._cond.wait_for(lambda: self._seq != last, timeout=2.0):
-                    continue
-                last = self._seq
-                buf = self._jpeg
-            if buf is not None:
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                       + buf + b"\r\n")
-
-    def clear(self) -> None:
-        """마지막 프레임을 버린다.
-
-        스캔이 끝난 뒤 남은 화면 — 대개 환자의 QR 카드와 손이 찍힌 프레임 —
-        이 다음 접속자에게 그대로 보이면 안 된다. 갱신이 멎은 동안 뒤늦게
-        붙은 뷰어에게도 아무것도 내보내지 않게 비운다.
-        """
-        with self._cond:
-            self._jpeg = None
-            self._seq += 1
-            self._cond.notify_all()
-
-    def update(self, frame, codes) -> None:
-        """최신 프레임에 인식된 QR 박스·라벨을 얹어 JPEG 버퍼로 갱신한다."""
-        import numpy as np  # cv2 와 함께 항상 존재
-
-        disp = frame.copy()
-        for code in codes:
-            label = code.data.decode("utf-8", errors="replace")
-            pts = code.polygon
-            if pts and len(pts) >= 4:
-                poly = np.array([[p.x, p.y] for p in pts], dtype=np.int32)
-                cv2.polylines(disp, [poly], True, (0, 255, 0), 3)
-            r = code.rect
-            cv2.putText(disp, label, (r.left, max(r.top - 10, 20)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-
-        # 미리보기는 사람이 "QR 을 어디에 대야 하는지" 보는 용도다. 디코드는
-        # 원본 해상도로 이미 끝났으므로, 전송량을 줄이는 쪽이 이득이 크다.
-        # 박스·라벨을 그린 뒤에 줄여야 좌표 변환이 필요 없다.
-        if 0 < self._max_width < disp.shape[1]:
-            scale = self._max_width / disp.shape[1]
-            disp = cv2.resize(
-                disp,
-                (self._max_width, max(int(disp.shape[0] * scale), 1)),
-                interpolation=cv2.INTER_AREA,
-            )
-
-        ok, buf = cv2.imencode(
-            ".jpg", disp, [int(cv2.IMWRITE_JPEG_QUALITY), self._quality])
-        if ok:
-            with self._cond:
-                self._jpeg = buf.tobytes()
-                self._seq += 1
-                self._cond.notify_all()
 
 
 class QrReaderNode(Node):
@@ -161,6 +54,7 @@ class QrReaderNode(Node):
         # 0 이면 축소하지 않는다.
         self.declare_parameter("preview_max_width", 640)
         self.declare_parameter("preview_jpeg_quality", 60)
+        self.declare_parameter("preview_max_fps", 10.0)
         # arming 폴링 주기. 백엔드에 GET /robots/<id>/arming 을 주기로 던져
         # 의료진이 이 로봇을 활성화했는지 확인한다. armed 가 아니면 QR 을
         # 디코드/전송하지 않는다.
@@ -190,16 +84,31 @@ class QrReaderNode(Node):
         self._static_frame = None
         self._last: LastScan | None = None
 
-        self._setup_source()
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self._camera_ready_pub = self.create_publisher(
+            Bool, '/front_camera/ready', state_qos)
+        try:
+            self._setup_source()
+        except Exception:  # noqa: BLE001
+            # 후방 카메라는 전방 초기화의 성공 여부가 아니라 완료 시점만
+            # 기다린다. 실패 상태도 남겨 후방이 무기한 대기하지 않게 한다.
+            self._camera_ready_pub.publish(Bool(data=False))
+            raise
+        self._camera_ready_pub.publish(Bool(data=True))
 
-        self._preview: _PreviewServer | None = None
+        self._preview: MjpegServer | None = None
         preview_port = int(self.get_parameter("preview_port").value)
         if preview_port > 0:
-            self._preview = _PreviewServer(
+            self._preview = MjpegServer(
                 preview_port,
                 self.get_logger(),
                 max_width=int(self.get_parameter("preview_max_width").value),
                 quality=int(self.get_parameter("preview_jpeg_quality").value),
+                max_fps=float(self.get_parameter("preview_max_fps").value),
             )
 
         # 백엔드가 세션을 만들어 주면 로봇 내부에 SessionStart 를 흘려 다른 노드
@@ -212,11 +121,6 @@ class QrReaderNode(Node):
         self._completion_scan_enabled = False
         self._arming_fails = 0
 
-        state_qos = QoSProfile(
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
         self.create_subscription(
             GuideState, '/guide_manager/state', self._on_guide_state, state_qos)
 
@@ -294,20 +198,25 @@ class QrReaderNode(Node):
         return frame
 
     def _tick(self) -> None:
-        # 최초 환자 확인은 관제 arming, 검사 완료는 Guide Manager의 waiting
-        # 상태가 스캔 창을 연다. 그 밖에는 캡처조차 하지 않는다.
-        if not (self._armed or self._completion_scan_enabled):
+        # QR 디코드는 arming/waiting 동안만 한다. 관제 카메라 화면을 실제로 연
+        # 사람이 있으면 스캔 상태와 무관하게 프레임만 저FPS로 공유한다.
+        scan_enabled = self._armed or self._completion_scan_enabled
+        preview_enabled = self._preview is not None and self._preview.has_viewers
+        if not (scan_enabled or preview_enabled):
             return
 
         frame = self._read_frame()
         if frame is None:
             return
 
-        # QR 만 디코드한다. 다른 심볼로지(DataBar 등)까지 돌리면 라이브 카메라
-        # 노이즈에서 zbar 가 시끄러운 경고를 쏟고 CPU 도 낭비한다.
-        codes = pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
+        # 관제 미리보기만 보는 동안에는 QR 디코드를 돌리지 않는다.
+        codes = (pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
+                 if scan_enabled else [])
         if self._preview is not None:
-            self._preview.update(frame, codes)
+            self._preview.update(self._annotate_preview(frame, codes))
+
+        if not scan_enabled:
+            return
 
         for code in codes:
             value = code.data.decode("utf-8", errors="replace").strip()
@@ -318,6 +227,27 @@ class QrReaderNode(Node):
             self._last = LastScan(value=value, ts=time.monotonic())
             self._post_scan(value)
             return
+
+    @staticmethod
+    def _annotate_preview(frame, codes):
+        """Draw QR results without coupling the generic streamer to QR types."""
+        if not codes:
+            return frame
+        import numpy as np
+
+        display = frame.copy()
+        for code in codes:
+            label = code.data.decode('utf-8', errors='replace')
+            points = code.polygon
+            if points and len(points) >= 4:
+                polygon = np.array(
+                    [[point.x, point.y] for point in points], dtype=np.int32)
+                cv2.polylines(display, [polygon], True, (0, 255, 0), 3)
+            rect = code.rect
+            cv2.putText(
+                display, label, (rect.left, max(rect.top - 10, 20)),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        return display
 
     def _poll_arming(self) -> None:
         """백엔드에 이 로봇이 armed 인지 물어본다.

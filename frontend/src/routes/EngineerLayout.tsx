@@ -13,6 +13,10 @@ export function EngineerLayout() {
             <span>Waypoint 관리</span>
             <small>측정 · 검사 · 주행</small>
           </NavLink>
+          <NavLink to="cameras" className={({ isActive }) => `engineer-nav__link${isActive ? ' active' : ''}`}>
+            <span>카메라 모니터링</span>
+            <small>전방 · 후방 저FPS 영상</small>
+          </NavLink>
         </nav>
       </aside>
       <main className="engineer-content">
