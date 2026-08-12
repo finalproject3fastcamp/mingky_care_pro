@@ -10,6 +10,7 @@
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>mingky_interfaces</exec_depend>
   <exec_depend>mingky_camera_streamer</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
