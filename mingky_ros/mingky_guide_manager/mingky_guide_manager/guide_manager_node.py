@@ -325,6 +325,10 @@ class GuideManager(Node):
     # ------------------------------------------------------------------ 배터리
 
     def _on_voltage(self, msg: Float32):
+        # 이 변환은 화면·이벤트 표시 전용이다. 저전압 판정은 BatteryGuard 가
+        # 전압으로 하고 결과만 /battery/low 로 받는다. 그래서 이 식이 근사여도
+        # 로봇 동작에는 영향이 없다 (mingky_battery_guard/README.md 참고).
+        # 패키지 의존을 늘리지 않으려고 공유하지 않고 여기 둔다.
         if math.isnan(msg.data):
             return
         self.voltage = msg.data
