@@ -1,15 +1,19 @@
 """AMCL 초기 위치를 자동으로 잡는다. RViz 의 2D Pose Estimate 손조작을 없앤다.
 
-    /mode 확인 (auto 아니면 중단)
+    /mode 확인 (auto 아니면 중단) → 주행 목표 활성 중이면 거부
       → amcl/bt_navigator active 대기
-      → /reinitialize_global_localization 호출
+      → /reinitialize_global_localization 호출 (응답 없으면 바로 실패)
       → /particle_cloud 로 수렴 관찰 (mingky_localize.convergence)
       → 수렴 안 되면: /scan 으로 안전 방향 탐색 (mingky_smart_recovery 재사용)
-        → 제자리 회전 → 직진(이동 중에도 라이다 계속 감시) → 후진 → 회전 복귀
+        → 이동 직전 Nav2 목표 강제 취소 → 제자리 회전 → 직진(이동 중에도
+          라이다 신선도·거리 계속 감시) → 후진 → 회전 복귀
       → 정해진 횟수/시간 넘으면 포기하고 이벤트만 남긴다 (억지로 계속 안 함)
 
-부팅(Nav2 기동) 시 자동 1회 실행되고, ``auto_localize/trigger`` 서비스로
-언제든 수동 재실행도 된다.
+기본은 자동 실행 없이 대기만 한다(``auto_run_on_start`` 기본값 false) --
+전역 재탐색은 기존 위치 추정을 지우고 로봇을 움직이기까지 하므로, 관제
+화면에서 운영자가 ``auto_localize/trigger`` 서비스로 필요할 때 명시적으로
+실행하는 편이 안전하다 (관제 팀 리뷰, 2026-08-12). 부팅 시 자동 실행이
+필요한 로봇/환경에서만 launch 인자로 켠다.
 
 ## 왜 이동 거리를 고정하지 않는가
 
@@ -39,6 +43,17 @@ controller_server 가 실시간으로 장애물을 감시하니 안전할 거라
 로 쏘면 사람 조작과 충돌하고, cmd_vel_smoothed 로 쏘면 Nav2인 척하게 된다.
 twist_mux 에 별도 입력(cmd_vel_localize_probe)이 필요하다 — manual lock 이
 이것도 같이 막아야 사람이 몰고 있을 때 로봇이 혼자 움직이지 않는다.
+
+## 왜 Nav2 주행 중에는 아예 시작을 안 하는가 (관제 팀 리뷰, 2026-08-12)
+
+twist_mux 채널 우선순위(probe=20 > nav=10)만 믿으면, 우리가 명령을 쏘는
+그 순간에는 우리가 이기지만 "Nav2 가 환자를 안내하러 가는 도중에 로봇이
+갑자기 제자리에서 돌기 시작"하는 그림 자체는 막지 못한다. 그래서
+guide_manager/navigation_manager 가 서로에게 쓰는 것과 같은 상태 토픽
+(``/guide_manager/state`` 의 ``ROBOT_MOVING``, ``/navigation_manager/active``)
+을 구독해 주행 중이면 trigger 자체를 거부한다. 그 확인과 실제 이동 사이의
+시간차(경쟁 상태)에 새 목표가 들어오는 경우까지 막기 위해, 실제로 움직이기
+직전에 Nav2 의 현재 목표를 ``CancelGoal`` 로 한 번 더 강제로 취소한다.
 """
 
 import math
@@ -47,6 +62,7 @@ import time
 import uuid
 
 import rclpy
+from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import Twist
 from lifecycle_msgs.srv import GetState
 from nav2_msgs.msg import ParticleCloud
@@ -54,10 +70,10 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Empty, Trigger
 
-from mingky_interfaces.msg import Event
+from mingky_interfaces.msg import Event, GuideState
 from mingky_smart_recovery.selector import (
     SelectorConfig,
     select_diverse_candidates,
@@ -70,8 +86,11 @@ MODE_TOPIC = "/mode"
 PARTICLE_TOPIC = "/particle_cloud"
 SCAN_TOPIC = "/scan"
 ODOM_TOPIC = "/odom"
+NAV_MANAGER_ACTIVE_TOPIC = "/navigation_manager/active"
+GUIDE_STATE_TOPIC = "/guide_manager/state"
 PROBE_CMD_TOPIC = "cmd_vel_localize_probe"
 RESET_SERVICE = "/reinitialize_global_localization"
+CANCEL_NAV_SERVICE = "/navigate_to_pose/_action/cancel_goal"
 TRIGGER_SERVICE = "auto_localize/trigger"
 EVENT_TOPIC = "/events"
 
@@ -102,7 +121,12 @@ class AutoLocalizeNode(Node):
         super().__init__("auto_localize_node")
 
         self.declare_parameter("robot_id", "pinky-01")
-        self.declare_parameter("auto_run_on_start", True)
+        # 관제 팀 리뷰(2026-08-12): AMCL 전역 재탐색은 기존 위치 추정을 지우고
+        # 로봇을 움직이기까지 한다. 부팅 때마다 무조건 도는 건 위험하니
+        # 기본은 꺼두고, 관제 화면에서 운영자가 필요할 때 auto_localize/trigger
+        # 서비스로 명시적으로 실행하게 한다. 부팅 시 자동 실행이 필요한
+        # 로봇/환경에서만 launch 인자로 켠다.
+        self.declare_parameter("auto_run_on_start", False)
         self.declare_parameter("convergence_threshold_m", 0.3)
         self.declare_parameter("yaw_threshold_deg", 15.0)
         self.declare_parameter("observe_seconds", 5.0)
@@ -128,6 +152,12 @@ class AutoLocalizeNode(Node):
         # 없이 /scan 각도를 그대로 "로봇 기준 방향"으로 쓰면 정면이라고 판단한
         # 게 실제로는 후면이 되어, 실제 로봇이 벽 쪽으로 이동하는 사고가 났다.
         self.declare_parameter("scan_yaw_offset_deg", 180.0)
+        # 라이다가 죽거나 연결이 끊겨도 self._latest_scan 은 마지막으로 받은
+        # (이제는 낡은) 값을 계속 들고 있다. 그 값을 계속 "지금의 여유
+        # 거리"로 믿으면 실제로는 안 보이는 상태로 계속 전진하게 된다
+        # (관제 팀 리뷰: 이동 중 라이다가 끊기면 즉시 멈춰야 한다). 이
+        # 시간보다 오래된 스캔은 "안 보인다 = 막혀있다"로 취급한다.
+        self.declare_parameter("scan_max_age_sec", 1.0)
 
         get = self.get_parameter
         self.robot_id = str(get("robot_id").value)
@@ -145,13 +175,18 @@ class AutoLocalizeNode(Node):
         self.obstacle_check_half_width_rad = math.radians(
             float(get("obstacle_check_half_width_deg").value))
         self.scan_yaw_offset_rad = math.radians(float(get("scan_yaw_offset_deg").value))
+        self.scan_max_age_sec = float(get("scan_max_age_sec").value)
 
         self.mode = None
         self._particles = None        # list[(x, y, yaw)] | None
         self._particles_updated_at = None  # time.monotonic() | None
+        self._any_fresh_particles_seen = False
         self._latest_scan = None
+        self._latest_scan_at = None    # time.monotonic() | None
         self._latest_odom_xy = None    # (x, y) | None
         self._latest_odom_yaw = None   # radians | None
+        self._nav_manager_active = False   # navigation_manager 의 Waypoint 시험 주행
+        self._guide_robot_state = None     # guide_manager 의 GuideState.ROBOT_* 값
         self._busy = False
 
         self.create_subscription(String, MODE_TOPIC, self._on_mode, _latched())
@@ -162,10 +197,23 @@ class AutoLocalizeNode(Node):
             LaserScan, SCAN_TOPIC, self._on_scan,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, 10)
+        # 재탐색 이동은 Nav2 주행(환자 안내든 엔지니어 화면의 Waypoint 시험
+        # 주행이든)과 동시에 벌어지면 안 된다 -- 두 쪽 다 로봇을 직접
+        # 움직이려 든다. guide_manager/navigation_manager 가 이미 서로에게
+        # 쓰는 것과 같은 상태 토픽을 그대로 구독해서 "지금 주행 중인가"를
+        # 판단한다 (관제 팀 리뷰: 주행 목표 활성 중에는 수동 trigger 거부).
+        self.create_subscription(
+            Bool, NAV_MANAGER_ACTIVE_TOPIC, self._on_nav_manager_active, _latched())
+        self.create_subscription(
+            GuideState, GUIDE_STATE_TOPIC, self._on_guide_state, _latched())
 
         self.probe_pub = self.create_publisher(Twist, PROBE_CMD_TOPIC, 10)
         self.event_pub = self.create_publisher(Event, EVENT_TOPIC, 10)
         self.reset_client = self.create_client(Empty, RESET_SERVICE)
+        # 우리 쪽 사전 확인과 실제 이동 사이에 새 주행 목표가 끼어들 수
+        # 있다. 이동 직전에 한 번 더 이걸로 Nav2 의 현재 목표를 강제로
+        # 취소해 확실히 막는다 (_move_relative 참고).
+        self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
         self.create_service(Trigger, TRIGGER_SERVICE, self._on_trigger_request)
 
         # amcl/bt_navigator 가 active 인지 직접 GetState 로 확인한다.
@@ -204,11 +252,32 @@ class AutoLocalizeNode(Node):
 
     def _on_scan(self, msg: LaserScan):
         self._latest_scan = msg
+        self._latest_scan_at = time.monotonic()
 
     def _on_odom(self, msg: Odometry):
         self._latest_odom_xy = (msg.pose.pose.position.x, msg.pose.pose.position.y)
         self._latest_odom_yaw = _quat_to_yaw(
             msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+
+    def _on_nav_manager_active(self, msg: Bool):
+        self._nav_manager_active = bool(msg.data)
+
+    def _on_guide_state(self, msg: GuideState):
+        self._guide_robot_state = msg.robot_state
+
+    def _nav_goal_active(self) -> bool:
+        """Nav2 가 지금 실제로 로봇을 주행시키고 있는가.
+
+        환자 안내 주행(guide_manager)이든 엔지니어 화면의 Waypoint 시험
+        주행(navigation_manager)이든, 그 도중에 재탐색 이동을 겹쳐 보내면
+        두 명령이 같은 로봇 위에서 충돌한다.
+        """
+        return self._nav_manager_active or self._guide_robot_state == GuideState.ROBOT_MOVING
+
+    def _scan_is_fresh(self) -> bool:
+        return (self._latest_scan is not None
+                and self._latest_scan_at is not None
+                and time.monotonic() - self._latest_scan_at <= self.scan_max_age_sec)
 
     # ------------------------------------------------------------ 트리거
     #
@@ -239,6 +308,10 @@ class AutoLocalizeNode(Node):
             response.success = False
             response.message = f"현재 모드가 '{self.mode}' 라 시작할 수 없습니다."
             return response
+        if self._nav_goal_active():
+            response.success = False
+            response.message = "주행 목표가 진행 중이라 지금은 재탐색을 시작할 수 없습니다."
+            return response
         # 서비스 콜백은 빨리 반환해야 한다 (여기서 결과까지 기다리면 이 콜백을
         # 처리하는 메인 스레드가 막혀 절차 자체가 못 돈다). 실제 결과는
         # /events 의 localize.converged / localize.failed 로 확인한다.
@@ -251,6 +324,13 @@ class AutoLocalizeNode(Node):
     def _start_sequence(self, source: str):
         if self.mode != AUTO_MODE:
             msg = f"현재 모드가 '{self.mode}' 라 자동 로컬라이제이션을 건너뜁니다."
+            self.get_logger().warn(msg)
+            return False, msg
+        if self._nav_goal_active():
+            # 여기서 다시 확인하는 이유: _on_trigger_request 가 통과시킨
+            # 뒤에도 이 스레드가 실제로 돌기 전까지는 시간차가 있고, 그
+            # 사이에 새 주행 목표가 들어올 수 있다.
+            msg = "주행 목표가 진행 중이라 자동 로컬라이제이션을 건너뜁니다."
             self.get_logger().warn(msg)
             return False, msg
         self._busy = True
@@ -278,7 +358,17 @@ class AutoLocalizeNode(Node):
             return False, msg
 
         deadline = time.monotonic() + self.overall_timeout_sec
-        self._call_reset_async()
+        self._any_fresh_particles_seen = False
+        if not self._call_reset_async():
+            # 응답을 못 받았으면 파티클이 실제로 재분포됐는지 알 수 없다.
+            # 이 상태에서 계속 진행하면, 리셋 이전부터 있던(운 좋게 이미
+            # 뭉쳐있는) 오래된 파티클을 보고 "수렴했다"고 잘못 판단할 수
+            # 있다 (관제 팀 리뷰: 응답 없으면 이전 데이터로 성공 판단 금지).
+            msg = f"{RESET_SERVICE} 응답을 받지 못했습니다."
+            self.get_logger().error(msg)
+            self._emit("localize.failed", Event.LEVEL_ERROR,
+                       '{"reason": "no_reset_response"}')
+            return False, msg
 
         failures: dict = {}  # 방향 이름 -> 시도했는데도 안 된 횟수
         for attempt in range(self.max_probe_attempts + 1):
@@ -321,8 +411,12 @@ class AutoLocalizeNode(Node):
         msg = (f"{self.max_probe_attempts}회 시도 후에도 수렴하지 않았습니다. "
                "사람 확인이 필요합니다.")
         self.get_logger().error(msg)
+        # 파티클이 한 번도 새로 안 들어왔다면 "위치가 애매해서" 가 아니라
+        # AMCL 이 죽었거나 /particle_cloud 가 안 오는 것이다. 원인이
+        # 다르므로 이유를 구분해 남긴다 (관제 팀 리뷰 대응).
+        reason = "not_converged" if self._any_fresh_particles_seen else "no_particle_data"
         self._emit("localize.failed", Event.LEVEL_ERROR,
-                   f'{{"reason": "not_converged", "attempts": {self.max_probe_attempts}}}')
+                   f'{{"reason": "{reason}", "attempts": {self.max_probe_attempts}}}')
         return False, msg
 
     def _wait_until_active(self, names, timeout_sec: float) -> bool:
@@ -351,12 +445,15 @@ class AutoLocalizeNode(Node):
             self.get_logger().warn(f"active 대기 시간 초과: {sorted(pending)}")
         return not pending
 
-    def _call_reset_async(self):
+    def _call_reset_async(self) -> bool:
         """reinitialize_global_localization 을 비동기로 부르고 완료까지 기다린다.
 
         Client.call() 은 내부에서 같은 노드를 재귀적으로 spin 하려 해서
         안전하지 않다. call_async + time.sleep 대기로 우회한다 (메인
         스레드가 응답을 처리해준다).
+
+        Returns:
+            응답을 받았으면 True, 타임아웃이면 False.
         """
         future = self.reset_client.call_async(Empty.Request())
         deadline = time.monotonic() + 5.0
@@ -364,6 +461,24 @@ class AutoLocalizeNode(Node):
             time.sleep(0.1)
         if not future.done():
             self.get_logger().warn(f"{RESET_SERVICE} 응답을 못 받았습니다 (타임아웃).")
+            return False
+        return True
+
+    def _cancel_active_nav_goal(self):
+        """Nav2(bt_navigator) 의 지금 목표를 강제로 전부 취소한다.
+
+        action_msgs/CancelGoal 은 goal_id 와 시각이 둘 다 비어있으면(기본값)
+        "모든 목표 취소" 로 정의돼 있다. 그래서 어떤 노드가 보낸 목표인지
+        (guide_manager 든 navigation_manager 든) 몰라도 이거 하나로 정리된다.
+        서비스가 아직 안 떠 있으면(Nav2 시작 전 등) 그냥 넘어간다 -- 애초에
+        취소할 목표도 없다는 뜻이다.
+        """
+        if not self.cancel_nav_client.service_is_ready():
+            return
+        future = self.cancel_nav_client.call_async(CancelGoal.Request())
+        deadline = time.monotonic() + 2.0
+        while not future.done() and rclpy.ok() and time.monotonic() < deadline:
+            time.sleep(0.05)
 
     def _probe_once(self, failures: dict) -> "str | None":
         """방향을 골라 이동한다. 고른 방향 이름을 돌려준다 (없으면 None).
@@ -375,9 +490,11 @@ class AutoLocalizeNode(Node):
         보고 추가했다 (mingky_smart_recovery 가 원래 갖고 있던 기능인데
         안 쓰고 있었다).
         """
-        scan = self._latest_scan
-        if scan is None:
+        if not self._scan_is_fresh():
+            # 스캔이 없거나 낡았으면 어느 방향이 열려있는지 알 수 없다.
+            # 모르는 채로 방향을 고르느니 이번 회차는 건너뛴다.
             return None
+        scan = self._latest_scan
         config = SelectorConfig(
             nominal_distance_m=self.probe_distance_m,
             minimum_distance_m=self.probe_min_distance_m,
@@ -427,6 +544,10 @@ class AutoLocalizeNode(Node):
         """
         if self._latest_odom_xy is None or self._latest_odom_yaw is None:
             return
+        # 트리거 시점에는 주행 중이 아니었어도, 그 사이 새 목표가 들어왔을
+        # 수 있다. 실제로 로봇을 움직이기 직전에 한 번 더 Nav2 의 현재
+        # 목표를 강제로 취소해 확실히 겹치지 않게 한다.
+        self._cancel_active_nav_goal()
         need_turn = abs(_wrap_angle(bearing_rad)) > math.radians(3.0)
 
         if need_turn and not self._rotate_relative(bearing_rad):
@@ -514,10 +635,15 @@ class AutoLocalizeNode(Node):
 
         scan.angle_min 에 scan_yaw_offset_rad 를 더해 로봇 몸체 기준으로
         바꾼 뒤 잰다 (_probe_once 의 후보 선택과 같은 보정).
+
+        스캔이 없거나 낡았으면(scan_max_age_sec 초과) 0.0 을 돌려준다 --
+        "안 보인다" 를 "안전하다"(inf) 가 아니라 "바로 앞이 막혀있다"
+        로 취급해야 이동 루프가 즉시 멈춘다 (관제 팀 리뷰: 이동 중 라이다
+        데이터가 끊기면 즉시 정지).
         """
+        if not self._scan_is_fresh():
+            return 0.0
         scan = self._latest_scan
-        if scan is None:
-            return float("inf")
         angle_min = float(scan.angle_min) + self.scan_yaw_offset_rad
         increment = float(scan.angle_increment)
         half_width = self.obstacle_check_half_width_rad
@@ -555,13 +681,17 @@ class AutoLocalizeNode(Node):
 
         _particles_updated_at 로 "신선한" 데이터인지 확인한다 -- 방금 한
         이동/리셋 이전의 오래된 파티클로 잘못 "수렴했다" 고 판단하는 것을
-        막는다.
+        막는다. 이 관찰 구간 동안 신선한 파티클을 한 번도 못 받았으면,
+        낡은 self._particles 로 대신 판단하지 않고 "미수렴" 으로 취급한다
+        (관제 팀 리뷰: 새 파티클 데이터를 못 받으면 이전 데이터로 성공
+        판단 금지).
         """
         start = time.monotonic()
         deadline = start + max_seconds
         result = None
         while rclpy.ok() and time.monotonic() < deadline:
             if self._particles_updated_at is not None and self._particles_updated_at >= start:
+                self._any_fresh_particles_seen = True
                 result = evaluate_convergence(
                     self._particles or [],
                     threshold_m=self.convergence_threshold_m,
@@ -572,8 +702,7 @@ class AutoLocalizeNode(Node):
             time.sleep(0.3)
         if result is None:
             result = evaluate_convergence(
-                self._particles or [],
-                threshold_m=self.convergence_threshold_m,
+                [], threshold_m=self.convergence_threshold_m,
                 yaw_threshold_rad=self.yaw_threshold_rad,
             )
         return result

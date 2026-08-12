@@ -34,9 +34,11 @@
     <arg name="start_lcd_status" default="true"/>
     <arg name="use_buzzer" default="true"/>
     <arg name="use_led" default="true"/>
-    <!-- AMCL 초기 위치 자동 설정. 검증 전에는 false 로 끄고 수동(RViz/대시보드)만
-         쓸 수 있게 스위치를 둔다. -->
-    <arg name="auto_localize_run_on_start" default="true"/>
+    <!-- AMCL 전역 재탐색은 기존 위치 추정을 지우고 로봇을 움직이기까지 한다.
+         부팅 때마다 무조건 도는 건 위험해서(관제 팀 리뷰, 2026-08-12)
+         기본은 꺼두고, 관제 화면에서 운영자가 auto_localize/trigger 로
+         명시적으로 실행하게 한다. -->
+    <arg name="auto_localize_run_on_start" default="false"/>
 
     <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"
              if="$(var start_robot_base)">
