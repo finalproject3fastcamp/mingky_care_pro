@@ -31,6 +31,7 @@ setup(
             'emergency_stop=mingky_battery_guard.emergency_stop:main',
             'battery_guard=mingky_battery_guard.battery_guard:main',
             'fake_battery=mingky_battery_guard.fake_battery:main',
+            'battery_logger=mingky_battery_guard.battery_logger:main',
         ],
     },
 )
