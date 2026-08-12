@@ -108,3 +108,52 @@ def test_create_order_validates_session_before_queueing(monkeypatch):
 def test_unknown_guidance_command_remains_rejected():
     with pytest.raises(ValidationError):
         OrderIn(command='begin_guidance', argument='42')
+
+
+def test_localize_command_is_part_of_the_contract():
+    command = OrderIn(command='localize', argument='run')
+
+    assert command.command == 'localize'
+    assert command.argument == 'run'
+
+
+def test_localize_rejects_unknown_argument(monkeypatch):
+    async def require_robot(robot_id):
+        return None
+
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(orders_router.create_order(
+            'pinky-01', OrderIn(command='localize', argument='start')))
+
+    assert raised.value.status_code == 422
+
+
+def test_system_stop_rejects_active_session(monkeypatch):
+    async def require_robot(robot_id):
+        return None
+
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+    monkeypatch.setattr(
+        orders_router, 'get_pool', lambda: SessionPool(matches=77))
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(orders_router.create_order(
+            'pinky-01', OrderIn(command='system_stop', argument='run')))
+
+    assert raised.value.status_code == 409
+
+
+def test_system_start_is_allowed_without_session_query(monkeypatch):
+    async def require_robot(robot_id):
+        return None
+
+    queued = SimpleNamespace(command='system_start', argument='run')
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+    monkeypatch.setattr(orders_router.orders, 'put', lambda *args: queued)
+
+    result = asyncio.run(orders_router.create_order(
+        'pinky-01', OrderIn(command='system_start', argument='run')))
+
+    assert result is queued

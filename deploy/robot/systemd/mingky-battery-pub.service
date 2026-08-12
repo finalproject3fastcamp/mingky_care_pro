@@ -1,5 +1,5 @@
 [Unit]
-Description=배터리 퍼블리셔 (주행과 무관하게 상시)
+Description=I2C ADC 단독 리더 — 배터리·초음파·IR (주행과 무관하게 상시)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,8 +9,13 @@ User=pinky
 # 배터리는 주행 스택(bringup_robot)에 묶여 있었다. 그런데 의료진이 대시보드에서
 # 로봇을 고르려면 배터리 값이 먼저 있어야 하고, 그건 주행 전 상황이다.
 # 값이 없으면 백엔드가 409 로 선택을 막아 아무것도 시작할 수 없다.
+#
+# pinky_bringup 의 battery_publisher 를 mingky_sensors 의 adc_reader 로
+# 대체했다. I2C 0x08 을 읽는 프로세스가 둘이 되면 측정값이 조용히 낮아진다.
+# adc_reader 가 그 장치의 단독 소유자이고, 초음파·IR 도 같이 발행한다.
+# 주행 런치는 start_battery_publisher:=false 로 넘겨야 한다.
 EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run pinky_bringup battery_publisher'
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run mingky_sensors adc_reader'
 Restart=always
 RestartSec=10
 

@@ -7,7 +7,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from .. import orders
+from .. import orders, robot_runtime
 from ..db import get_pool
 from ..schemas import OrderAck, OrderIn, OrderOut
 
@@ -63,6 +63,44 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
     await _require_robot(robot_id)
     if body.command == "start_guidance":
         await _require_active_session(robot_id, body.argument)
+    if body.command == "localize" and body.argument != "run":
+        raise HTTPException(
+            status_code=422, detail="localize requires argument 'run'")
+    if body.command.startswith("system_"):
+        if body.argument != "run":
+            raise HTTPException(
+                status_code=422, detail="system command requires argument 'run'")
+        if body.command in ("system_stop", "system_restart"):
+            runtime = robot_runtime.snapshot().get(robot_id)
+            if runtime is not None and runtime.localization_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="automatic localization is active",
+                )
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                active_session = await conn.fetchval(
+                    """
+                    SELECT session_id FROM guidance_sessions
+                    WHERE robot_id = $1 AND ended_at IS NULL
+                    """,
+                    robot_id,
+                )
+            if active_session is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"robot busy with session {active_session}",
+                )
+            # 재시작 직후 Nav2가 준비되기 전에 예전 목표가 전달되거나, 중지
+            # 뒤 다시 켰을 때 낡은 목표가 갑자기 실행되는 일을 막는다.
+            orders.clear_motion(robot_id)
+    if body.command in ("goto", "goto_pose", "start_guidance", "localize"):
+        runtime = robot_runtime.snapshot().get(robot_id)
+        if runtime is not None and runtime.system_state != "active":
+            raise HTTPException(
+                status_code=409,
+                detail=f"robot system is {runtime.system_state}",
+            )
     return orders.put(robot_id, body.command, body.argument)
 
 

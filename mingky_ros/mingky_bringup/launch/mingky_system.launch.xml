@@ -33,7 +33,13 @@
          동시에 실행하지 않는다. -->
     <arg name="start_lcd_status" default="true"/>
     <arg name="use_buzzer" default="true"/>
+    <arg name="arrival_notice_sec" default="3.0"/>
     <arg name="use_led" default="true"/>
+    <!-- AMCL 전역 재탐색은 기존 위치 추정을 지우고 로봇을 움직이기까지 한다.
+         부팅 때마다 무조건 도는 건 위험해서(관제 팀 리뷰, 2026-08-12)
+         기본은 꺼두고, 관제 화면에서 운영자가 auto_localize/trigger 로
+         명시적으로 실행하게 한다. -->
+    <arg name="auto_localize_run_on_start" default="false"/>
 
     <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"
              if="$(var start_robot_base)">
@@ -104,6 +110,8 @@
         <param name="charging_waypoint" value="$(var charging_waypoint)" type="str"/>
         <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
+        <param name="arrival_notice_sec" value="$(var arrival_notice_sec)"/>
+        <param name="use_arrival_chime" value="$(var use_buzzer)"/>
     </node>
 
     <node pkg="mingky_navigation_manager" exec="navigation_manager"
@@ -121,5 +129,13 @@
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="backend_url" value="$(var backend_url)"/>
+    </node>
+
+    <!-- AMCL 이 active 되면 자동으로 위치를 잡는다. RViz 손조작 대체.
+         cmd_vel_localize_probe 는 twist_mux 의 별도 채널을 거친다. -->
+    <node pkg="mingky_localize" exec="auto_localize_node"
+          name="auto_localize_node" output="screen">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="auto_run_on_start" value="$(var auto_localize_run_on_start)"/>
     </node>
 </launch>

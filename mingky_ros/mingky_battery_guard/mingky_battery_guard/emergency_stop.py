@@ -67,6 +67,8 @@ class EmergencyStop(Node):
         self.create_subscription(Bool, 'emergency_stop', self.on_operator, 10)
         self.create_subscription(
             Bool, 'emergency_stop/obstacle', self.on_obstacle, 10)
+        self.create_subscription(
+            Bool, 'emergency_stop/communication', self.on_communication, 10)
         self.create_service(Trigger, 'emergency_stop/release', self.on_release)
 
         self.cancel_client = self.create_client(
@@ -117,6 +119,10 @@ class EmergencyStop(Node):
     def on_obstacle(self, msg: Bool):
         if msg.data:
             self.engage('obstacle')
+
+    def on_communication(self, msg: Bool):
+        if msg.data:
+            self.engage('communication_loss')
 
     def on_release(self, request, response):
         if not self.engaged:

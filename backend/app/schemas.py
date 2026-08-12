@@ -118,11 +118,12 @@ class OrderIn(BaseModel):
     """
 
     command: Literal[
-        "goto", "goto_pose", "start_session", "start_guidance", "set_mode"
+        "goto", "goto_pose", "start_session", "start_guidance", "set_mode",
+        "localize", "system_start", "system_stop", "system_restart",
     ]
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
     # start_session 이면 patient_id, start_guidance 면 session_id,
-    # set_mode 면 auto | manual | estop.
+    # set_mode 면 auto | manual | estop, 나머지 제어 명령은 run.
     #
     # 모드는 로봇이 정본을 갖는다. 여기서 보내는 것은 요청이고, 반영 여부는
     # robot.mode_changed 이벤트로 확인한다. 통신이 끊겨도 로봇이 스스로
@@ -173,6 +174,8 @@ class RobotOut(BaseModel):
     battery_recorded_at: datetime | None = None
     active_session_id: int | None = None
     active_patient_id: str | None = None
+    last_session_ended_at: datetime | None = None
+    last_session_end_reason: str | None = None
     # 의료진이 이 로봇을 활성화한 시각. NULL = 대기 중.
     # DB 컬럼이 아니라 app/arming.py 인메모리 레지스트리에서 조립한다.
     armed_at: datetime | None = None
@@ -181,6 +184,11 @@ class RobotOut(BaseModel):
     # OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없다.
     last_seen_at: datetime | None = None
     link_state: Literal["online", "offline", "unknown"] = "unknown"
+    system_state: Literal[
+        "active", "activating", "deactivating", "inactive", "failed", "unknown"
+    ] = "unknown"
+    localization_active: bool = False
+    runtime_reported_at: datetime | None = None
 
 
 class RobotArmingOut(BaseModel):
@@ -189,6 +197,15 @@ class RobotArmingOut(BaseModel):
     robot_id: str
     armed: bool
     armed_at: datetime | None = None
+
+
+class RobotHeartbeatIn(BaseModel):
+    """상시 게이트웨이가 함께 보고하는 통합 실행 상태."""
+
+    system_state: Literal[
+        "active", "activating", "deactivating", "inactive", "failed", "unknown"
+    ] = "unknown"
+    localization_active: bool = False
 
 
 class BatterySampleIn(BaseModel):

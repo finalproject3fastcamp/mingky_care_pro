@@ -57,6 +57,9 @@ grep -q '^MINGKY_CAMERA_REAR_TUNNEL_PORT=' /etc/mingky/robot.env \
     || echo "MINGKY_CAMERA_REAR_TUNNEL_PORT=${CAMERA_REAR_PORT}" >> /etc/mingky/robot.env
 
 install -m 755 "$HERE/bin/foxglove-remote.sh" /usr/local/bin/
+install -m 440 "$HERE/mingky-system-control.sudoers" \
+    /etc/sudoers.d/mingky-system-control
+visudo -cf /etc/sudoers.d/mingky-system-control >/dev/null
 
 # --- 유닛 --------------------------------------------------------------------
 for unit in "$HERE"/systemd/*.service; do
@@ -73,13 +76,14 @@ systemctl enable --now \
     mingky-battery-pub \
     mingky-teleop-bridge \
     mingky-camera-tunnel \
-    fg-teleop
+    fg-teleop \
+    mingky-system
 
 cat <<EOF
 
 설치 끝. 확인:
     systemctl status mingky-ssh-tunnel mingky-gateway mingky-battery-pub \
-        mingky-teleop-bridge mingky-camera-tunnel fg-teleop
+        mingky-teleop-bridge mingky-camera-tunnel fg-teleop mingky-system
 
 아직 남은 것 — 이 스크립트가 못 하는 일:
 

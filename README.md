@@ -40,61 +40,60 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 ```
 .
-├── pinky/                         # Pinky 기본 ROS2 패키지 (pinklab-art/pinky_pro 기반)
-├── omx/                           # OMX 제어·모방학습
-├── mingky_ros/                    # 프로젝트 전용 ROS2 패키지 모음
-│   ├── mingky_interfaces/         # 공통 msg, srv, action 정의
-│   ├── mingky_qr_reader/          # 후방 웹캠 기반 QR 인식
-│   ├── mingky_guide_manager/      # 환자 안내 절차와 상태 관리
-│   ├── mingky_navigation_manager/ # 엔지니어용 waypoint 시험 주행 중재
-│   ├── mingky_event_gateway/      # 이벤트 전달 (로컬 큐 + 재시도)
-│   ├── mingky_battery_guard/      # 배터리 저전압 감시와 비상정지
-│   ├── mingky_smart_recovery/     # LiDAR 기반 적응형 주행 복구 후보 생성
-│   ├── mingky_aruco_detector/     # ArUco 마커 검출 및 자세·거리 추정
-│   ├── mingky_teleop/             # 텔레옵 안전 게이트와 주행 모드 관리
-│   └── mingky_bringup/            # 프로젝트 통합 launch 및 설정
-├── backend/                       # FastAPI 수집·조회 서버
-├── frontend/                      # React 관제 대시보드 (의료진·엔지니어)
-├── database/                      # PostgreSQL 스키마와 초기 데이터
-├── config/                        # 서비스 간 공유 설정 (event_codes.yaml)
-├── deploy/                        # 관제 서버 Docker Compose 배포와 인프라 스크립트
-├── tools/                         # 진단·캘리브레이션·YOLO 검출 등 보조 도구
-├── docs/                          # 설계 문서와 다이어그램
-└── README.md
+├── pinky/         # Pinky 기본 ROS2 패키지 (pinklab-art/pinky_pro 기반)
+├── omx/           # OMX 제어 · 모방학습
+├── mingky_ros/    # 프로젝트 전용 ROS2 패키지 모음
+│   ├── mingky_guide_manager/   # 환자 안내 절차와 상태 관리
+│   ├── mingky_qr_reader/       # 후방 웹캠 기반 QR 인식
+│   ├── mingky_event_gateway/   # 이벤트 전달 (로컬 큐 + 재시도)
+│   ├── mingky_bringup/         # 프로젝트 통합 launch 및 설정
+│   └── ...                     # 그 외 teleop · battery · aruco 등
+├── backend/       # FastAPI 수집·조회 서버
+├── frontend/      # React 관제 대시보드
+├── database/      # PostgreSQL 스키마와 초기 데이터
+├── config/        # 서비스 간 공유 설정 (event_codes.yaml)
+├── deploy/        # 관제 서버 배포 · 인프라 스크립트
+├── tools/         # 진단 · 캘리브레이션 · 보조 도구
+└── docs/          # 설계 문서와 다이어그램
 ```
 
-각 파트의 상세 사용법과 오픈소스 출처는 하위 README를 참고한다.
+## 5. 문서
 
-| 파트       | 문서                                         | 기반 오픈소스                                                     |
-| ---------- | -------------------------------------------- | ----------------------------------------------------------------- |
-| Pinky      | [pinky/README.md](pinky/README.md)           | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
-| OMX        | [omx/README.md](omx/README.md)               | [huggingface/lerobot](https://github.com/huggingface/lerobot)     |
-| Mingky ROS | [mingky_ros/README.md](mingky_ros/README.md) | 프로젝트 전용 패키지                                              |
-| Backend    | [backend/README.md](backend/README.md)       | FastAPI · asyncpg                                                 |
-| Frontend   | [frontend/README.md](frontend/README.md)     | React · Vite · TypeScript                                         |
-| Deploy     | [deploy/README.md](deploy/README.md)         | Docker Compose · Nginx                                            |
+> **[GitHub Wiki](https://github.com/finalproject3fastcamp/mingky_care_pro/wiki)** — 회의록, 실험 기록, 데모 영상 등 프로젝트 히스토리 아카이브
 
-운영·디버깅 문서
+파트별 상세 사용법과 오픈소스 출처는 하위 README를 참고한다.
 
-| 문서                                                         | 내용                                                  |
-| ------------------------------------------------------------ | ----------------------------------------------------- |
-| [docs/monitoring-spec.md](docs/monitoring-spec.md)           | 관제 기능 스펙과 기술 스택 결정 배경                  |
-| [docs/system-communication.md](docs/system-communication.md) | 프론트·백엔드·로봇 통신 원칙과 데이터 흐름            |
-| [docs/qr-scan-flow.md](docs/qr-scan-flow.md)                 | QR 인식 → 진료 일정 로드 → 안내 세션 시작 흐름        |
-| [config/event_codes.yaml](config/event_codes.yaml)           | **이벤트 코드 정본.** 발행 가능한 목록과 payload 형태 |
-| **[docs/robot-onboarding.md](docs/robot-onboarding.md)**     | **로봇을 처음 쓰는 사람이 따라 하는 순서**            |
-| [docs/team-robot-access.md](docs/team-robot-access.md)       | 관제 서버 경유 로봇 SSH 접속 설정                     |
-| [docs/cloud-dev-server.md](docs/cloud-dev-server.md)         | 공용 관제·개발 서버 접속과 주의사항                   |
-| [docs/infra-setup.md](docs/infra-setup.md)                   | 네트워크·도메인·시간 동기화·로봇 복구                 |
-| [docs/nav2-debugging.md](docs/nav2-debugging.md)             | 주행 문제 진단 순서와 파라미터 튜닝                   |
+| 파트                                         | 기반 오픈소스                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| [pinky/README.md](pinky/README.md)           | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
+| [omx/README.md](omx/README.md)               | [huggingface/lerobot](https://github.com/huggingface/lerobot)     |
+| [mingky_ros/README.md](mingky_ros/README.md) | 프로젝트 전용 패키지                                              |
+| [backend/README.md](backend/README.md)       | FastAPI · asyncpg                                                 |
+| [frontend/README.md](frontend/README.md)     | React · Vite · TypeScript                                         |
+| [deploy/README.md](deploy/README.md)         | Docker Compose · Nginx                                            |
 
-## 5. 개발 환경
+핵심 운영 문서
 
-- Ubuntu 24.04 / ROS2 Jazzy
-- Pinky Pro (SLAM Toolbox, Nav2)
-- OpenManipulator-X 리더 - 팔로워 암 (Dynamixel SDK)
+- [docs/robot-onboarding.md](docs/robot-onboarding.md) — 로봇을 처음 쓰는 사람이 따라 하는 순서
+- [config/event_codes.yaml](config/event_codes.yaml) — 이벤트 코드 정본 (발행 가능한 목록과 payload 형태)
+- [docs/system-communication.md](docs/system-communication.md) — 프론트·백엔드·로봇 통신 원칙과 데이터 흐름
+- [docs/monitoring-spec.md](docs/monitoring-spec.md) — 관제 기능 스펙과 기술 스택 결정 배경
+- [docs/infra-setup.md](docs/infra-setup.md) · [docs/nav2-debugging.md](docs/nav2-debugging.md) — 인프라 · 주행 진단
 
-## 6. 팀원 역할
+## 6. 기술 스택
+
+| 영역          | 기술                                                                 |
+| ------------- | -------------------------------------------------------------------- |
+| OS · 미들웨어 | Ubuntu 24.04 · ROS2 Jazzy                                            |
+| 자율주행      | Pinky Pro · Nav2 · SLAM Toolbox                                      |
+| 로봇팔        | OpenManipulator-X (리더-팔로워) · Dynamixel SDK · LeRobot (모방학습) |
+| 비전          | OpenCV · ArUco · YOLO                                                |
+| 백엔드        | FastAPI · Uvicorn · asyncpg · Pydantic                               |
+| 프론트엔드    | React 19 · Vite · TypeScript · React Router · Axios · Three.js       |
+| 데이터베이스  | PostgreSQL                                                           |
+| 인프라 · 배포 | Docker Compose · Nginx                                               |
+
+## 7. 팀원 역할
 
 <table>
   <tr>
@@ -148,14 +147,6 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
     </td>
   </tr>
 </table>
-
-## 7. 기대 효과
-
-- 대학병원 내 환자의 복잡한 진료 동선을 자동으로 안내하여 이동 편의성을 향상한다.
-- 의료진의 반복적인 환자 안내 및 약품 전달 업무를 일부 자동화한다.
-- 자율주행과 모방학습을 결합한 통합 AI 의료 서비스의 가능성을 검증한다.
-- 실제 병원 환경을 고려한 서비스 시나리오를 구현하고 검증한다.
-- ROS2, 컴퓨터 비전, 모방학습, 웹 서비스를 통합한 실무형 AI 로봇 프로젝트를 수행한다.
 
 ## 라이선스
 

@@ -21,6 +21,7 @@
 
 import json
 import math
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -28,9 +29,11 @@ from datetime import datetime, timezone
 import rclpy
 import requests
 from rclpy.node import Node
-from std_msgs.msg import Float32, String
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, Float32, String
+from std_srvs.srv import Trigger
 
-from mingky_interfaces.msg import Event
+from mingky_interfaces.msg import Event, GuideState
 
 from .queue_store import QueueStore
 
@@ -39,6 +42,43 @@ _LEVEL_NAME = {
     Event.LEVEL_WARNING: "warning",
     Event.LEVEL_ERROR: "error",
 }
+SYSTEM_COMMANDS = {
+    "system_start": "start",
+    "system_stop": "stop",
+    "system_restart": "restart",
+}
+ACTIVE_GUIDE_SESSION_STATES = (
+    GuideState.SESSION_CONFIRMED,
+    GuideState.SESSION_GUIDING,
+    GuideState.SESSION_ARRIVED,
+    GuideState.SESSION_IN_ROOM,
+)
+
+
+class HeartbeatFailureGuard:
+    """연속 heartbeat 실패가 세션 안전 임계값을 넘었는지 한 번만 알린다."""
+
+    def __init__(self, timeout_sec: float):
+        self.timeout_sec = max(0.0, timeout_sec)
+        self.failed_since: float | None = None
+        self.triggered = False
+
+    def failure(self, now: float, clinical_active: bool) -> bool:
+        if not clinical_active:
+            self.success()
+            return False
+        if self.failed_since is None:
+            self.failed_since = now
+        if self.triggered:
+            return False
+        if now - self.failed_since < self.timeout_sec:
+            return False
+        self.triggered = True
+        return True
+
+    def success(self) -> None:
+        self.failed_since = None
+        self.triggered = False
 
 
 def _iso(stamp) -> str:
@@ -70,6 +110,9 @@ class EventGateway(Node):
         self.declare_parameter("heartbeat_interval_sec", 5.0)
         # 주기보다 짧아야 한다. 길면 응답을 기다리는 사이 다음 차례가 밀린다.
         self.declare_parameter("heartbeat_timeout_sec", 2.0)
+        # 서버의 세션 장애 취소 임계값과 맞춘다. 이 시간 동안 관제 연결이
+        # 계속 끊기면 로봇 안에서도 안내를 종료하고 Nav2를 정지한다.
+        self.declare_parameter("heartbeat_session_cancel_after_sec", 30.0)
         # 배터리 추이는 이벤트가 아니라 별도 로그에 저빈도로 저장한다.
         # 0 이면 전송하지 않는다. 첫 표본은 즉시, 이후에는 이 주기로 보낸다.
         self.declare_parameter("battery_interval_sec", 120.0)
@@ -95,6 +138,8 @@ class EventGateway(Node):
             self.get_parameter("heartbeat_interval_sec").value)
         self.heartbeat_timeout = float(
             self.get_parameter("heartbeat_timeout_sec").value)
+        self.heartbeat_session_cancel_after = float(
+            self.get_parameter("heartbeat_session_cancel_after_sec").value)
         self.battery_url = f"{base}/robots/{self.robot_id}/battery"
         self.battery_interval = float(
             self.get_parameter("battery_interval_sec").value)
@@ -116,11 +161,22 @@ class EventGateway(Node):
             Float32, "/battery/voltage", self._on_battery_voltage, 10)
         self.create_subscription(
             Float32, "/battery/percent", self._on_battery_percent, 10)
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.create_subscription(
+            GuideState, "/guide_manager/state", self._on_guide_state, state_qos)
+        self.create_subscription(
+            Bool, "/auto_localize/active", self._on_localization_active, state_qos)
 
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
         self._battery_percent = None
         self._battery_wake = threading.Event()
+        self._clinical_active = False
+        self._localization_active = False
 
         # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
         # 비임상 Waypoint 시험은 navigation_manager가 받는다.
@@ -136,6 +192,12 @@ class EventGateway(Node):
             # 모드는 mode_manager 가 정본을 들고 있다. 여기서는 요청만 넘긴다.
             "set_mode": self.create_publisher(String, "/mode/set", 10),
         }
+        self._session_cancel_pub = self.create_publisher(
+            String, "/guide_manager/cancel_session", 10)
+        self._communication_stop_pub = self.create_publisher(
+            Bool, "/emergency_stop/communication", 10)
+        self._localize_client = self.create_client(
+            Trigger, "/auto_localize/trigger")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -192,6 +254,27 @@ class EventGateway(Node):
         with self._battery_lock:
             self._battery_percent = int(round(max(0.0, min(100.0, msg.data))))
         self._battery_wake.set()
+
+    def _on_guide_state(self, msg: GuideState) -> None:
+        self._clinical_active = (
+            msg.session_id > 0
+            and msg.session_state in ACTIVE_GUIDE_SESSION_STATES
+        )
+
+    def _on_localization_active(self, msg: Bool) -> None:
+        self._localization_active = bool(msg.data)
+
+    def _system_state(self) -> str:
+        try:
+            result = subprocess.run(
+                ["/usr/bin/systemctl", "is-active", "mingky-system.service"],
+                check=False, capture_output=True, text=True, timeout=2.0)
+        except (OSError, subprocess.TimeoutExpired):
+            return "unknown"
+        state = result.stdout.strip()
+        return state if state in {
+            "active", "activating", "deactivating", "inactive", "failed"
+        } else "unknown"
 
     # ------------------------------------------------------------------ 전송
 
@@ -284,15 +367,31 @@ class EventGateway(Node):
             f"heartbeat 시작 ({self.heartbeat_url}, {self.heartbeat_interval:.0f}초 주기)")
 
         failing = False
+        guard = HeartbeatFailureGuard(self.heartbeat_session_cancel_after)
+
+        def failed() -> None:
+            nonlocal failing
+            if guard.failure(time.monotonic(), self._clinical_active):
+                self.get_logger().error(
+                    "heartbeat가 계속 실패해 안내 세션을 취소하고 정지합니다.")
+                self._session_cancel_pub.publish(String(data="robot_offline"))
+                self._communication_stop_pub.publish(Bool(data=True))
+            failing = True
+
         while not self._stop.wait(self.heartbeat_interval):
             try:
                 response = session.post(
-                    self.heartbeat_url, timeout=self.heartbeat_timeout)
+                    self.heartbeat_url,
+                    json={
+                        "system_state": self._system_state(),
+                        "localization_active": self._localization_active,
+                    },
+                    timeout=self.heartbeat_timeout)
             except requests.RequestException as exc:
                 if not failing:
                     # 두절 중에는 매 주기 찍히면 로그가 도배된다. 전이할 때만.
                     self.get_logger().warn(f"heartbeat 실패: {exc}")
-                    failing = True
+                failed()
                 continue
 
             if response.status_code == 404:
@@ -301,19 +400,20 @@ class EventGateway(Node):
                 self.get_logger().error(
                     f"heartbeat 거부: {self.robot_id} 가 서버에 등록되지 않았습니다. "
                     "robot_id 파라미터와 robots 시드를 확인하세요.")
-                failing = True
+                failed()
                 continue
 
             if not response.ok:
                 if not failing:
                     self.get_logger().warn(
                         f"heartbeat 실패: HTTP {response.status_code}")
-                    failing = True
+                failed()
                 continue
 
             if failing:
                 self.get_logger().info("heartbeat 복구")
                 failing = False
+            guard.success()
 
         session.close()
 
@@ -480,6 +580,42 @@ class EventGateway(Node):
         """
         command = order.get("command")
         argument = order.get("argument", "")
+        if command in SYSTEM_COMMANDS:
+            if argument != "run":
+                self.get_logger().error(
+                    f"잘못된 시스템 제어 인자: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if command != "system_start" and (
+                    self._clinical_active or self._localization_active):
+                # 서버 검증 뒤 세션이 생기는 경쟁 상황도 로봇에서 다시 막는다.
+                # 소비하지 않으면 세션 종료 후 낡은 정지 명령이 실행되므로 ack한다.
+                self.get_logger().error(
+                    f"안내 또는 재탐색 중이라 {command} 명령을 거부했습니다.")
+                return True
+            return self._control_system(SYSTEM_COMMANDS[command])
+
+        if command == "localize":
+            if argument != "run":
+                self.get_logger().error(
+                    f"잘못된 재탐색 인자: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return False
+            if self._system_state() != "active":
+                # 서비스가 나중에 생길 때까지 낡은 명령을 보관하면 시스템을
+                # 다시 켠 순간 예고 없이 로봇이 움직인다. 지금 거부하고 소비한다.
+                self.get_logger().error(
+                    "통합 시스템이 가동 중이 아니라 재탐색 명령을 거부했습니다.")
+                return True
+            if not self._localize_client.service_is_ready():
+                self.get_logger().warn(
+                    "자동 재탐색 서비스가 아직 준비되지 않았습니다. 명령을 유지합니다.")
+                return False
+            future = self._localize_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_localize_response)
+            self.get_logger().info("명령 실행: localize(run)")
+            return True
+
         publisher = self._order_pubs.get(command)
         if publisher is None:
             self.get_logger().error(
@@ -489,6 +625,34 @@ class EventGateway(Node):
         publisher.publish(String(data=argument))
         self.get_logger().info(f"명령 실행: {command}({argument})")
         return True
+
+    def _control_system(self, action: str) -> bool:
+        """설치 시 sudoers로 허용한 통합 launch 유닛 하나만 제어한다."""
+        try:
+            result = subprocess.run(
+                ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", action,
+                 "mingky-system.service"],
+                check=False, capture_output=True, text=True, timeout=15.0)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.get_logger().error(f"통합 시스템 {action} 실행 실패: {exc}")
+            return False
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[:200]
+            self.get_logger().error(f"통합 시스템 {action} 거부: {detail}")
+            return False
+        self.get_logger().info(f"통합 시스템 제어 완료: {action}")
+        return True
+
+    def _on_localize_response(self, future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"자동 재탐색 요청 실패: {exc}")
+            return
+        if response.success:
+            self.get_logger().info(f"자동 재탐색 요청 승인: {response.message}")
+        else:
+            self.get_logger().warn(f"자동 재탐색 요청 거부: {response.message}")
 
     # ------------------------------------------------------------------ 종료
 

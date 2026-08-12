@@ -76,7 +76,7 @@ cp deploy/.env.example deploy/.env
 
 ## DB 초기화 범위
 
-빈 PostgreSQL Volume을 처음 생성할 때만 `database/migrations/001~005`와
+빈 PostgreSQL Volume을 처음 생성할 때만 `database/migrations/001~006`과
 초기 환자·약품·로봇 데이터를 적용합니다. 환자 프로필 사진은 `up` 실행 시
 멱등하게 적재합니다.
 

@@ -11,7 +11,7 @@ import { RobotMap } from '../components/RobotMap'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
-import { getActiveSessions, getRobots } from '../lib/api'
+import { getActiveSessions, getRobots, sendOrder } from '../lib/api'
 import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
@@ -38,6 +38,8 @@ export function MedicalDashboard() {
   // 방금 한 선택을 무효로 보고 선택 화면으로 튕긴다. 폴링이 따라잡을 때까지
   // 이 응답으로 덮어쓴다.
   const [justArmed, setJustArmed] = useState<Robot | null>(null)
+  const [locationBusy, setLocationBusy] = useState(false)
+  const [locationNotice, setLocationNotice] = useState<string | null>(null)
 
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
@@ -154,6 +156,23 @@ export function MedicalDashboard() {
     navigate('/medical')
   }
 
+  async function findRobotLocation() {
+    if (!selectedRobotId || activeSession || selectedRobot?.localization_active) return
+    if (!window.confirm(
+      '로봇 위치를 다시 찾을까요?\n로봇이 제자리에서 돌거나 앞뒤로 움직일 수 있으니 주변을 비워주세요.',
+    )) return
+    setLocationBusy(true)
+    setLocationNotice(null)
+    try {
+      await sendOrder(selectedRobotId, 'localize', 'run')
+      setLocationNotice('로봇이 위치를 찾기 시작했습니다.')
+    } catch {
+      setLocationNotice('위치 찾기 요청을 보내지 못했습니다. 잠시 후 다시 시도하세요.')
+    } finally {
+      setLocationBusy(false)
+    }
+  }
+
   // 초회 로딩: robots 가 상태 전이의 뼈대다. 이것만 있으면 화면을 그릴 수 있다.
   if (robots.loading && !robots.data) {
     return <p>불러오는 중…</p>
@@ -233,6 +252,35 @@ export function MedicalDashboard() {
               }
             />
           </div>
+      )}
+      {selectedRobotId && (
+        <section className="card medical-location-control">
+          <div>
+            <div className="card-title">로봇 위치 다시 찾기</div>
+            <p>
+              지도에서 로봇 위치가 실제와 다를 때 사용하세요.
+              로봇이 주변을 확인하며 잠시 움직일 수 있습니다.
+            </p>
+          </div>
+          <div className="medical-location-control__action">
+            <strong>
+              {selectedRobot.localization_active ? '위치를 찾는 중입니다' : '필요할 때만 실행하세요'}
+            </strong>
+            <button
+              type="button"
+              className="btn"
+              disabled={locationBusy || activeSession != null
+                || !teleop.robotConnected || mode !== 'auto'
+                || selectedRobot.system_state !== 'active'
+                || selectedRobot.localization_active}
+              onClick={findRobotLocation}
+            >
+              로봇 위치 다시 찾기
+            </button>
+          </div>
+          {locationNotice && <p className="medical-location-control__notice" role="status">{locationNotice}</p>}
+          {activeSession && <p className="medical-location-control__disabled">환자 안내 중에는 위치를 다시 찾을 수 없습니다.</p>}
+        </section>
       )}
       {activeSession ? (
         // 환자가 확인된 뒤로는 카메라를 보여주지 않는다. QR 을 대는 순간을

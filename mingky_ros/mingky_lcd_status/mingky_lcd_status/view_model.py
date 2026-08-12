@@ -69,7 +69,7 @@ def build_display_view(
             instruction=(
                 '대기 장소로 이동 중입니다'
                 if robot_state == 'moving'
-                else '직원의 안내를 기다려 주세요'),
+                else '안전을 위해 로봇 앞을 비워 주세요'),
             accent='green')
     if session_state == 'in_room':
         return DisplayView(
