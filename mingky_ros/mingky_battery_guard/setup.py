@@ -14,7 +14,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob.glob(os.path.join('launch', '*launch.*'))),
-        # ROS 없이 로봇에서 직접 돌리는 스크립트들
+        # launch 그래프 밖에서 손으로 돌리는 스크립트들
         ('share/' + package_name + '/scripts', glob.glob(os.path.join('scripts', '*.py'))),
         # 로봇 백업 / 바닐라 복원 도구
         ('share/' + package_name + '/robot_tools', glob.glob(os.path.join('robot_tools', '*.sh'))),

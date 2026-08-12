@@ -164,6 +164,41 @@ pinky_bringup/launch/bringup_robot.launch.xml   주행 스택
 `battery_publisher`는 기동 3초 뒤 다른 발행자를 확인하고, 있으면 오류를
 남기고 종료합니다. 이 동작은 `exit_on_duplicate:=false`로 끌 수 있습니다.
 
+## 손으로 돌리는 스크립트 (`scripts/`)
+
+launch 그래프 밖에서 직접 실행하는 도구입니다. **로봇 위에서** 돌립니다.
+
+| 스크립트 | 하는 일 |
+|---|---|
+| `battery_beep_standalone.py` | 기준 전압 이하면 부저 3번 울리고 종료 |
+| `motor_load.py` | 모터에 부하를 걸어 전압 강하를 재현 |
+
+```bash
+source ~/mingky_care_pro/install/local_setup.bash
+python3 scripts/battery_beep_standalone.py
+```
+
+### 전압은 토픽에서 받습니다 — I2C 를 직접 열지 않습니다
+
+예전에는 `pinkylib.Battery` 로 I2C 를 직접 읽었습니다. **그러면 상시 실행되는
+`adc_reader` 와 리더가 둘이 되어 양쪽 값이 함께 망가집니다.** 실측으로 중앙값이
+`0.397V` 낮아지고 산포가 `37mV → 3.22V` 로 벌어졌습니다.
+
+`adc_reader` 는 `flock` 으로 자기 임계 구역을 지키지만 `pinkylib` 은 잠금을
+쓰지 않아 맞물리지 않습니다. 그래서 잠금을 흉내 내는 대신 **`battery/voltage`
+를 구독**합니다 (`battery_source.VoltageSource`).
+
+> 그래서 이 스크립트들은 **ROS 환경이 필요합니다.** `source` 를 먼저 하세요.
+> `motor_load.py` 는 `pinkylib.Motor` 를 그대로 씁니다. 모터는 다른 장치라
+> 충돌하지 않습니다.
+
+**멈춘 값은 읽기 실패보다 위험합니다.** 발행이 끊겨도 마지막 값은 변수에 남아
+정상처럼 보이기 때문입니다. `stale_after_sec`(기본 16초, 발행 주기 5초의 3배)
+이 지난 값은 없는 것으로 봅니다.
+
+값이 안 오면 스크립트가 원인을 안내합니다 — 발행자가 0개인지, 2개 이상인지에
+따라 다른 메시지가 나옵니다.
+
 ## 테스트
 
 ROS 2 Jazzy 환경에서 실행합니다.
