@@ -114,6 +114,11 @@ class AdcReader(Node):
         self.declare_parameter('sensor_rate_hz', 0.0)
         self.declare_parameter('duplicate_check_sec', 3.0)
         self.declare_parameter('exit_on_duplicate', True)
+        # 기동 검사는 '내가 늦게 뜬 경우'만 잡는다. 주행 런치가 나중에 두 번째
+        # 리더를 띄우면 못 본다. 그래서 주기적으로 다시 확인한다. 다만 이미
+        # 발행 중인 노드가 스스로 죽으면 배터리 감시가 끊기므로, 여기서는
+        # 종료하지 않고 알리기만 한다. 0 이면 감시하지 않는다.
+        self.declare_parameter('duplicate_watch_sec', 30.0)
         # 채널 선택 후 대기. 측정상 0 으로 충분하지만 하드웨어 개체차를
         # 대비해 파라미터로 남긴다.
         self.declare_parameter('settle_sec', 0.0)
@@ -145,6 +150,11 @@ class AdcReader(Node):
 
         check_after = float(g('duplicate_check_sec').value)
         self._dup_timer = self.create_timer(check_after, self._check_duplicate)
+
+        self._known_others = 0
+        watch = float(g('duplicate_watch_sec').value)
+        if watch > 0:
+            self.create_timer(watch, self._watch_duplicate)
 
         self.get_logger().info(
             f'ADC 단독 읽기 시작 | 배터리 {battery_period:.1f}초 주기 '
@@ -191,6 +201,24 @@ class AdcReader(Node):
 
         self.get_logger().error('중복을 피해 종료합니다.')
         raise SystemExit(1)
+
+    def _watch_duplicate(self):
+        """기동 후에 생긴 중복을 알린다. 종료하지는 않는다.
+
+        수가 바뀔 때만 찍는다. 30초마다 같은 줄을 쌓으면 정작 다른 로그가
+        묻힌다.
+        """
+        others = self.count_publishers('battery/voltage') - 1
+        if others == self._known_others:
+            return
+        self._known_others = others
+        if others > 0:
+            self.get_logger().error(
+                f'battery/voltage 발행자가 {others + 1}개로 늘었습니다. '
+                'I2C 를 동시에 읽으면 측정값이 조용히 낮아집니다 — '
+                '주행 런치가 battery_publisher 를 함께 띄우지 않는지 보세요.')
+        else:
+            self.get_logger().info('battery/voltage 발행자가 다시 하나입니다.')
 
     def publish_battery(self):
         """여러 번 읽어 중앙값으로 전압과 퍼센트를 발행한다."""
