@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { armRobot } from '../lib/api'
 import { HEARTBEAT_FRESHNESS } from '../lib/freshness'
+import { rejectionMessage, toRejectionDetail } from '../lib/rejectionMessages'
 import type { Robot } from '../types/monitoring'
 import { BatteryReading } from './BatteryReading'
 import { Freshness } from './Freshness'
@@ -135,8 +136,15 @@ export function RobotPicker({ robots, onArmed }: Props) {
       const armed = await armRobot(robot.robot_id)
       onArmed?.(armed)
     } catch (err) {
-      const message = err instanceof Error ? err.message : '활성화 실패'
-      setError(message)
+      // 백엔드 영어 문구를 그대로 띄우지 않는다. 코드로 분기해 이 화면의
+      // 어휘로 다시 쓴다.
+      const detail = toRejectionDetail(err)
+      if (detail && detail.code !== 'legacy') {
+        const { text, action } = rejectionMessage(detail)
+        setError(`${text} — ${action}`)
+      } else {
+        setError(detail?.message ?? '활성화에 실패했습니다')
+      }
     } finally {
       setPending(null)
     }
