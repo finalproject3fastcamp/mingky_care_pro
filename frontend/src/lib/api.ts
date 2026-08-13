@@ -1,7 +1,12 @@
 import axios from 'axios'
 
 import type { EventOut } from '../types/events'
-import type { ActiveSession, QrObservation, Robot } from '../types/monitoring'
+import type {
+  ActiveSession,
+  QrObservation,
+  Robot,
+  RobotInventory,
+} from '../types/monitoring'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -141,4 +146,28 @@ export async function getSessionEndingContext(
     { signal: options.signal },
   )
   return data
+}
+
+/**
+ * 로봇에서 실제로 돌고 있는 것 — 실행 코드 버전과 노드 목록.
+ *
+ * 한 번도 보고하지 않은 로봇은 404 다. 호출부가 "아직 없음" 과 "실패" 를
+ * 구분해야 한다 — 전자는 게이트웨이가 구버전이거나 인벤토리를 끈 것이다.
+ */
+export async function getRobotInventory(
+  robotId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<RobotInventory | null> {
+  try {
+    const { data } = await api.get<RobotInventory>(
+      `/robots/${encodeURIComponent(robotId)}/inventory`,
+      { signal: options.signal },
+    )
+    return data
+  } catch (error) {
+    if ((error as { response?: { status?: number } })?.response?.status === 404) {
+      return null
+    }
+    throw error
+  }
 }

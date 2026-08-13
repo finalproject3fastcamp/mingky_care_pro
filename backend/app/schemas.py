@@ -235,6 +235,13 @@ class RobotOut(BaseModel):
     localization_active: bool = False
     fire_alarm_active: bool | None = None
     runtime_reported_at: datetime | None = None
+    # 로봇이 보고한 자원·큐 상태. 전부 인메모리(robot_runtime)이고 DB 에
+    # 저장하지 않는다. 구버전 게이트웨이는 안 보내므로 None 이 정상이다.
+    cpu_total_pct: float | None = None
+    queue_pending: int | None = None
+    max_node_cpu_pct: float | None = None
+    max_node_cpu_name: str | None = None
+    inventory_hash: str | None = None
 
 
 class RobotArmingOut(BaseModel):
@@ -246,7 +253,17 @@ class RobotArmingOut(BaseModel):
 
 
 class RobotHeartbeatIn(BaseModel):
-    """상시 게이트웨이가 함께 보고하는 통합 실행 상태."""
+    """상시 게이트웨이가 함께 보고하는 통합 실행 상태.
+
+    5초 주기 × 로봇 수라 payload 를 키우면 안 된다. 여기에는 작고 자주
+    바뀌는 것만 싣고, 크고 거의 안 바뀌는 것(노드 목록·커밋)은
+    RobotInventoryIn 으로 따로 보낸다. 해시만 실어 서버가 자기가 아는
+    것과 다른지 판단하게 한다.
+
+    신규 필드는 전부 기본값 있는 optional 이다. 게이트웨이가 먼저 배포되든
+    서버가 먼저 배포되든 heartbeat 가 422 로 거부되면 안 된다 — 생존 신호가
+    끊기면 멀쩡한 로봇에 comm_lost 가 찍힌다.
+    """
 
     system_state: Literal[
         "active", "activating", "deactivating", "inactive", "failed", "unknown"
@@ -254,6 +271,118 @@ class RobotHeartbeatIn(BaseModel):
     localization_active: bool = False
     # None은 구버전 게이트웨이이거나 아직 화재 노드의 상태를 받지 못한 경우다.
     fire_alarm_active: bool | None = None
+
+    # 게이트웨이가 계산한 인벤토리 지문. 서버가 아는 값과 다르면 본문을 요구한다.
+    inventory_hash: str | None = Field(default=None, max_length=64)
+    # 로봇 전체 CPU. 노드별 합이 아니라 /proc/stat 에서 읽은 값이다.
+    cpu_total_pct: float | None = Field(default=None, ge=0, le=100)
+    # 게이트웨이 전송 대기 건수. 상한 근처면 이미 데이터가 버려지는 중이다.
+    queue_pending: int | None = Field(default=None, ge=0)
+    # 가장 많이 먹는 프로세스 하나. 상세는 인벤토리에서 본다.
+    # 코어가 여러 개면 100 을 넘을 수 있으므로 상한을 두지 않는다.
+    max_node_cpu_pct: float | None = Field(default=None, ge=0)
+    max_node_cpu_name: str | None = Field(default=None, max_length=100)
+
+
+class RobotHeartbeatOut(BaseModel):
+    """heartbeat 응답.
+
+    본문 없이 204 를 돌려주던 경로다. 서버가 로봇에게 요구할 게 생겨서
+    본문이 붙었다 — 인벤토리 해시를 모르면 본문을 다시 달라고 한다.
+    서버가 재시작해 메모리를 잃었거나 로봇의 전송이 유실된 경우다.
+    """
+
+    need_inventory: bool = False
+
+
+class NodeGraphInfo(BaseModel):
+    """rclpy 그래프에서 직접 얻은 노드. **중복 판정의 유일한 근거다.**
+
+    프로세스 매칭 성공 여부와 무관하게 항상 정확하다. 같은 (이름,
+    네임스페이스)가 두 번 뜨면 count 가 2 다.
+    """
+
+    name: str
+    namespace: str = "/"
+    count: int = Field(ge=1)
+
+
+class ProcessInfo(BaseModel):
+    """/proc 스캔 결과. 노드 이름은 **추정이다.**
+
+    rclpy 는 노드→PID 매핑을 주지 않고 공식 API 도 없다. 컴포지션
+    컨테이너를 쓰면 한 PID 에 노드가 여럿이라 1:1 도 아니다. 그래서
+    matched_node_names 는 cmdline 의 `__node:=` 리매핑에서 추정하고,
+    실패하면 실행 파일 이름으로 대신한다. 중복 판정에는 쓰지 않는다.
+    """
+
+    pid: int
+    install_path: str
+    workspace_path: str | None = None
+    matched_node_names: list[str] = Field(default_factory=list)
+    cpu_pct: float | None = None
+    # 누적 CPU 초. 순간 100% 는 정상일 수 있지만 11시간 누적은 아니다.
+    cpu_seconds_total: float | None = None
+
+
+class WorkspaceInfo(BaseModel):
+    """노드가 실제로 실행된 워크스페이스와 그 커밋.
+
+    dirty 를 따로 보는 이유는, 커밋 안 된 변경이 있는 워크스페이스는
+    커밋 해시만으로 재현이 불가능하기 때문이다.
+    """
+
+    path: str
+    commit: str | None = None
+    branch: str | None = None
+    dirty: bool = False
+    process_count: int = 0
+
+
+class RobotInventoryIn(BaseModel):
+    """변할 때만 오는 층. 노드 목록과 커밋은 몇 시간에 한 번 바뀐다."""
+
+    inventory_hash: str = Field(max_length=64)
+    node_graph: list[NodeGraphInfo] = Field(default_factory=list)
+    processes: list[ProcessInfo] = Field(default_factory=list)
+    workspaces: list[WorkspaceInfo] = Field(default_factory=list)
+    ros_domain_id: int | None = None
+    reported_at: datetime | None = None
+
+
+class DuplicateNodeOut(BaseModel):
+    """중복으로 뜬 노드와 그 심각도.
+
+    심각도는 서버가 정한다(config/duplicate_node_severity.yaml). 로봇에
+    박아두면 임계를 바꾸려고 재배포해야 한다.
+    """
+
+    name: str
+    namespace: str = "/"
+    count: int
+    severity: Literal["error", "warning"]
+    reason: str
+
+
+class RobotInventoryOut(BaseModel):
+    """엔지니어 화면이 읽는 인벤토리.
+
+    판정 결과(중복 경고, 워크스페이스 혼재)를 함께 내려준다. 프론트가
+    같은 판정을 다시 구현하면 두 곳이 어긋난다.
+    """
+
+    robot_id: str
+    inventory_hash: str
+    reported_at: datetime
+    node_graph: list[NodeGraphInfo] = Field(default_factory=list)
+    processes: list[ProcessInfo] = Field(default_factory=list)
+    workspaces: list[WorkspaceInfo] = Field(default_factory=list)
+    ros_domain_id: int | None = None
+    duplicates: list[DuplicateNodeOut] = Field(default_factory=list)
+    # 정상 배치에서는 워크스페이스가 하나여야 한다. 둘 이상이면 서로 다른
+    # 코드가 한 로봇에서 같이 도는 것이고, 그 상태로는 무엇을 고쳐야 하는지
+    # 알 수 없다.
+    mixed_workspaces: bool = False
 
 
 class BatterySampleIn(BaseModel):
