@@ -14,6 +14,20 @@ function messageFor(code: string, payload: Record<string, unknown>): string {
       return `환자 놓침 (marker ${p.marker_id ?? '?'})`
     case 'patient.regained':
       return '환자 재확인'
+    case 'fire.detected':
+      return '화재 감지'
+    case 'fire.evacuation_started':
+      return '화재 대피소 이동 시작'
+    case 'fire.evacuation_succeeded':
+      return '화재 대피소 도착'
+    case 'fire.evacuation_failed':
+      return `화재 대피 실패: ${p.reason ?? '알 수 없는 이유'}`
+    case 'fire.inference_unavailable':
+      return '화재 감지 서버 연결 끊김'
+    case 'fire.inference_restored':
+      return '화재 감지 서버 연결 복구'
+    case 'fire.alarm_reset':
+      return '화재 경보 초기화'
     case 'nav.goal_sent':
       return `${p.visit_name ?? '목적지'} 로 이동 시작`
     case 'nav.goal_succeeded':

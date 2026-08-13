@@ -10,7 +10,12 @@
 set -euo pipefail
 
 ROBOT_ID="${1:-}"
-[ -n "$ROBOT_ID" ] || { echo "사용법: sudo ./install.sh <robot-id>   예: pinky-01" >&2; exit 1; }
+FIRE_INFER_URL="${2:-}"
+[ -n "$ROBOT_ID" ] || {
+    echo "사용법: sudo ./install.sh <robot-id> [fire-infer-url]" >&2
+    echo "예: sudo ./install.sh pinky-01 http://192.168.0.30:5000/infer" >&2
+    exit 1
+}
 
 # 역터널 포트는 로봇마다 달라야 한다. 번호에서 유도해 사람이 고를 여지를 없앤다.
 #
@@ -55,6 +60,20 @@ grep -q '^MINGKY_CAMERA_FRONT_TUNNEL_PORT=' /etc/mingky/robot.env \
     || echo "MINGKY_CAMERA_FRONT_TUNNEL_PORT=${CAMERA_FRONT_PORT}" >> /etc/mingky/robot.env
 grep -q '^MINGKY_CAMERA_REAR_TUNNEL_PORT=' /etc/mingky/robot.env \
     || echo "MINGKY_CAMERA_REAR_TUNNEL_PORT=${CAMERA_REAR_PORT}" >> /etc/mingky/robot.env
+grep -q '^MINGKY_FIRE_EVAC_ENABLED=' /etc/mingky/robot.env \
+    || echo 'MINGKY_FIRE_EVAC_ENABLED=false' >> /etc/mingky/robot.env
+grep -q '^MINGKY_FIRE_INFER_SERVER_URL=' /etc/mingky/robot.env \
+    || echo 'MINGKY_FIRE_INFER_SERVER_URL=' >> /etc/mingky/robot.env
+
+if [ -n "${FIRE_INFER_URL}" ]; then
+    sed -i \
+        -e 's/^MINGKY_FIRE_EVAC_ENABLED=.*/MINGKY_FIRE_EVAC_ENABLED=true/' \
+        -e "s|^MINGKY_FIRE_INFER_SERVER_URL=.*|MINGKY_FIRE_INFER_SERVER_URL=${FIRE_INFER_URL}|" \
+        /etc/mingky/robot.env
+    echo "  화재 감지 활성화: ${FIRE_INFER_URL}"
+else
+    echo "  화재 감지 설정 유지: /etc/mingky/robot.env"
+fi
 
 install -m 755 "$HERE/bin/foxglove-remote.sh" /usr/local/bin/
 install -m 440 "$HERE/mingky-system-control.sudoers" \

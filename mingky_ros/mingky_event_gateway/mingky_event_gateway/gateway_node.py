@@ -327,6 +327,8 @@ class EventGateway(Node):
             GuideState, "/guide_manager/state", self._on_guide_state, state_qos)
         self.create_subscription(
             Bool, "/auto_localize/active", self._on_localization_active, state_qos)
+        self.create_subscription(
+            Bool, "/fire_evac/alarm_active", self._on_fire_alarm_active, state_qos)
 
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
@@ -339,6 +341,7 @@ class EventGateway(Node):
         self._guide_session_state = GuideState.SESSION_NONE
         self._guide_patient_id = ''
         self._localization_active = False
+        self._fire_alarm_active = None
 
         # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
         # 비임상 Waypoint 시험은 navigation_manager가 받는다.
@@ -360,6 +363,8 @@ class EventGateway(Node):
             Bool, "/emergency_stop/communication", 10)
         self._localize_client = self.create_client(
             Trigger, "/auto_localize/trigger")
+        self._fire_alarm_reset_client = self.create_client(
+            Trigger, "/fire_evac/reset_alarm")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -446,6 +451,9 @@ class EventGateway(Node):
 
     def _on_localization_active(self, msg: Bool) -> None:
         self._localization_active = bool(msg.data)
+
+    def _on_fire_alarm_active(self, msg: Bool) -> None:
+        self._fire_alarm_active = bool(msg.data)
 
     def _system_state(self) -> str:
         try:
@@ -623,6 +631,7 @@ class EventGateway(Node):
                     json={
                         "system_state": self._system_state(),
                         "localization_active": self._localization_active,
+                        "fire_alarm_active": self._fire_alarm_active,
                     },
                     timeout=self.heartbeat_timeout)
             except requests.RequestException as exc:
@@ -886,6 +895,25 @@ class EventGateway(Node):
             self.get_logger().info("명령 실행: localize(run)")
             return True
 
+        if command == "fire_alarm_reset":
+            if argument != "run":
+                self.get_logger().error(
+                    f"잘못된 화재 경보 해제 인자: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if self._system_state() != "active":
+                self.get_logger().error(
+                    "통합 시스템이 가동 중이 아니라 화재 경보 해제를 거부했습니다.")
+                return True
+            if not self._fire_alarm_reset_client.service_is_ready():
+                self.get_logger().warn(
+                    "화재 경보 해제 서비스가 아직 준비되지 않았습니다. 명령을 유지합니다.")
+                return False
+            future = self._fire_alarm_reset_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_fire_alarm_reset_response)
+            self.get_logger().info("명령 실행: fire_alarm_reset(run)")
+            return True
+
         publisher = self._order_pubs.get(command)
         if publisher is None:
             self.get_logger().error(
@@ -923,6 +951,17 @@ class EventGateway(Node):
             self.get_logger().info(f"자동 재탐색 요청 승인: {response.message}")
         else:
             self.get_logger().warn(f"자동 재탐색 요청 거부: {response.message}")
+
+    def _on_fire_alarm_reset_response(self, future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"화재 경보 해제 요청 실패: {exc}")
+            return
+        if response.success:
+            self.get_logger().info(f"화재 경보 해제 완료: {response.message}")
+        else:
+            self.get_logger().warn(f"화재 경보 해제 거부: {response.message}")
 
     # ------------------------------------------------------------------ 종료
 

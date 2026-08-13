@@ -120,6 +120,7 @@ class OrderIn(BaseModel):
     command: Literal[
         "goto", "goto_pose", "start_session", "start_guidance", "set_mode",
         "localize", "system_start", "system_stop", "system_restart",
+        "fire_alarm_reset",
     ]
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
     # start_session 이면 patient_id, start_guidance 면 session_id,
@@ -188,6 +189,7 @@ class RobotOut(BaseModel):
         "active", "activating", "deactivating", "inactive", "failed", "unknown"
     ] = "unknown"
     localization_active: bool = False
+    fire_alarm_active: bool | None = None
     runtime_reported_at: datetime | None = None
 
 
@@ -206,6 +208,8 @@ class RobotHeartbeatIn(BaseModel):
         "active", "activating", "deactivating", "inactive", "failed", "unknown"
     ] = "unknown"
     localization_active: bool = False
+    # None은 구버전 게이트웨이이거나 아직 화재 노드의 상태를 받지 못한 경우다.
+    fire_alarm_active: bool | None = None
 
 
 class BatterySampleIn(BaseModel):

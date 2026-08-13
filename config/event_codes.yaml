@@ -71,6 +71,34 @@ patient.regained:
 
 # === 주행 ===================================================================
 
+fire.detected:
+  level: error
+  payload: { detections: int, window_size: int, source: [camera, manual_test] }
+
+fire.evacuation_started:
+  level: error
+  payload: { shelter_x: float, shelter_y: float }
+
+fire.evacuation_succeeded:
+  level: info
+  payload: {}
+
+fire.evacuation_failed:
+  level: error
+  payload: { reason: string, status: int }
+
+fire.inference_unavailable:
+  level: error
+  payload: { reason: string }
+
+fire.inference_restored:
+  level: info
+  payload: {}
+
+fire.alarm_reset:
+  level: info
+  payload: {}
+
 nav.goal_sent:
   level: info
   payload: { visit_name: string }
@@ -188,7 +216,7 @@ session.step_completed:
 
 session.ended:
   level: info
-  payload: { end_reason: [completed, aborted, battery, patient_lost, robot_offline, system_failure] }
+  payload: { end_reason: [completed, aborted, battery, patient_lost, robot_offline, system_failure, fire] }
   applies_to: guidance_sessions.ended_at
 
 

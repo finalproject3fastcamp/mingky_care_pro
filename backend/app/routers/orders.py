@@ -66,6 +66,14 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
     if body.command == "localize" and body.argument != "run":
         raise HTTPException(
             status_code=422, detail="localize requires argument 'run'")
+    if body.command == "fire_alarm_reset" and body.argument != "run":
+        raise HTTPException(
+            status_code=422, detail="fire_alarm_reset requires argument 'run'")
+    if body.command == "fire_alarm_reset":
+        runtime = robot_runtime.snapshot().get(robot_id)
+        if runtime is not None and runtime.fire_alarm_active is False:
+            raise HTTPException(
+                status_code=409, detail="fire alarm is not active")
     if body.command.startswith("system_"):
         if body.argument != "run":
             raise HTTPException(
@@ -94,7 +102,9 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
             # 재시작 직후 Nav2가 준비되기 전에 예전 목표가 전달되거나, 중지
             # 뒤 다시 켰을 때 낡은 목표가 갑자기 실행되는 일을 막는다.
             orders.clear_motion(robot_id)
-    if body.command in ("goto", "goto_pose", "start_guidance", "localize"):
+    if body.command in (
+            "goto", "goto_pose", "start_guidance", "localize",
+            "fire_alarm_reset"):
         runtime = robot_runtime.snapshot().get(robot_id)
         if runtime is not None and runtime.system_state != "active":
             raise HTTPException(

@@ -14,6 +14,10 @@ ROBOT_LAUNCH_FILE = (
 ROBOT_INSTALL_SCRIPT = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'install.sh'
 )
+ROBOT_SYSTEMD_UNIT = (
+    Path(__file__).resolve().parents[3]
+    / 'deploy' / 'robot' / 'systemd' / 'mingky-system.service'
+)
 
 
 def _root():
@@ -127,6 +131,38 @@ def test_lcd_status_is_the_only_integrated_lcd_owner() -> None:
     assert lcd_nodes[0].get('pkg') == 'mingky_lcd_status'
     assert lcd_nodes[0].get('if') == '$(var start_lcd_status)'
     assert all(item.get('pkg') != 'pinky_emotion' for item in root.findall('node'))
+
+
+def test_fire_evacuation_is_configurable_in_integrated_launch() -> None:
+    root = _root()
+
+    assert _argument(root, 'start_fire_evac').get('default') == 'false'
+    assert _argument(root, 'fire_infer_server_url').get('default') == ''
+    fire_node = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'fire_evac_node'
+    )
+    assert fire_node.get('pkg') == 'mingky_fire_evac'
+    assert fire_node.get('if') == '$(var start_fire_evac)'
+    params = {
+        item.get('name'): item.get('value')
+        for item in fire_node.findall('param')
+    }
+    assert params == {
+        'robot_id': '$(var robot_id)',
+        'infer_server_url': '$(var fire_infer_server_url)',
+    }
+
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    assert 'start_fire_evac:=${MINGKY_FIRE_EVAC_ENABLED:-false}' in unit
+    assert 'fire_infer_server_url:=${MINGKY_FIRE_INFER_SERVER_URL:-}' in unit
+
+
+def test_systemd_uses_a_writable_working_directory() -> None:
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+
+    # lgpio creates notification files relative to the process directory.
+    assert 'WorkingDirectory=/home/pinky' in unit
 
 
 def test_systemd_owned_publishers_are_not_duplicated() -> None:

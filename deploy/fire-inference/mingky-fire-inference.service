@@ -1,0 +1,16 @@
+[Unit]
+Description=Mingky Care YOLO fire inference server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mingky-fire
+EnvironmentFile=/etc/mingky/fire-inference.env
+WorkingDirectory=/opt/mingky-fire
+ExecStart=/opt/mingky-fire/venv/bin/python /opt/mingky-fire/infer_server.py --model ${MINGKY_FIRE_MODEL} --host 0.0.0.0 --port ${MINGKY_FIRE_PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

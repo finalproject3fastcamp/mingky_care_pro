@@ -116,6 +116,7 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
                     else "offline" if offline else "online"),
         system_state=runtime.system_state if runtime else "unknown",
         localization_active=runtime.localization_active if runtime else False,
+        fire_alarm_active=runtime.fire_alarm_active if runtime else None,
         runtime_reported_at=runtime.reported_at if runtime else None,
     )
 
@@ -241,7 +242,11 @@ async def post_heartbeat(
     heartbeat.touch(robot_id)
     if body is not None:
         robot_runtime.update(
-            robot_id, body.system_state, body.localization_active)
+            robot_id,
+            body.system_state,
+            body.localization_active,
+            body.fire_alarm_active,
+        )
     return Response(status_code=204)
 
 

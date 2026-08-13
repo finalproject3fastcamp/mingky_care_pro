@@ -33,6 +33,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32, String
+from std_srvs.srv import SetBool
 
 from mingky_interfaces.msg import GuideState, SessionStart
 from mingky_smart_recovery.selector import (
@@ -160,6 +161,7 @@ class GuideManager(Node):
         self._pending_waiting_move = None
         self._maintenance_nav_active = False
         self._localization_active = False
+        self._fire_evacuating = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -201,6 +203,8 @@ class GuideManager(Node):
         self.create_subscription(
             Bool, '/auto_localize/active',
             self._on_localization_active, state_qos)
+        self.create_service(
+            SetBool, '~/fire_evacuation', self._on_fire_evacuation)
 
         # QR·마커 노드가 붙기 전까지 손으로 흘려넣기 위한 입구.
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
@@ -389,9 +393,10 @@ class GuideManager(Node):
         self.previous_visit = ''
         self.current_visit = ''
         self._dock_attempt = 0
-        if self._emergency_engaged:
+        if self._emergency_engaged or self._fire_evacuating:
             self._dock_pending = True
-            self.get_logger().warn('비상정지 해제 뒤 충전소 복귀를 시작합니다.')
+            self.get_logger().warn(
+                '안전 우선 상태가 끝난 뒤 충전소 복귀를 시작합니다.')
         else:
             self._return_to_dock()
 
@@ -430,6 +435,53 @@ class GuideManager(Node):
         self.robot_state = GuideState.ROBOT_PAUSED
         self.get_logger().error(
             f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
+
+    def _on_fire_evacuation(self, request, response):
+        """화재 대피가 안내 상태와 기존 Nav2 콜백을 안전하게 선점하게 한다."""
+        active = bool(request.data)
+        if active == self._fire_evacuating:
+            response.success = True
+            response.message = '이미 같은 화재 대피 상태입니다.'
+            return response
+
+        self._fire_evacuating = active
+        if active:
+            active_session_id = self.session_id
+            # 이후 도착하는 기존 안내 목표 결과는 상태와 이벤트에 반영하지 않는다.
+            self._nav_generation += 1
+            self._cancel_arrival_notice()
+            self._cancel_adaptive_retry()
+            self._cancel_dock_retry()
+            self.navigation_cancel_pub.publish(Bool(data=True))
+
+            if active_session_id > 0 and self.session_state not in (
+                    GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+                self.events.publish(
+                    'session.ended', {'end_reason': 'fire'}, active_session_id)
+
+            self.session_id = 0
+            self.session_state = GuideState.SESSION_NONE
+            self.patient_id = ''
+            self.current_step_order = 0
+            self.previous_visit = ''
+            self.current_visit = ''
+            self.session_visits = []
+            self.robot_state = GuideState.ROBOT_PAUSED
+            self.get_logger().error('화재 대피 시작: 기존 안내와 예약 주행을 종료합니다.')
+            response.message = '기존 안내 상태를 종료하고 화재 대피를 준비했습니다.'
+        else:
+            self.robot_state = (
+                GuideState.ROBOT_PAUSED if self._emergency_engaged
+                else GuideState.ROBOT_BATTERY_LOW if self._battery_alarm
+                else GuideState.ROBOT_IDLE)
+            if self._battery_alarm and not self._emergency_engaged:
+                self._dock_pending = False
+                self._return_to_dock()
+            self.get_logger().info('화재 대피 상태가 종료되었습니다.')
+            response.message = '화재 대피 상태를 종료했습니다.'
+
+        response.success = True
+        return response
 
     def _on_emergency_state(self, msg: Bool):
         if msg.data == self._emergency_engaged:
@@ -721,6 +773,9 @@ class GuideManager(Node):
 
     def send_goal(self, waypoint_name: str) -> None:
         """환자 안내 목적지로 이동한다."""
+        if self._fire_evacuating:
+            self.get_logger().warn('화재 대피 중에는 안내 목표를 보낼 수 없습니다.')
+            return
         if self._battery_alarm:
             self.get_logger().warn('배터리 부족 상태에서는 안내 목표를 보낼 수 없습니다.')
             return
@@ -850,7 +905,7 @@ class GuideManager(Node):
         """현재 안내 목표를 선점하고 이 로봇에 배정된 충전소로 복귀한다."""
         if not self._battery_alarm:
             return
-        if self._emergency_engaged:
+        if self._emergency_engaged or self._fire_evacuating:
             self._dock_pending = True
             return
         self._dock_pending = False

@@ -14,6 +14,7 @@
   <exec_depend>mingky_navigation_manager</exec_depend>
   <exec_depend>mingky_battery_guard</exec_depend>
   <exec_depend>mingky_event_gateway</exec_depend>
+  <exec_depend>mingky_fire_evac</exec_depend>
   <exec_depend>mingky_qr_reader</exec_depend>
   <exec_depend>mingky_camera_streamer</exec_depend>
   <exec_depend>mingky_qr_distance</exec_depend>

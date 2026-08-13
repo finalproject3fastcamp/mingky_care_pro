@@ -11,7 +11,8 @@ import requests
 from pyzbar import pyzbar
 from pyzbar.pyzbar import ZBarSymbol
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool
 
 from mingky_interfaces.msg import GuideState, SessionStart
@@ -91,6 +92,15 @@ class QrReaderNode(Node):
         )
         self._camera_ready_pub = self.create_publisher(
             Bool, '/front_camera/ready', state_qos)
+        # 후방 카메라(/rear_camera/image_raw)와 같은 패턴 -- 원본 프레임을
+        # ROS2 토픽으로 공식 발행해서, 이 노드 내부(QR 디코드) 말고 다른
+        # 노드도 정식으로 구독할 수 있게 한다. 첫 사용처는 mingky_fire_evac
+        # (화재 감지, AI PC에서 구독). Raw 대신 CompressedImage 인 이유는
+        # 와이파이로 매 프레임 수 MB 씩 나가면 안 되기 때문 (관제 미리보기와
+        # 같은 이유).
+        self._image_pub = self.create_publisher(
+            CompressedImage, '/front_camera/image_raw/compressed',
+            qos_profile_sensor_data)
         try:
             self._setup_source()
         except Exception:  # noqa: BLE001
@@ -199,15 +209,22 @@ class QrReaderNode(Node):
 
     def _tick(self) -> None:
         # QR 디코드는 arming/waiting 동안만 한다. 관제 카메라 화면을 실제로 연
-        # 사람이 있으면 스캔 상태와 무관하게 프레임만 저FPS로 공유한다.
+        # 사람이 있거나, /front_camera/image_raw/compressed 구독자(예: 화재
+        # 감지 노드)가 있으면 스캔 상태와 무관하게 프레임을 계속 공유한다.
+        # 이 셋 중 아무것도 아니면(대기 중 + 아무도 안 봄) 카메라를 안 읽어서
+        # CPU 를 아낀다 -- 원래도 그랬던 최적화라 조건만 하나 더 붙였다.
         scan_enabled = self._armed or self._completion_scan_enabled
         preview_enabled = self._preview is not None and self._preview.has_viewers
-        if not (scan_enabled or preview_enabled):
+        image_topic_enabled = self._image_pub.get_subscription_count() > 0
+        if not (scan_enabled or preview_enabled or image_topic_enabled):
             return
 
         frame = self._read_frame()
         if frame is None:
             return
+
+        if image_topic_enabled:
+            self._publish_compressed(frame)
 
         # 관제 미리보기만 보는 동안에는 QR 디코드를 돌리지 않는다.
         codes = (pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
@@ -227,6 +244,16 @@ class QrReaderNode(Node):
             self._last = LastScan(value=value, ts=time.monotonic())
             self._post_scan(value)
             return
+
+    def _publish_compressed(self, frame) -> None:
+        ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = 'jpeg'
+        msg.data = encoded.tobytes()
+        self._image_pub.publish(msg)
 
     @staticmethod
     def _annotate_preview(frame, codes):
