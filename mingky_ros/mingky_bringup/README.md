@@ -14,8 +14,8 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
   robot_id:=pinky-01 backend_url:=https://mingkycarepro.site/api
 ```
 
-통합 launch는 전방 QR 카메라, 후방 USB 카메라와 후방 ArUco 검출기를 함께
-실행합니다. 원본 영상은 로봇 내부의 ArUco 처리에 사용하고, 관제 화면을 연
+통합 launch는 전방 QR 카메라, 후방 USB 카메라와 후방 QR 거리 측정을 함께
+실행합니다. 원본 영상은 로봇 내부의 QR 거리 측정에 사용하고, 관제 화면을 연
 동안에만 최대 640px·10 FPS·JPEG 품질 60으로 인코딩합니다. `robot_id`에 따라
 `pinky-01`은 `pinky_6294`, `pinky-02`는 `pinky_15e2`의 후방 카메라 보정값을
 자동으로 사용합니다.
@@ -32,13 +32,12 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
   start_qr_reader:=false start_rear_camera_stream:=false
 ```
 
-후방 영상은 사용하되 ArUco 검출만 끄려면 다음 인자를 사용합니다. 등록되지
-않은 새 로봇은 `camera_profile`에 보정 폴더 이름을 명시합니다.
+ArUco 검출기는 후방 QR 거리 측정과 같은 영상을 중복 처리하므로 통합 launch에
+포함하지 않습니다. 별도 시험이 필요할 때만 `mingky_aruco_detector` 패키지를
+직접 실행합니다. 등록되지 않은 새 로봇은 `camera_profile`에 보정 폴더 이름을
+명시합니다.
 
 ```bash
-ros2 launch mingky_bringup mingky_system.launch.xml \
-  start_rear_aruco_detector:=false
-
 ros2 launch mingky_bringup mingky_system.launch.xml \
   robot_id:=pinky-03 camera_profile:=pinky_abcd
 ```
@@ -160,12 +159,13 @@ sudo apt install ros-jazzy-v4l2-camera
 ```
 
 후방 카메라는 번호가 바뀌는 `/dev/videoN` 대신 장치의 고정 by-id 경로를
-사용합니다. 기본 영상은 ArUco 처리에 맞춘 `640x480 mono8`이며 로봇 내부의
+사용합니다. 기본 영상은 QR 거리 측정에 맞춘 `640x480 mono8`이며 로봇 내부의
 다음 토픽으로 발행됩니다.
 
 ```text
 /rear_camera/image_raw
 /rear_camera/camera_info
+/rear_qr/observation
 ```
 
 실행과 확인:
@@ -174,6 +174,7 @@ sudo apt install ros-jazzy-v4l2-camera
 ros2 launch mingky_bringup rear_camera.launch.py
 ros2 topic hz /rear_camera/image_raw
 ros2 topic echo /rear_camera/camera_info --once
+ros2 topic echo /rear_qr/observation
 ```
 
 다른 장치를 시험할 때만 launch 인자로 덮어씁니다.

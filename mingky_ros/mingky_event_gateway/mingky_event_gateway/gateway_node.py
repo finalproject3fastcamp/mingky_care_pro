@@ -33,7 +33,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
 
-from mingky_interfaces.msg import Event, GuideState
+from mingky_interfaces.msg import Event, GuideState, QrObservation
 
 from .queue_store import QueueStore
 
@@ -53,6 +53,18 @@ ACTIVE_GUIDE_SESSION_STATES = (
     GuideState.SESSION_ARRIVED,
     GuideState.SESSION_IN_ROOM,
 )
+
+
+def matches_guided_patient(
+    observation: QrObservation, session_state: str, patient_id: str,
+) -> bool:
+    """현재 안내 주행 중인 환자의 QR인지 판정한다."""
+    return (
+        observation.visible
+        and session_state == GuideState.SESSION_GUIDING
+        and bool(patient_id)
+        and observation.data == patient_id
+    )
 
 
 class HeartbeatFailureGuard:
@@ -79,6 +91,28 @@ class HeartbeatFailureGuard:
     def success(self) -> None:
         self.failed_since = None
         self.triggered = False
+
+
+class IntervalGate:
+    """반복 작업이 지정 주기보다 자주 실행되지 않게 한다.
+
+    작업할 payload 가 없거나 이전 값과 같아 실제 HTTP 전송을 생략해도 실행
+    시각은 소비한다. 그렇지 않으면 남은 대기 시간이 계속 0이 되어 스레드가
+    쉬지 않고 반복한다.
+    """
+
+    def __init__(self, interval_sec: float, now: float):
+        self.interval_sec = max(0.0, interval_sec)
+        self.last_attempt = now
+
+    def remaining(self, now: float) -> float:
+        return max(0.0, self.interval_sec - (now - self.last_attempt))
+
+    def consume(self, now: float) -> bool:
+        if self.remaining(now) > 0:
+            return False
+        self.last_attempt = now
+        return True
 
 
 def _iso(stamp) -> str:
@@ -116,6 +150,9 @@ class EventGateway(Node):
         # 배터리 추이는 이벤트가 아니라 별도 로그에 저빈도로 저장한다.
         # 0 이면 전송하지 않는다. 첫 표본은 즉시, 이후에는 이 주기로 보낸다.
         self.declare_parameter("battery_interval_sec", 120.0)
+        # 후방 QR 거리는 DB 이력이 아니라 관제에 보여줄 현재값이다. 최신 관측만
+        # 짧은 주기로 보내며 실패분은 쌓지 않는다.
+        self.declare_parameter("qr_observation_interval_sec", 0.5)
         # 관제에서 내려오는 명령을 물어보는 주기. 0 이면 물어보지 않는다.
         # 서버가 밀어넣지 않고 로봇이 물어보는 이유는, 로봇이 NAT 안에 있거나
         # 네트워크를 옮겨도 나가는 연결만 만들면 되기 때문이다.
@@ -143,6 +180,10 @@ class EventGateway(Node):
         self.battery_url = f"{base}/robots/{self.robot_id}/battery"
         self.battery_interval = float(
             self.get_parameter("battery_interval_sec").value)
+        self.qr_observation_url = (
+            f"{base}/robots/{self.robot_id}/qr-observation")
+        self.qr_observation_interval = float(
+            self.get_parameter("qr_observation_interval_sec").value)
         self.orders_url = f"{base}/robots/{self.robot_id}/orders"
         self.order_interval = float(self.get_parameter("order_interval_sec").value)
         self.order_timeout = float(self.get_parameter("order_timeout_sec").value)
@@ -161,6 +202,9 @@ class EventGateway(Node):
             Float32, "/battery/voltage", self._on_battery_voltage, 10)
         self.create_subscription(
             Float32, "/battery/percent", self._on_battery_percent, 10)
+        self.create_subscription(
+            QrObservation, "/rear_qr/observation",
+            self._on_qr_observation, 10)
         state_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -175,7 +219,12 @@ class EventGateway(Node):
         self._battery_voltage = None
         self._battery_percent = None
         self._battery_wake = threading.Event()
+        self._qr_lock = threading.Lock()
+        self._qr_observation = None
+        self._qr_wake = threading.Event()
         self._clinical_active = False
+        self._guide_session_state = GuideState.SESSION_NONE
+        self._guide_patient_id = ''
         self._localization_active = False
 
         # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
@@ -215,6 +264,11 @@ class EventGateway(Node):
             self._battery = threading.Thread(
                 target=self._battery_loop, daemon=True)
             self._battery.start()
+        self._qr_sender = None
+        if self.qr_observation_interval > 0:
+            self._qr_sender = threading.Thread(
+                target=self._qr_observation_loop, daemon=True)
+            self._qr_sender.start()
         self._orders = None
         if self.order_interval > 0:
             self._orders = threading.Thread(target=self._order_loop, daemon=True)
@@ -255,7 +309,23 @@ class EventGateway(Node):
             self._battery_percent = int(round(max(0.0, min(100.0, msg.data))))
         self._battery_wake.set()
 
+    def _on_qr_observation(self, msg: QrObservation) -> None:
+        matches_patient = matches_guided_patient(
+            msg, self._guide_session_state, self._guide_patient_id)
+        distance = float(msg.distance) if matches_patient else None
+        if matches_patient and (not math.isfinite(distance) or distance <= 0):
+            self.get_logger().warn(f"유효하지 않은 QR 거리 무시: {distance}")
+            return
+        with self._qr_lock:
+            self._qr_observation = {
+                "visible": matches_patient,
+                "distance": distance,
+            }
+        self._qr_wake.set()
+
     def _on_guide_state(self, msg: GuideState) -> None:
+        self._guide_session_state = msg.session_state
+        self._guide_patient_id = msg.patient_id
         self._clinical_active = (
             msg.session_id > 0
             and msg.session_state in ACTIVE_GUIDE_SESSION_STATES
@@ -463,6 +533,38 @@ class EventGateway(Node):
                     f"배터리 표본 거부: HTTP {response.status_code}")
         session.close()
 
+    # ---------------------------------------------------------- QR observation
+
+    def _qr_observation_loop(self) -> None:
+        """최신 QR 거리만 전송하고 실패한 과거 관측은 버린다."""
+        session = requests.Session()
+        gate = IntervalGate(self.qr_observation_interval, time.monotonic())
+        last_payload = None
+        while not self._stop.is_set():
+            self._qr_wake.wait(timeout=gate.remaining(time.monotonic()))
+            self._qr_wake.clear()
+            if self._stop.is_set():
+                break
+            if not gate.consume(time.monotonic()):
+                continue
+            with self._qr_lock:
+                payload = self._qr_observation
+            if payload is None:
+                continue
+            # 보이는 동안은 거리 변화를 계속 보내고, 미인식 전이는 한 번만 보낸다.
+            if not payload["visible"] and payload == last_payload:
+                continue
+            last_payload = dict(payload)
+            try:
+                response = session.post(
+                    self.qr_observation_url, json=payload, timeout=self.timeout)
+            except requests.RequestException:
+                continue
+            if not response.ok:
+                self.get_logger().debug(
+                    f"QR 관측값 거부: HTTP {response.status_code}")
+        session.close()
+
     # ----------------------------------------------------------------- 명령 수신
 
     def _order_loop(self) -> None:
@@ -660,11 +762,14 @@ class EventGateway(Node):
         self._stop.set()
         self._wake.set()
         self._battery_wake.set()
+        self._qr_wake.set()
         self._sender.join(timeout=2.0)
         if self._heartbeat is not None:
             self._heartbeat.join(timeout=2.0)
         if self._battery is not None:
             self._battery.join(timeout=2.0)
+        if self._qr_sender is not None:
+            self._qr_sender.join(timeout=2.0)
         if self._orders is not None:
             self._orders.join(timeout=2.0)
         self.queue.close()

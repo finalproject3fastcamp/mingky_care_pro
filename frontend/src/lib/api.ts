@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-import type { ActiveSession, Robot } from '../types/monitoring'
+import type { ActiveSession, QrObservation, Robot } from '../types/monitoring'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -22,6 +22,17 @@ export async function getRobots(
   options: { signal?: AbortSignal } = {},
 ): Promise<Robot[]> {
   const { data } = await api.get<Robot[]>('/robots', { signal: options.signal })
+  return data
+}
+
+export async function getQrObservation(
+  robotId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<QrObservation> {
+  const { data } = await api.get<QrObservation>(
+    `/robots/${encodeURIComponent(robotId)}/qr-observation`,
+    { signal: options.signal },
+  )
   return data
 }
 
