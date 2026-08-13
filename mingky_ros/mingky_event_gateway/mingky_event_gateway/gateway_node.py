@@ -64,9 +64,9 @@ CONTENT_REJECT_STATUSES = frozenset({400, 409, 413, 422})
 # 4xx 지만 본문 탓이 아니다. 서버가 밀리거나 조르지 말라는 뜻이다.
 TRANSIENT_STATUSES = frozenset({408, 429})
 
-# 한 배치에서 개별 폐기를 허용할 상한. 이걸 넘으면 나쁜 이벤트가 섞인 게
-# 아니라 서버 계약이 어긋난 것이다. 계속 가려내면 큐 전체를 지우게 된다.
-MAX_REJECTS_PER_BATCH = 5
+# 전송 성공 없이 연속으로 폐기할 수 있는 상한. 이걸 넘으면 나쁜 이벤트가
+# 섞인 게 아니라 서버 계약이 어긋난 것이다. 계속 가려내면 큐 전체를 지운다.
+MAX_CONSECUTIVE_REJECTS = 5
 
 
 def matches_guided_patient(
@@ -143,8 +143,35 @@ def send_outcome(status_code: int) -> str:
     return SEND_RETRY
 
 
-def isolate_rejected(batch, send, drop, on_reject,
-                     max_rejects: int = MAX_REJECTS_PER_BATCH):
+class RejectBudget:
+    """전송 성공 없이 연속으로 폐기할 수 있는 양.
+
+    예산을 주기마다 새로 주면 안 된다. 서버가 배치를 계속 거부하는 동안
+    매 주기 몇 건씩 버리게 되고, 백오프 상한이 60초라 시간당 수백 건씩
+    영구히 사라진다. 느려질 뿐 결국 큐가 비는 것은 같다.
+
+    그래서 예산은 전송이 **한 번이라도 성공했을 때만** 되돌아온다. 성공은
+    서버가 정상이고 거부가 진짜 개별 이벤트 문제라는 뜻이기 때문이다.
+    거부만 이어지는 동안에는 채워지지 않으므로, 재시도를 아무리 반복해도
+    폐기 총량이 이 상한을 넘지 않는다.
+    """
+
+    def __init__(self, limit: int = MAX_CONSECUTIVE_REJECTS):
+        self.limit = limit
+        self.remaining = limit
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining <= 0
+
+    def spend(self) -> None:
+        self.remaining -= 1
+
+    def restore(self) -> None:
+        self.remaining = self.limit
+
+
+def isolate_rejected(batch, send, drop, on_reject, budget):
     """거부된 배치에서 실제 문제 건만 가려내 버린다.
 
     배치를 반씩 갈라 다시 보낸다. 통과하는 절반은 그대로 적재되고, 혼자
@@ -157,28 +184,28 @@ def isolate_rejected(batch, send, drop, on_reject,
     일시적 실패를 만나면 거기서 멈춘다. 남은 건은 큐에 두고 다음 주기에
     다시 본다 — 서버가 흔들리는 동안 멀쩡한 이벤트를 버리면 안 된다.
 
-    한 배치에서 max_rejects 건을 넘겨 버리게 되면 거기서 멈춘다. 그 정도면
-    나쁜 이벤트 하나가 아니라 서버 계약이 통째로 어긋난 것이고, 계속 갈라
-    봐야 큐 전체를 지우는 결과가 된다. 예산을 소진하면 사람이 봐야 한다.
+    가르는 도중 절반이 통과하면 예산을 되돌린다. 그 절반이 들어갔다는 것은
+    서버가 살아 있다는 뜻이라, 나쁜 이벤트가 여럿 섞인 배치도 끝까지
+    가려낼 수 있다. 반대로 아무것도 안 통과한 채 예산이 바닥나면 계약이
+    어긋난 것이므로 거기서 멈추고 나머지는 큐에 남긴다.
 
     돌려주는 값은 (큐가 줄었는가, 예산을 소진했는가) 다.
     """
-    remaining = max_rejects
     progressed = False
     exhausted = False
 
     def walk(part) -> bool:
         """이 조각을 끝까지 처리했으면 True. 멈춰야 하면 False."""
-        nonlocal remaining, progressed, exhausted
+        nonlocal progressed, exhausted
 
         if len(part) == 1:
-            if remaining <= 0:
+            if budget.exhausted:
                 exhausted = True
                 return False
             row_id, body = part[0]
             on_reject(body)
             drop([row_id])
-            remaining -= 1
+            budget.spend()
             progressed = True
             return True
 
@@ -187,6 +214,8 @@ def isolate_rejected(batch, send, drop, on_reject,
             outcome = send([body for _, body in half])
             if outcome == SEND_OK:
                 drop([row_id for row_id, _ in half])
+                # 서버가 살아 있다. 남은 거부는 개별 이벤트 문제로 본다.
+                budget.restore()
                 progressed = True
             elif outcome == SEND_REJECT:
                 if not walk(half):
@@ -442,6 +471,9 @@ class EventGateway(Node):
         # 줄 서면 생존 신호가 늦는다.
         session = requests.Session()
         backoff = self.flush_interval
+        # 루프 밖에 둔다. 주기마다 새로 만들면 예산이 리셋돼, 서버가 계속
+        # 거부하는 동안 매 주기 몇 건씩 영구히 사라진다.
+        budget = RejectBudget()
         while not self._stop.is_set():
             self._wake.wait(timeout=backoff)
             self._wake.clear()
@@ -455,26 +487,36 @@ class EventGateway(Node):
             bodies = [body for _, body in batch]
 
             outcome = self._post(session, bodies)
-            if outcome == SEND_REJECT:
+            if outcome == SEND_REJECT and budget.exhausted:
+                # 예산이 바닥난 상태다. 갈라 봐야 또 버리기만 하므로 큐를
+                # 그대로 두고 재시도한다. 사람이 고칠 때까지 보존한다.
+                progressed = False
+            elif outcome == SEND_REJECT:
                 self.get_logger().warn(
                     f"서버가 배치를 거부했다 ({len(batch)}건). 문제 건을 가려낸다.")
                 progressed, exhausted = isolate_rejected(
                     batch,
                     lambda halved: self._post(session, halved),
                     self.queue.drop,
-                    self._log_rejected)
+                    self._log_rejected,
+                    budget)
                 if exhausted:
-                    # 한 배치에서 이만큼 거부되면 이벤트가 아니라 계약이
-                    # 문제다. 더 가려내면 큐를 통째로 지우게 되므로 멈춘다.
+                    # 전송이 한 번도 성공하지 않은 채 예산을 다 썼다.
+                    # 나쁜 이벤트가 섞인 게 아니라 계약이 어긋난 것이므로
+                    # 여기서 멈춘다. 남은 큐는 지우지 않는다.
                     self.get_logger().error(
-                        f"한 배치에서 {MAX_REJECTS_PER_BATCH}건이 거부돼 "
-                        "가려내기를 중단한다. 서버 스키마와 event_codes 를 "
-                        f"확인하세요 (대기 {self.queue.count()}건).")
+                        f"전송 성공 없이 {budget.limit}건이 거부돼 가려내기를 "
+                        "중단한다. 남은 큐는 보존하고 재시도만 한다 — 서버 "
+                        "스키마와 event_codes 를 확인하세요 "
+                        f"(대기 {self.queue.count()}건).")
                     progressed = False
             else:
                 progressed = outcome == SEND_OK
                 if progressed:
                     self.queue.drop(ids)
+                    # 서버가 정상으로 돌아왔다. 다음 거부는 개별 이벤트
+                    # 문제로 보고 다시 가려낼 수 있게 예산을 되돌린다.
+                    budget.restore()
 
             if progressed:
                 backoff = self.flush_interval

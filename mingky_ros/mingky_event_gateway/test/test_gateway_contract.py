@@ -4,6 +4,7 @@ from mingky_event_gateway.gateway_node import (
     ACTIVE_GUIDE_SESSION_STATES,
     HeartbeatFailureGuard,
     IntervalGate,
+    RejectBudget,
     SEND_OK,
     SEND_REJECT,
     SEND_RETRY,
@@ -123,7 +124,7 @@ def test_only_the_rejected_event_is_dropped():
     dropped, rejected = [], []
 
     progressed, exhausted = isolate_rejected(
-        batch, server.send, dropped.extend, rejected.append)
+        batch, server.send, dropped.extend, rejected.append, RejectBudget())
 
     assert (progressed, exhausted) == (True, False)
     # 8건 중 1건만 문제인데 나머지 7건이 같이 사라지면 안 된다.
@@ -136,7 +137,8 @@ def test_multiple_rejected_events_are_each_isolated():
     server = FakeServer(poison={"e0", "e7"})
     dropped, rejected = [], []
 
-    isolate_rejected(batch, server.send, dropped.extend, rejected.append)
+    isolate_rejected(
+        batch, server.send, dropped.extend, rejected.append, RejectBudget())
 
     assert sorted(dropped) == list(range(8))
     assert sorted(body["event_id"] for body in rejected) == ["e0", "e7"]
@@ -149,7 +151,7 @@ def test_transient_failure_mid_isolation_keeps_the_rest_queued():
     dropped, rejected = [], []
 
     progressed, exhausted = isolate_rejected(
-        batch, server.send, dropped.extend, rejected.append)
+        batch, server.send, dropped.extend, rejected.append, RejectBudget())
 
     # 통과한 절반만 지워지고, 나머지는 큐에 남아 다음 주기를 기다린다.
     assert (progressed, exhausted) == (True, False)
@@ -164,7 +166,8 @@ def test_isolation_makes_no_progress_when_the_server_is_down():
 
     # 아무것도 못 지웠다 → 호출자가 백오프해야 한다.
     assert isolate_rejected(
-        batch, server.send, dropped.extend, rejected.append) == (False, False)
+        batch, server.send, dropped.extend, rejected.append,
+        RejectBudget()) == (False, False)
     assert dropped == []
 
 
@@ -175,10 +178,60 @@ def test_wholesale_rejection_stops_instead_of_emptying_the_queue():
     dropped, rejected = [], []
 
     progressed, exhausted = isolate_rejected(
-        batch, server.send, dropped.extend, rejected.append, max_rejects=3)
+        batch, server.send, dropped.extend, rejected.append, RejectBudget(3))
 
     assert exhausted is True
     assert len(rejected) == 3
     assert len(dropped) == 3
     # 나머지 13건은 큐에 남아 사람이 볼 때까지 보존된다.
     assert progressed is True
+
+
+def test_budget_does_not_reset_between_retries_of_a_rejecting_server():
+    """리뷰 지적 재현 — 서버가 계속 거부해도 큐가 조금씩 사라지면 안 된다.
+
+    예산을 주기마다 새로 주면 매 주기 몇 건씩 버리게 되고, 백오프 상한이
+    60초라 시간당 수백 건이 영구히 사라진다. 느려질 뿐 결국 큐가 비는 것은
+    같다. 예산은 전송이 성공했을 때만 되돌아와야 한다.
+    """
+    budget = RejectBudget(3)
+    server = FakeServer(poison={f'e{i}' for i in range(64)})
+    dropped, rejected = [], []
+
+    # 게이트웨이가 같은 상황으로 열 주기를 돈다.
+    for _ in range(10):
+        isolate_rejected(
+            _batch(8), server.send, dropped.extend, rejected.append, budget)
+
+    # 첫 주기에 예산만큼만 버리고, 그 뒤로는 한 건도 더 버리지 않는다.
+    assert len(dropped) == 3
+    assert budget.exhausted is True
+
+
+def test_a_successful_send_restores_the_budget():
+    budget = RejectBudget(3)
+    budget.spend()
+    budget.spend()
+    budget.spend()
+    assert budget.exhausted is True
+
+    # 전송이 성공했다는 것은 서버가 정상이고 거부가 진짜 개별 이벤트
+    # 문제라는 뜻이다. 그때만 다시 가려낼 수 있어야 한다.
+    budget.restore()
+    assert budget.exhausted is False
+    assert budget.remaining == 3
+
+
+def test_many_bad_events_are_still_isolated_while_the_server_works():
+    # 절반이 통과하면 예산이 되돌아온다. 나쁜 이벤트가 예산보다 많이 섞여
+    # 있어도, 서버가 살아 있는 한 끝까지 가려낼 수 있어야 한다.
+    budget = RejectBudget(2)
+    server = FakeServer(poison={'e0', 'e2', 'e4', 'e6', 'e9', 'e11'})
+    dropped, rejected = [], []
+
+    progressed, exhausted = isolate_rejected(
+        _batch(16), server.send, dropped.extend, rejected.append, budget)
+
+    assert (progressed, exhausted) == (True, False)
+    assert len(rejected) == 6
+    assert sorted(dropped) == list(range(16))
