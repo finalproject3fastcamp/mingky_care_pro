@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
 import { GuidanceStartCard } from '../components/GuidanceStartCard'
+import { GuidanceRearCamera } from '../components/GuidanceRearCamera'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -352,6 +353,9 @@ function SessionView({
         mode={mode}
         robotConnected={robotConnected}
       />
+      {derivedState === '안내중' && (
+        <GuidanceRearCamera robotId={session.robot_id} />
+      )}
       <ProgressStepper
         steps={session.steps}
         currentStepOrder={session.current_step_order}

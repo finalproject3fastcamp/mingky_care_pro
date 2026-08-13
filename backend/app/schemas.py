@@ -220,3 +220,26 @@ class BatterySampleIn(BaseModel):
         if self.voltage is None and self.battery_percent is None:
             raise ValueError("voltage or battery_percent is required")
         return self
+
+
+class QrObservationIn(BaseModel):
+    """로봇 후방 카메라의 최신 QR 거리 관측값."""
+
+    visible: bool
+    distance: float | None = Field(
+        default=None, gt=0, le=10, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def visible_has_distance(self):
+        if self.visible and self.distance is None:
+            raise ValueError("visible QR observation requires distance")
+        if not self.visible:
+            self.distance = None
+        return self
+
+
+class QrObservationOut(BaseModel):
+    robot_id: str
+    visible: bool = False
+    distance: float | None = None
+    observed_at: datetime | None = None
