@@ -49,11 +49,14 @@ NavigateToPose 액션 클라이언트를 갖고, 이동 전에 CancelGoal 로 �
 
 import collections
 import math
+from pathlib import Path
 import threading
 import time
 
 from action_msgs.srv import CancelGoal
-from nav2_msgs.action import NavigateToPose
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from nav2_msgs.action import ComputePathToPose, NavigateToPose
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -61,9 +64,16 @@ from rclpy.qos import (
     DurabilityPolicy, qos_profile_sensor_data, QoSProfile, ReliabilityPolicy,
 )
 import requests
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, LaserScan
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool, Trigger
+
+from mingky_smart_recovery.selector import (
+    EscapeCandidate,
+    candidate_to_map,
+    select_diverse_candidates,
+    select_escape_candidates,
+)
 
 from .event_publisher import FireEventPublisher
 
@@ -94,6 +104,10 @@ def _yaw_to_quat(yaw: float) -> tuple[float, float]:
     return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
+def _quat_to_yaw(z: float, w: float) -> float:
+    return math.atan2(2.0 * w * z, 1.0 - 2.0 * z * z)
+
+
 def _detections_confirmed(results, required: int) -> bool:
     """Return whether enough frames in the rolling window detected fire."""
     return sum(bool(result) for result in results) >= required
@@ -120,6 +134,11 @@ class FireEvacNode(Node):
         # 둔다. 실패하면 이번 프레임은 그냥 건너뛴다 (아래 _detect_fire 참고).
         self.declare_parameter('infer_timeout_sec', 2.0)
         self.declare_parameter('nav_result_timeout_sec', 120.0)
+        self.declare_parameter('recovery_scan_topic', '/scan')
+        self.declare_parameter('recovery_data_stale_sec', 1.0)
+        self.declare_parameter('recovery_candidate_limit', 4)
+        self.declare_parameter('recovery_candidate_separation_deg', 30.0)
+        self.declare_parameter('recovery_retry_delay_sec', 5.0)
         self.declare_parameter('conf_threshold', 0.3)
         # 최근 window_size 프레임 중 required_detections 프레임 이상에서
         # fire 가 감지돼야 확정한다. 순간적인 오탐(반사광 한 프레임 등)을
@@ -151,6 +170,15 @@ class FireEvacNode(Node):
         self.infer_timeout_sec = float(get('infer_timeout_sec').value)
         self.nav_result_timeout_sec = max(
             1.0, float(get('nav_result_timeout_sec').value))
+        self.recovery_data_stale_sec = max(
+            0.1, float(get('recovery_data_stale_sec').value))
+        self.recovery_candidate_limit = max(
+            1, int(get('recovery_candidate_limit').value))
+        self.recovery_candidate_separation_rad = math.radians(max(
+            0.0, min(180.0, float(
+                get('recovery_candidate_separation_deg').value))))
+        self.recovery_retry_delay_sec = max(
+            0.5, float(get('recovery_retry_delay_sec').value))
         self.conf_threshold = float(get('conf_threshold').value)
         self.window_size = int(get('window_size').value)
         self.required_detections = int(get('required_detections').value)
@@ -175,6 +203,14 @@ class FireEvacNode(Node):
         self._latest_frame_at = None    # time.monotonic() | None
         self._last_processed_at = None  # 마지막으로 추론에 쓴 프레임 시각
         self._inference_available = None
+        self._latest_scan = None
+        self._latest_scan_at = None
+        self._latest_pose = None
+        self._latest_pose_at = None
+        self._recovery_failures: dict[str, int] = {}
+        self._behavior_tree = str(
+            Path(get_package_share_directory('mingky_smart_recovery'))
+            / 'behavior_trees' / 'navigate_no_recovery_navfn.xml')
 
         self.create_subscription(String, MODE_TOPIC, self._on_mode, _latched())
         self.mode_set_pub = self.create_publisher(String, MODE_SET_TOPIC, 10)
@@ -185,6 +221,12 @@ class FireEvacNode(Node):
         self.create_subscription(
             CompressedImage, self.image_topic, self._on_image,
             qos_profile_sensor_data)
+        self.create_subscription(
+            LaserScan, str(get('recovery_scan_topic').value),
+            self._on_scan, qos_profile_sensor_data)
+        self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose',
+            self._on_pose, qos_profile_sensor_data)
         self.evac_active_pub = self.create_publisher(Bool, EVAC_ACTIVE_TOPIC, _latched())
         self.evac_active_pub.publish(Bool(data=False))
         self.alarm_active_pub = self.create_publisher(
@@ -193,6 +235,8 @@ class FireEvacNode(Node):
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
         self.guide_evac_client = self.create_client(SetBool, GUIDE_EVAC_SERVICE)
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.path_client = ActionClient(
+            self, ComputePathToPose, 'compute_path_to_pose')
         # CV 파이프라인 없이도 '감지됐다고 치고' 이동 로직만 따로 테스트할 수
         # 있게 만든 서비스. 카메라 앞에 매번 불을 갖다 댈 필요 없이 Nav2
         # 취소/목표전송 부분만 검증할 때 쓴다.
@@ -218,6 +262,14 @@ class FireEvacNode(Node):
         # 여기서 디코드했다가 다시 인코드하는 건 낭비다.
         self._latest_jpeg = bytes(msg.data)
         self._latest_frame_at = time.monotonic()
+
+    def _on_scan(self, msg: LaserScan):
+        self._latest_scan = msg
+        self._latest_scan_at = time.monotonic()
+
+    def _on_pose(self, msg: PoseWithCovarianceStamped):
+        self._latest_pose = msg.pose.pose
+        self._latest_pose_at = time.monotonic()
 
     def _set_evacuating(self, value: bool):
         """_evacuating 플래그를 바꾸고, 그때마다 LCD 가 볼 토픽도 같이 갱신한다.
@@ -361,16 +413,6 @@ class FireEvacNode(Node):
             self._set_guide_evacuation(True)
             self._cancel_active_nav_goal()
 
-            x, y, yaw = self.shelter
-            goal = NavigateToPose.Goal()
-            goal.pose.header.frame_id = 'map'
-            goal.pose.header.stamp = self.get_clock().now().to_msg()
-            goal.pose.pose.position.x = x
-            goal.pose.pose.position.y = y
-            qz, qw = _yaw_to_quat(yaw)
-            goal.pose.pose.orientation.z = qz
-            goal.pose.pose.orientation.w = qw
-
             if not self.nav_client.wait_for_server(timeout_sec=5.0):
                 self.get_logger().error('navigate_to_pose 액션 서버가 없습니다.')
                 self.events.publish(
@@ -378,71 +420,183 @@ class FireEvacNode(Node):
                     {'reason': 'nav2_unavailable', 'status': -1},
                     level='error')
                 return
-
-            send_future = self.nav_client.send_goal_async(goal)
-            goal_handle = self._wait_for_future(send_future, timeout_sec=5.0)
-            if goal_handle is None or not goal_handle.accepted:
-                self.get_logger().error('대피 목표가 거부됐습니다.')
-                self.events.publish(
-                    'fire.evacuation_failed',
-                    {'reason': 'goal_rejected', 'status': -1},
-                    level='error')
-                return
-
+            x, y, yaw = self.shelter
             self.get_logger().info(f'대피 목표 전송됨: x={x:.2f}, y={y:.2f}, yaw={yaw:.2f}')
             self.events.publish(
                 'fire.evacuation_started',
                 {'shelter_x': x, 'shelter_y': y},
                 level='error')
-            result_future = goal_handle.get_result_async()
-            result = self._wait_for_future(
-                result_future, timeout_sec=self.nav_result_timeout_sec)
-            if result is None:
-                self.get_logger().error(
-                    '대피 이동 결과 타임아웃 — 대피 목표를 취소합니다.')
-                cancel_future = goal_handle.cancel_goal_async()
-                cancel_response = self._wait_for_future(cancel_future, timeout_sec=5.0)
-                if cancel_response is None:
-                    # 실제 로봇이 계속 움직일 가능성이 있으므로 평상 상태로
-                    # 돌아가지 않는다. 운영자가 Nav2/비상정지를 확인해야 한다.
-                    safe_to_clear = False
-                    self.get_logger().fatal(
-                        '대피 목표 취소 응답이 없습니다. 대피 상태를 유지합니다.')
-                    self.events.publish(
-                        'fire.evacuation_failed',
-                        {'reason': 'cancel_unconfirmed', 'status': -1},
-                        level='error')
-                    return
-                terminal = self._wait_for_future(result_future, timeout_sec=5.0)
-                if terminal is None:
-                    safe_to_clear = False
-                    self.get_logger().fatal(
-                        '대피 목표 취소 후 종료 결과가 없습니다. 대피 상태를 유지합니다.')
-                    self.events.publish(
-                        'fire.evacuation_failed',
-                        {'reason': 'cancel_result_timeout', 'status': -1},
-                        level='error')
-                    return
-                self.get_logger().warn(
-                    f'대피 목표 취소 완료. status={terminal.status}')
+            deadline = time.monotonic() + self.nav_result_timeout_sec
+            self._recovery_failures.clear()
+            status, reason, safe_to_clear = self._navigate_with_adaptive_recovery(
+                deadline)
+            self.get_logger().info(f'대피 이동 종료. status={status}')
+            if status == 4:
+                self.events.publish('fire.evacuation_succeeded')
+            else:
                 self.events.publish(
                     'fire.evacuation_failed',
-                    {'reason': 'navigation_timeout', 'status': int(terminal.status)},
+                    {'reason': reason, 'status': int(status)},
                     level='error')
-            else:
-                self.get_logger().info(f'대피 이동 종료. status={result.status}')
-                if result.status == 4:
-                    self.events.publish('fire.evacuation_succeeded')
-                else:
-                    self.events.publish(
-                        'fire.evacuation_failed',
-                        {'reason': 'navigation_failed', 'status': int(result.status)},
-                        level='error')
         finally:
             if safe_to_clear:
                 self._set_guide_evacuation(False)
                 self._set_evacuating(False)
                 self._recent.clear()
+
+    def _navigate_with_adaptive_recovery(
+            self, deadline: float) -> tuple[int, str, bool]:
+        """대피소 이동 실패 시 LiDAR 기반 임시 탈출 후 원래 목표를 재시도한다."""
+        while time.monotonic() < deadline and rclpy.ok() and not self._stop:
+            if self.mode == 'estop':
+                return -1, 'emergency_stop', True
+            result = self._run_nav_goal(self._pose(*self.shelter), deadline)
+            if result is None:
+                return -1, 'cancel_unconfirmed', False
+            if result == -1:
+                return -1, 'navigation_timeout', True
+            if result == 4:
+                return result, 'succeeded', True
+            if result != 6:
+                return result, 'navigation_failed', True
+
+            candidate = self._select_recovery_candidate()
+            if candidate is None:
+                self.get_logger().warn(
+                    f'탈출 후보가 없어 {self.recovery_retry_delay_sec:.1f}초 정지 후 재판단합니다.')
+                time.sleep(min(
+                    self.recovery_retry_delay_sec,
+                    max(0.0, deadline - time.monotonic())))
+                continue
+            recovery_result = self._run_nav_goal(
+                self._candidate_pose(candidate), deadline)
+            if recovery_result is None:
+                return -1, 'cancel_unconfirmed', False
+            if recovery_result == -1:
+                return -1, 'navigation_timeout', True
+            if recovery_result == 4:
+                self.get_logger().info(
+                    f'임시 탈출 지점({candidate.name}) 도착; 대피소를 다시 시도합니다.')
+                continue
+            self._recovery_failures[candidate.name] = (
+                self._recovery_failures.get(candidate.name, 0) + 1)
+
+        return -1, 'navigation_timeout', True
+
+    def _run_nav_goal(self, pose: PoseStamped, deadline: float) -> int | None:
+        goal = NavigateToPose.Goal()
+        goal.pose = pose
+        goal.behavior_tree = self._behavior_tree
+        handle = self._wait_for_future(
+            self.nav_client.send_goal_async(
+                goal, feedback_callback=self._on_nav_feedback),
+            timeout_sec=min(5.0, max(0.0, deadline - time.monotonic())))
+        if handle is None or not handle.accepted:
+            return 6
+        result_future = handle.get_result_async()
+        result = self._wait_for_future(
+            result_future,
+            timeout_sec=max(0.0, deadline - time.monotonic()))
+        if result is not None:
+            return int(result.status)
+
+        cancel = self._wait_for_future(
+            handle.cancel_goal_async(), timeout_sec=5.0)
+        if cancel is None:
+            self.get_logger().fatal(
+                '대피 목표 취소 응답이 없습니다. 대피 상태를 유지합니다.')
+            return None
+        terminal = self._wait_for_future(result_future, timeout_sec=5.0)
+        if terminal is None:
+            self.get_logger().fatal(
+                '대피 목표 취소 후 종료 결과가 없습니다. 대피 상태를 유지합니다.')
+            return None
+        return -1
+
+    def _on_nav_feedback(self, feedback_msg) -> None:
+        """Nav2가 실제 제어에 사용 중인 최신 위치를 복구 판단에도 사용한다."""
+        self._latest_pose = feedback_msg.feedback.current_pose.pose
+        self._latest_pose_at = time.monotonic()
+
+    def _select_recovery_candidate(self) -> EscapeCandidate | None:
+        now = time.monotonic()
+        if (self._latest_scan is None or self._latest_pose is None
+                or self._latest_scan_at is None or self._latest_pose_at is None
+                or now - self._latest_scan_at > self.recovery_data_stale_sec
+                or now - self._latest_pose_at > self.recovery_data_stale_sec):
+            self.get_logger().warn(
+                'LiDAR 또는 현재 위치가 오래되어 적응형 복구를 기다립니다.')
+            return None
+        if not self.path_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn('경로 검증 서버가 없어 적응형 복구를 기다립니다.')
+            return None
+
+        pose = self._latest_pose
+        yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
+        goal_angle = math.atan2(
+            self.shelter[1] - pose.position.y,
+            self.shelter[0] - pose.position.x)
+        scan = self._latest_scan
+        candidates = select_diverse_candidates(
+            select_escape_candidates(
+                scan.ranges,
+                angle_min=float(scan.angle_min),
+                angle_increment=float(scan.angle_increment),
+                range_min=float(scan.range_min),
+                range_max=float(scan.range_max),
+                goal_bearing_rad=math.atan2(
+                    math.sin(goal_angle - yaw), math.cos(goal_angle - yaw)),
+                failures=self._recovery_failures,
+            ),
+            limit=self.recovery_candidate_limit,
+            minimum_separation_rad=self.recovery_candidate_separation_rad,
+        )
+        for candidate in candidates:
+            if self._path_exists(self._candidate_pose(candidate)):
+                self.get_logger().warn(
+                    f'적응형 탈출 후보 선택: {candidate.name}, '
+                    f'거리={candidate.distance_m:.2f}m, 여유={candidate.clearance_m:.2f}m')
+                return candidate
+            self._recovery_failures[candidate.name] = (
+                self._recovery_failures.get(candidate.name, 0) + 1)
+        return None
+
+    def _path_exists(self, pose: PoseStamped) -> bool:
+        goal = ComputePathToPose.Goal()
+        goal.goal = pose
+        goal.planner_id = 'GridBased'
+        goal.use_start = False
+        handle = self._wait_for_future(
+            self.path_client.send_goal_async(goal), timeout_sec=2.0)
+        if handle is None or not handle.accepted:
+            return False
+        wrapped = self._wait_for_future(
+            handle.get_result_async(), timeout_sec=3.0)
+        return bool(
+            wrapped is not None
+            and wrapped.status == 4
+            and wrapped.result.error_code == ComputePathToPose.Result.NONE
+            and len(wrapped.result.path.poses) >= 2)
+
+    def _pose(self, x: float, y: float, yaw: float) -> PoseStamped:
+        pose = PoseStamped()
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = float(x)
+        pose.pose.position.y = float(y)
+        pose.pose.orientation.z, pose.pose.orientation.w = _yaw_to_quat(yaw)
+        return pose
+
+    def _candidate_pose(self, candidate: EscapeCandidate) -> PoseStamped:
+        pose = self._latest_pose
+        yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
+        x, y, target_yaw = candidate_to_map(
+            candidate,
+            robot_x=float(pose.position.x),
+            robot_y=float(pose.position.y),
+            robot_yaw=yaw,
+        )
+        return self._pose(x, y, target_yaw)
 
     def _ensure_auto_mode(self) -> bool:
         """Request the normal mode owner to unlock Nav2 without bypassing e-stop."""

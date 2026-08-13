@@ -91,6 +91,10 @@ ros2 run mingky_fire_evac fire_evac_node --ros-args \
 | `frame_max_age_sec` | `2.0` | 이보다 오래된 프레임은 감지에 안 씀 (카메라/네트워크 끊김 방지) |
 | `infer_server_url` | *(필수)* | 추론 서버 주소, 예: `http://192.168.129.41:5000/infer` |
 | `infer_timeout_sec` | `2.0` | 추론 요청 타임아웃. 실패해도 노드는 안 죽고 그 프레임만 미감지 처리 |
+| `nav_result_timeout_sec` | `120.0` | 적응형 복구를 포함한 전체 대피 제한 시간 |
+| `recovery_data_stale_sec` | `1.0` | LiDAR·AMCL 위치가 이보다 오래되면 움직이지 않고 재수신 대기 |
+| `recovery_candidate_limit` | `4` | 한 복구 주기에서 경로를 검증할 탈출 후보 수 |
+| `recovery_retry_delay_sec` | `5.0` | 유효한 후보가 없을 때 정지 후 다시 판단하는 시간 |
 | `conf_threshold` | `0.3` | YOLO confidence 임계값 |
 | `window_size` | `7` | 최근 몇 프레임을 볼지 |
 | `required_detections` | `5` | 최근 `window_size`장 중 몇 장 이상 fire여야 확정할지 (순간 오탐·단일 미검출 필터) |
@@ -102,6 +106,9 @@ ros2 run mingky_fire_evac fire_evac_node --ros-args \
 2. 최근 `window_size`프레임 중 `required_detections`프레임 이상 fire 판정 → 확정.
 3. 확정되면 `/navigate_to_pose/_action/cancel_goal`로 진행 중이던 목표(누가 보냈든 상관없이)를 강제 취소하고,
    자체 `NavigateToPose` 액션 클라이언트로 대피 좌표로 이동.
+   일반 안내와 동일하게 `mingky_smart_recovery`의 LiDAR 후보 선정을 사용한다.
+   대피소 이동이 막히면 후보 경로를 검증해 임시 탈출 지점으로 이동한 뒤
+   대피소 목표를 다시 시도한다.
 4. 이동 중엔 `/fire_evac/active` (latched Bool)를 `true`로 발행 — `mingky_lcd_status`가 이걸 구독해서 긴급
    안내 화면으로 강제 전환한다.
 5. 도착(또는 실패) 시 `/fire_evac/active`를 다시 `false`로 바꾸되 화재 경보는 유지한다.
