@@ -1,7 +1,10 @@
 import { useState } from 'react'
 
 import { armRobot } from '../lib/api'
+import { HEARTBEAT_FRESHNESS } from '../lib/freshness'
 import type { Robot } from '../types/monitoring'
+import { BatteryReading } from './BatteryReading'
+import { Freshness } from './Freshness'
 
 interface Props {
   robots: Robot[]
@@ -172,15 +175,20 @@ export function RobotPicker({ robots, onArmed }: Props) {
                     <div className="robot-card-name">{robot.display_name}</div>
                     <div className={`robot-card-link robot-card-link--${robot.link_state}`}>
                       {linkLabel(robot)}
+                      {/* heartbeat 는 5초 주기라 15초면 이미 두절 판정이다. */}
+                      {robot.link_state !== 'unknown' && (
+                        <Freshness at={robot.last_seen_at} {...HEARTBEAT_FRESHNESS} />
+                      )}
                     </div>
                   </div>
                   <div className="robot-card-id mono">{robot.robot_id}</div>
                   <div className="robot-card-battery">
-                    <span className="robot-card-battery-value">
-                      {robot.battery_percent != null
-                        ? `${robot.battery_percent}%`
-                        : '—'}
-                    </span>
+                    <BatteryReading
+                      voltage={robot.battery_voltage}
+                      percent={robot.battery_percent}
+                      recordedAt={robot.battery_recorded_at}
+                      audience="staff"
+                    />
                     <span className="robot-card-battery-label">배터리</span>
                   </div>
                   {(reason || status) && (

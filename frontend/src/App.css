@@ -1716,3 +1716,88 @@
 @media (prefers-reduced-motion: reduce) {
   .pinky-model-viewer__canvas { transition: none; }
 }
+
+/* ── 값 신선도 ─────────────────────────────────────────────────────────
+   나이 배지와, 낡은 값 자체를 흐리게 만드는 클래스.
+   값을 흐리게 하는 쪽이 핵심이다 — 사람은 숫자를 먼저 읽는다. */
+
+.freshness {
+  font-size: 0.78rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.freshness-sep {
+  margin: 0 4px;
+  opacity: 0.6;
+}
+
+.freshness--warn {
+  color: var(--warning);
+}
+
+.freshness--stale,
+.freshness--unknown {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* 낡은 값은 흐리게. "이 숫자를 믿지 마라" 를 말없이 전달한다. */
+.value-stale {
+  opacity: 0.45;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* ── 배터리 원본·파생 병기 ──────────────────────────────────────────── */
+
+.battery-reading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.battery-reading-primary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.battery-reading-voltage {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.battery-reading-percent {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 엔지니어 화면에서는 파생값(퍼센트)이 원본(전압)보다 작게 보여야 한다. */
+.battery-reading-derived {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.battery-reading-sep {
+  color: var(--text-subtle);
+}
+
+/* 클램프 구간 — 이 숫자는 더 안 올라간다. */
+.battery-reading-clamp {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
