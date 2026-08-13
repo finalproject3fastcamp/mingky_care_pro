@@ -54,6 +54,20 @@ ACTIVE_GUIDE_SESSION_STATES = (
     GuideState.SESSION_IN_ROOM,
 )
 
+SEND_OK = "ok"          # 적재됐다. 큐에서 지운다.
+SEND_RETRY = "retry"    # 지금 안 될 뿐이다. 큐에 남긴다.
+SEND_REJECT = "reject"  # 이 본문으로는 영영 안 된다. 문제 건을 가려낸다.
+
+# 본문이 잘못돼 거부된 상태들. 같은 배치를 다시 보내도 결과가 같다.
+CONTENT_REJECT_STATUSES = frozenset({400, 409, 413, 422})
+
+# 4xx 지만 본문 탓이 아니다. 서버가 밀리거나 조르지 말라는 뜻이다.
+TRANSIENT_STATUSES = frozenset({408, 429})
+
+# 한 배치에서 개별 폐기를 허용할 상한. 이걸 넘으면 나쁜 이벤트가 섞인 게
+# 아니라 서버 계약이 어긋난 것이다. 계속 가려내면 큐 전체를 지우게 된다.
+MAX_REJECTS_PER_BATCH = 5
+
 
 def matches_guided_patient(
     observation: QrObservation, session_state: str, patient_id: str,
@@ -113,6 +127,76 @@ class IntervalGate:
             return False
         self.last_attempt = now
         return True
+
+
+def send_outcome(status_code: int) -> str:
+    """HTTP 상태 하나로 배치를 어떻게 처리할지 정한다.
+
+    4xx 를 전부 '재시도해도 같으니 버린다' 로 묶으면 안 된다. 401·404 는
+    본문이 아니라 URL·인증이 틀린 것이라, 버리면 이벤트가 통째로 조용히
+    사라진다. 큐가 쌓이더라도 보존하고 사람이 설정을 고쳐야 한다.
+    """
+    if status_code < 400:
+        return SEND_OK
+    if status_code in CONTENT_REJECT_STATUSES:
+        return SEND_REJECT
+    return SEND_RETRY
+
+
+def isolate_rejected(batch, send, drop, on_reject,
+                     max_rejects: int = MAX_REJECTS_PER_BATCH):
+    """거부된 배치에서 실제 문제 건만 가려내 버린다.
+
+    배치를 반씩 갈라 다시 보낸다. 통과하는 절반은 그대로 적재되고, 혼자
+    남아서도 거부되는 건만 버린다. 요청이 log2(n) 번 더 나가지만 거부가
+    일어난 배치에서만이다.
+
+    한 건이 스키마 검증에 걸렸다고 같이 묶인 99건을 버리면, 하필 그때
+    비상정지 이력이 섞여 있어도 아무 흔적이 남지 않는다.
+
+    일시적 실패를 만나면 거기서 멈춘다. 남은 건은 큐에 두고 다음 주기에
+    다시 본다 — 서버가 흔들리는 동안 멀쩡한 이벤트를 버리면 안 된다.
+
+    한 배치에서 max_rejects 건을 넘겨 버리게 되면 거기서 멈춘다. 그 정도면
+    나쁜 이벤트 하나가 아니라 서버 계약이 통째로 어긋난 것이고, 계속 갈라
+    봐야 큐 전체를 지우는 결과가 된다. 예산을 소진하면 사람이 봐야 한다.
+
+    돌려주는 값은 (큐가 줄었는가, 예산을 소진했는가) 다.
+    """
+    remaining = max_rejects
+    progressed = False
+    exhausted = False
+
+    def walk(part) -> bool:
+        """이 조각을 끝까지 처리했으면 True. 멈춰야 하면 False."""
+        nonlocal remaining, progressed, exhausted
+
+        if len(part) == 1:
+            if remaining <= 0:
+                exhausted = True
+                return False
+            row_id, body = part[0]
+            on_reject(body)
+            drop([row_id])
+            remaining -= 1
+            progressed = True
+            return True
+
+        mid = len(part) // 2
+        for half in (part[:mid], part[mid:]):
+            outcome = send([body for _, body in half])
+            if outcome == SEND_OK:
+                drop([row_id for row_id, _ in half])
+                progressed = True
+            elif outcome == SEND_REJECT:
+                if not walk(half):
+                    return False
+            else:
+                return False
+        return True
+
+    walk(batch)
+    return progressed, exhausted
 
 
 def _iso(stamp) -> str:
@@ -370,8 +454,29 @@ class EventGateway(Node):
             ids = [row_id for row_id, _ in batch]
             bodies = [body for _, body in batch]
 
-            if self._post(session, bodies):
-                self.queue.drop(ids)
+            outcome = self._post(session, bodies)
+            if outcome == SEND_REJECT:
+                self.get_logger().warn(
+                    f"서버가 배치를 거부했다 ({len(batch)}건). 문제 건을 가려낸다.")
+                progressed, exhausted = isolate_rejected(
+                    batch,
+                    lambda halved: self._post(session, halved),
+                    self.queue.drop,
+                    self._log_rejected)
+                if exhausted:
+                    # 한 배치에서 이만큼 거부되면 이벤트가 아니라 계약이
+                    # 문제다. 더 가려내면 큐를 통째로 지우게 되므로 멈춘다.
+                    self.get_logger().error(
+                        f"한 배치에서 {MAX_REJECTS_PER_BATCH}건이 거부돼 "
+                        "가려내기를 중단한다. 서버 스키마와 event_codes 를 "
+                        f"확인하세요 (대기 {self.queue.count()}건).")
+                    progressed = False
+            else:
+                progressed = outcome == SEND_OK
+                if progressed:
+                    self.queue.drop(ids)
+
+            if progressed:
                 backoff = self.flush_interval
                 # 남은 게 있으면 곧바로 다음 배치를 보낸다.
                 if self.queue.count():
@@ -383,15 +488,20 @@ class EventGateway(Node):
                     f"전송 실패, {backoff:.0f}초 뒤 재시도 "
                     f"(대기 {self.queue.count()}건)")
 
-    def _post(self, session: requests.Session, bodies: list[dict]) -> bool:
-        """성공하면 True. True 를 돌려준 건만 큐에서 지운다."""
+    def _post(self, session: requests.Session, bodies: list[dict]) -> str:
+        """배치 하나를 보내고 SEND_* 중 하나를 돌려준다.
+
+        SEND_OK 를 돌려준 건만 큐에서 지운다. 폐기 판단은 여기서 하지 않는다 —
+        배치 단위로 버리면 문제 없는 이벤트까지 같이 사라지기 때문이다.
+        """
         try:
             response = session.post(self.url, json=bodies, timeout=self.timeout)
         except requests.RequestException as exc:
             self.get_logger().debug(f"HTTP 실패: {exc}")
-            return False
+            return SEND_RETRY
 
-        if response.ok:
+        outcome = send_outcome(response.status_code)
+        if outcome == SEND_OK:
             result = response.json()
             if result.get("unknown_codes"):
                 self.get_logger().error(
@@ -401,18 +511,34 @@ class EventGateway(Node):
                 self.get_logger().warn(
                     f"상태 갱신 거부: {result['rejected_updates']} "
                     "— 로봇 시계를 확인하세요.")
-            return True
+            return SEND_OK
 
-        # 4xx 는 재시도해도 결과가 같다. 잘못된 이벤트 하나가 큐를 영원히
-        # 막으면 그 뒤 이벤트가 전부 못 나간다. 버리되 크게 남긴다.
-        if 400 <= response.status_code < 500 and response.status_code not in (408, 429):
+        if outcome == SEND_REJECT:
+            self.get_logger().debug(
+                f"서버가 거부 ({response.status_code}): {response.text[:200]}")
+            return SEND_REJECT
+
+        if (400 <= response.status_code < 500
+                and response.status_code not in TRANSIENT_STATUSES):
+            # URL 이나 인증이 틀렸다. 본문을 아무리 갈라 봐야 통과하지 않으므로
+            # 큐가 계속 쌓이지만, 버리면 이벤트가 조용히 전부 사라진다.
+            # 큐 상한에 닿기 전에 사람이 봐야 한다. 백오프가 도배를 막는다.
             self.get_logger().error(
-                f"서버가 거부해 폐기함 ({response.status_code}): "
-                f"{response.text[:200]}")
-            return True
+                f"서버가 {response.status_code} 로 거부한다 "
+                f"(대상={self.url}). backend_url 과 인증 설정을 확인하세요. "
+                f"큐는 보존하고 재시도한다: {response.text[:200]}")
+            return SEND_RETRY
 
         self.get_logger().debug(f"서버 오류 {response.status_code}, 재시도")
-        return False
+        return SEND_RETRY
+
+    def _log_rejected(self, body: dict) -> None:
+        """혼자 보내도 거부된 한 건. 버리기 전에 식별자를 남긴다."""
+        self.get_logger().error(
+            "서버가 거부해 폐기함: "
+            f"code={body.get('event_code')} robot={body.get('robot_id')} "
+            f"event_id={body.get('event_id')} "
+            f"occurred_at={body.get('occurred_at')}")
 
     # -------------------------------------------------------------- heartbeat
 
