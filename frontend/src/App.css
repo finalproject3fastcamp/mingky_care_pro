@@ -1801,3 +1801,43 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ── 미등록 event_code ──────────────────────────────────────────────── */
+
+.unknown-code-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unknown-code-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+}
+
+.unknown-code-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+
+.unknown-code-robot {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.unknown-code-count {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
