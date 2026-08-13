@@ -120,6 +120,7 @@ class OrderIn(BaseModel):
     command: Literal[
         "goto", "goto_pose", "start_session", "start_guidance", "set_mode",
         "localize", "system_start", "system_stop", "system_restart",
+        "fire_alarm_reset",
     ]
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
     # start_session 이면 patient_id, start_guidance 면 session_id,

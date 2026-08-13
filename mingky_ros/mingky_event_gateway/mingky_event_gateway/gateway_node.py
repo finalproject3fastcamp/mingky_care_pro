@@ -247,6 +247,8 @@ class EventGateway(Node):
             Bool, "/emergency_stop/communication", 10)
         self._localize_client = self.create_client(
             Trigger, "/auto_localize/trigger")
+        self._fire_alarm_reset_client = self.create_client(
+            Trigger, "/fire_evac/reset_alarm")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -718,6 +720,25 @@ class EventGateway(Node):
             self.get_logger().info("명령 실행: localize(run)")
             return True
 
+        if command == "fire_alarm_reset":
+            if argument != "run":
+                self.get_logger().error(
+                    f"잘못된 화재 경보 해제 인자: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if self._system_state() != "active":
+                self.get_logger().error(
+                    "통합 시스템이 가동 중이 아니라 화재 경보 해제를 거부했습니다.")
+                return True
+            if not self._fire_alarm_reset_client.service_is_ready():
+                self.get_logger().warn(
+                    "화재 경보 해제 서비스가 아직 준비되지 않았습니다. 명령을 유지합니다.")
+                return False
+            future = self._fire_alarm_reset_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_fire_alarm_reset_response)
+            self.get_logger().info("명령 실행: fire_alarm_reset(run)")
+            return True
+
         publisher = self._order_pubs.get(command)
         if publisher is None:
             self.get_logger().error(
@@ -755,6 +776,17 @@ class EventGateway(Node):
             self.get_logger().info(f"자동 재탐색 요청 승인: {response.message}")
         else:
             self.get_logger().warn(f"자동 재탐색 요청 거부: {response.message}")
+
+    def _on_fire_alarm_reset_response(self, future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"화재 경보 해제 요청 실패: {exc}")
+            return
+        if response.success:
+            self.get_logger().info(f"화재 경보 해제 완료: {response.message}")
+        else:
+            self.get_logger().warn(f"화재 경보 해제 거부: {response.message}")
 
     # ------------------------------------------------------------------ 종료
 

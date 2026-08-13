@@ -128,6 +128,20 @@ export function SystemDashboard() {
             자동 재탐색 실행
           </button>
         </section>
+
+        <section className="card waypoint-localize-control">
+          <div className="card-title">화재 경보</div>
+          <p>현장에 불이 없고 대피가 끝난 것을 직접 확인한 뒤에만 해제하세요. 해제 후에는 새 화재를 다시 감지할 수 있습니다.</p>
+          <button type="button" className="btn danger"
+            disabled={busy || !online || selectedRobot?.system_state !== 'active'}
+            onClick={() => issue(
+              'fire_alarm_reset',
+              '화재 경보 해제',
+              `${selectedRobotId}의 화재 경보를 해제할까요?\n현장 안전과 대피 종료를 먼저 확인하세요.`,
+            )}>
+            화재 경보 해제
+          </button>
+        </section>
       </div>
     </div>
   )
