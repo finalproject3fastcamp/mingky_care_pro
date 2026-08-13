@@ -9,6 +9,7 @@ import pytest
 import rclpy
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool
 
 
 class PendingFuture:
@@ -91,6 +92,38 @@ def test_long_communication_failure_ends_and_clears_active_session(manager):
     assert node.patient_id == ''
     assert node.session_visits == []
     assert node.robot_state == GuideState.ROBOT_PAUSED
+
+
+def test_fire_evacuation_ends_session_and_invalidates_navigation(manager):
+    node, published = manager
+    node.session_id = 44
+    node.session_state = GuideState.SESSION_GUIDING
+    node.patient_id = 'patient-fire'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray', 'CT']
+    generation = node._nav_generation
+    response = SetBool.Response()
+
+    node._on_fire_evacuation(SetBool.Request(data=True), response)
+
+    assert response.success is True
+    assert published == [('session.ended', {'end_reason': 'fire'}, 44)]
+    assert node._nav_generation == generation + 1
+    assert node._fire_evacuating is True
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_PAUSED
+
+
+def test_guidance_goal_is_blocked_during_fire_evacuation(manager):
+    node, _ = manager
+    node._fire_evacuating = True
+
+    node.send_goal('xray_room_goal')
+
+    assert node.nav.sent == []
 
 
 def test_dock_success_never_emits_clinical_nav_success(manager):

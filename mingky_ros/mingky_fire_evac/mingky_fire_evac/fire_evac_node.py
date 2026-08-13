@@ -65,11 +65,12 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool, String
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
 MODE_TOPIC = "/mode"
 CANCEL_NAV_SERVICE = "/navigate_to_pose/_action/cancel_goal"
 TEST_TRIGGER_SERVICE = "fire_evac/trigger_test"
+GUIDE_EVAC_SERVICE = "/guide_manager/fire_evacuation"
 # lcd_status_node(mingky_lcd_status)가 이 토픽을 구독해서 True 인 동안
 # GuideState 화면 대신 "긴급 상황" 화면으로 강제 전환한다. GuideState 는
 # guide_manager 만 발행한다는 규칙이 있어서(GuideState.msg 참고) 새 상태를
@@ -115,6 +116,7 @@ class FireEvacNode(Node):
         # 등) 감지 루프가 거기서 계속 멈춰있으면 안 되므로 타임아웃을 짧게
         # 둔다. 실패하면 이번 프레임은 그냥 건너뛴다 (아래 _detect_fire 참고).
         self.declare_parameter("infer_timeout_sec", 2.0)
+        self.declare_parameter("nav_result_timeout_sec", 120.0)
         self.declare_parameter("conf_threshold", 0.3)
         # 최근 window_size 프레임 중 required_detections 프레임 이상에서
         # fire 가 감지돼야 확정한다. 순간적인 오탐(반사광 한 프레임 등)을
@@ -144,6 +146,8 @@ class FireEvacNode(Node):
             raise RuntimeError(
                 "infer_server_url 파라미터가 필요합니다 (AI 노트북의 추론 서버 주소).")
         self.infer_timeout_sec = float(get("infer_timeout_sec").value)
+        self.nav_result_timeout_sec = max(
+            1.0, float(get("nav_result_timeout_sec").value))
         self.conf_threshold = float(get("conf_threshold").value)
         self.window_size = int(get("window_size").value)
         self.required_detections = int(get("required_detections").value)
@@ -177,6 +181,7 @@ class FireEvacNode(Node):
         self.evac_active_pub = self.create_publisher(Bool, EVAC_ACTIVE_TOPIC, _latched())
         self.evac_active_pub.publish(Bool(data=False))
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
+        self.guide_evac_client = self.create_client(SetBool, GUIDE_EVAC_SERVICE)
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         # CV 파이프라인 없이도 "감지됐다고 치고" 이동 로직만 따로 테스트할 수
         # 있게 만든 서비스. 카메라 앞에 매번 불을 갖다 댈 필요 없이 Nav2
@@ -286,7 +291,9 @@ class FireEvacNode(Node):
     # ------------------------------------------------------------ 대피 이동
 
     def _start_evacuation(self):
+        safe_to_clear = True
         try:
+            self._set_guide_evacuation(True)
             self._cancel_active_nav_goal()
 
             x, y, yaw = self.shelter
@@ -311,14 +318,51 @@ class FireEvacNode(Node):
 
             self.get_logger().info(f"대피 목표 전송됨: x={x:.2f}, y={y:.2f}, yaw={yaw:.2f}")
             result_future = goal_handle.get_result_async()
-            result = self._wait_for_future(result_future, timeout_sec=120.0)
+            result = self._wait_for_future(
+                result_future, timeout_sec=self.nav_result_timeout_sec)
             if result is None:
-                self.get_logger().error("대피 이동 결과를 못 받았습니다 (타임아웃).")
+                self.get_logger().error(
+                    "대피 이동 결과 타임아웃 — 대피 목표를 취소합니다.")
+                cancel_future = goal_handle.cancel_goal_async()
+                cancel_response = self._wait_for_future(cancel_future, timeout_sec=5.0)
+                if cancel_response is None:
+                    # 실제 로봇이 계속 움직일 가능성이 있으므로 평상 상태로
+                    # 돌아가지 않는다. 운영자가 Nav2/비상정지를 확인해야 한다.
+                    safe_to_clear = False
+                    self.get_logger().fatal(
+                        "대피 목표 취소 응답이 없습니다. 대피 상태를 유지합니다.")
+                    return
+                terminal = self._wait_for_future(result_future, timeout_sec=5.0)
+                if terminal is None:
+                    safe_to_clear = False
+                    self.get_logger().fatal(
+                        "대피 목표 취소 후 종료 결과가 없습니다. 대피 상태를 유지합니다.")
+                    return
+                self.get_logger().warn(
+                    f"대피 목표 취소 완료. status={terminal.status}")
             else:
                 self.get_logger().info(f"대피 이동 종료. status={result.status}")
         finally:
-            self._set_evacuating(False)
-            self._recent.clear()
+            if safe_to_clear:
+                self._set_guide_evacuation(False)
+                self._set_evacuating(False)
+                self._recent.clear()
+
+    def _set_guide_evacuation(self, active: bool) -> bool:
+        """Guide Manager가 기존 안내 상태를 정리한 뒤 대피를 시작하게 한다."""
+        if not self.guide_evac_client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error(
+                "Guide Manager 화재 대피 서비스가 없습니다. "
+                "안내 상태 정리 없이 대피를 계속합니다.")
+            return False
+        future = self.guide_evac_client.call_async(SetBool.Request(data=active))
+        response = self._wait_for_future(future, timeout_sec=3.0)
+        if response is None or not response.success:
+            self.get_logger().error(
+                "Guide Manager 화재 대피 상태 전환에 실패했습니다. "
+                "대피를 우선해 계속 진행합니다.")
+            return False
+        return True
 
     def _cancel_active_nav_goal(self):
         """Nav2 의 지금 목표를 강제로 전부 취소한다 (mingky_localize 와 동일 패턴).
