@@ -16,6 +16,9 @@ if 'smbus2' not in sys.modules:
     sys.modules['smbus2'] = stub
 
 from mingky_sensors.adc_reader import (  # noqa: E402
+    US_MAX_RANGE,
+    US_MIN_RANGE,
+    clamped_range,
     distance_from_count,
     percent_from_voltage,
     voltage_from_count,
@@ -64,3 +67,21 @@ def test_distance_upper_bound():
     """식이 낼 수 있는 최댓값. main_node.cpp 의 max_range=3.0 과 맞지 않는다."""
     assert distance_from_count(4095) < 0.97
     assert distance_from_count(4095) > 0.96
+
+
+def test_range_is_clamped_to_the_valid_window():
+    """발행값이 min_range~max_range 를 벗어나면 안 된다.
+
+    변환식은 ADC 0 에서 -0.03m 를 낸다. Range 메시지에서 min_range 미만은
+    "측정 불가" 로 해석되고 그 처리는 구독자마다 다르므로, 발행 측에서 자른다.
+    """
+    assert clamped_range(0) == US_MIN_RANGE
+    assert clamped_range(4095) == US_MAX_RANGE
+    for count in range(0, 4096, 11):
+        assert US_MIN_RANGE <= clamped_range(count) <= US_MAX_RANGE, count
+
+
+def test_clamp_does_not_touch_the_middle():
+    """구간 안에서는 원래 값을 그대로 둔다."""
+    for count in range(300, 3900, 37):
+        assert clamped_range(count) == distance_from_count(count), count
