@@ -8,15 +8,21 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import arming, heartbeat, qr_runtime, robot_runtime
+from .. import arming, heartbeat, inventory_rules, qr_runtime, robot_runtime
 from ..db import get_pool
 from ..schemas import (
     BatterySampleIn,
+    NodeGraphInfo,
+    ProcessInfo,
     QrObservationIn,
     QrObservationOut,
     RobotArmingOut,
     RobotHeartbeatIn,
+    RobotHeartbeatOut,
+    RobotInventoryIn,
+    RobotInventoryOut,
     RobotOut,
+    WorkspaceInfo,
 )
 
 router = APIRouter(prefix="/robots", tags=["robots"])
@@ -136,6 +142,13 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
         system_state=runtime.system_state if runtime else "unknown",
         localization_active=runtime.localization_active if runtime else False,
         runtime_reported_at=runtime.reported_at if runtime else None,
+        # 구버전 게이트웨이는 안 보낸다. None 이 정상이고, 화면은 값이 없는
+        # 것과 0 인 것을 구분해서 그려야 한다.
+        cpu_total_pct=runtime.cpu_total_pct if runtime else None,
+        queue_pending=runtime.queue_pending if runtime else None,
+        max_node_cpu_pct=runtime.max_node_cpu_pct if runtime else None,
+        max_node_cpu_name=runtime.max_node_cpu_name if runtime else None,
+        inventory_hash=runtime.inventory_hash if runtime else None,
     )
 
 
@@ -247,17 +260,21 @@ async def get_arming(robot_id: str) -> RobotArmingOut:
     return RobotArmingOut(robot_id=robot_id, armed=at is not None, armed_at=at)
 
 
-@router.post("/{robot_id}/heartbeat", status_code=204)
+@router.post("/{robot_id}/heartbeat", response_model=RobotHeartbeatOut)
 async def post_heartbeat(
     robot_id: str, body: RobotHeartbeatIn | None = None,
-) -> Response:
+) -> RobotHeartbeatOut:
     """로봇 생존 신호.
 
     게이트웨이의 이벤트 큐를 타지 않는 별도 경로다. 실패하면 로봇 쪽에서
     그냥 버린다 — 재전송하면 두절 중 쌓였다가 몰려와 신호의 의미가 사라진다.
 
-    본문이 없다. 지금 필요한 정보는 '언제 왔는가' 뿐이고, 그건 서버가 안다.
-    로봇 시계를 믿지 않아도 되므로 시계 어긋남의 영향도 받지 않는다.
+    '언제 왔는가' 는 서버가 안다. 로봇 시계를 믿지 않으므로 시계 어긋남의
+    영향도 받지 않는다. 본문은 로봇만 아는 것(시스템 상태, 자원, 인벤토리
+    지문)만 담는다.
+
+    응답에 need_inventory 를 실어 인벤토리 본문을 요구한다. 서버가 재시작해
+    메모리를 잃었거나 로봇의 전송이 유실되면 해시만으로는 복구되지 않는다.
     """
     if not heartbeat.is_tracked(robot_id):
         # 첫 신호일 때만 확인한다. 오타난 robot_id 로 유령 로봇이 감시 목록에
@@ -270,10 +287,103 @@ async def post_heartbeat(
             raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
     heartbeat.touch(robot_id)
-    if body is not None:
-        robot_runtime.update(
-            robot_id, body.system_state, body.localization_active)
+    if body is None:
+        return RobotHeartbeatOut()
+
+    robot_runtime.update(
+        robot_id, body.system_state, body.localization_active,
+        inventory_hash=body.inventory_hash,
+        cpu_total_pct=body.cpu_total_pct,
+        queue_pending=body.queue_pending,
+        max_node_cpu_pct=body.max_node_cpu_pct,
+        max_node_cpu_name=body.max_node_cpu_name,
+    )
+
+    return RobotHeartbeatOut(
+        need_inventory=await _needs_inventory(robot_id, body.inventory_hash))
+
+
+async def _needs_inventory(robot_id: str, reported_hash: str | None) -> bool:
+    """로봇이 보고한 지문이 저장된 것과 다른가.
+
+    해시가 없으면 요구하지 않는다. 인벤토리를 끈 게이트웨이(구버전이거나
+    inventory_interval_sec=0)에 매번 재전송을 요구해도 오지 않고, 그 요구가
+    5초마다 DB 조회를 만든다.
+    """
+    if not reported_hash:
+        return False
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "SELECT inventory_hash FROM robot_inventory WHERE robot_id = $1",
+            robot_id)
+    return stored != reported_hash
+
+
+@router.post("/{robot_id}/inventory", status_code=204)
+async def post_inventory(robot_id: str, body: RobotInventoryIn) -> Response:
+    """실행 중인 코드 버전과 노드 목록. 내용이 바뀔 때만 온다.
+
+    최신 한 행만 유지한다. 추이가 필요 없다 — 지금 무엇이 도는지가 질문이지
+    어제 무엇이 돌았는지가 아니다.
+
+    reported_at 은 로봇 시계가 아니라 서버 수신 시각을 쓴다. 이 값으로
+    신선도를 판정하므로 전송 지연을 숨기지 않아야 한다.
+    """
+    payload = body.model_dump(mode="json", exclude={"inventory_hash", "reported_at"})
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        stored = await conn.fetchval(
+            """
+            INSERT INTO robot_inventory (robot_id, inventory_hash, payload)
+            SELECT robot_id, $2, $3::jsonb FROM robots
+            WHERE robot_id = $1 AND is_active
+            ON CONFLICT (robot_id) DO UPDATE
+                SET inventory_hash = EXCLUDED.inventory_hash,
+                    payload        = EXCLUDED.payload,
+                    reported_at    = now()
+            RETURNING 1
+            """,
+            robot_id, body.inventory_hash, json.dumps(payload, ensure_ascii=False),
+        )
+    if not stored:
+        raise HTTPException(status_code=404, detail="unknown or inactive robot")
     return Response(status_code=204)
+
+
+@router.get("/{robot_id}/inventory", response_model=RobotInventoryOut)
+async def get_inventory(robot_id: str) -> RobotInventoryOut:
+    """엔지니어 화면이 읽는 인벤토리. 판정 결과를 함께 내려준다.
+
+    중복 심각도와 워크스페이스 혼재 판정을 프론트가 다시 구현하면 두 곳이
+    어긋나고, 어긋난 순간 어느 쪽이 맞는지 아무도 모른다.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT inventory_hash, payload, reported_at "
+            "FROM robot_inventory WHERE robot_id = $1",
+            robot_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="inventory not reported yet")
+
+    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) \
+        else row["payload"]
+    node_graph = [NodeGraphInfo(**item) for item in payload.get("node_graph", [])]
+    workspaces = [WorkspaceInfo(**item) for item in payload.get("workspaces", [])]
+
+    return RobotInventoryOut(
+        robot_id=robot_id,
+        inventory_hash=row["inventory_hash"],
+        reported_at=row["reported_at"],
+        node_graph=node_graph,
+        processes=[ProcessInfo(**item) for item in payload.get("processes", [])],
+        workspaces=workspaces,
+        ros_domain_id=payload.get("ros_domain_id"),
+        duplicates=inventory_rules.duplicates(node_graph),
+        mixed_workspaces=inventory_rules.has_mixed_workspaces(workspaces),
+    )
 
 
 @router.post("/{robot_id}/battery", status_code=204)

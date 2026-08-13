@@ -70,6 +70,65 @@ export interface Robot {
   system_state: 'active' | 'activating' | 'deactivating' | 'inactive' | 'failed' | 'unknown'
   localization_active: boolean
   runtime_reported_at: string | null
+  /**
+   * 로봇이 heartbeat 로 보고한 자원·큐 상태. 전부 백엔드 인메모리다.
+   *
+   * 구버전 게이트웨이는 안 보내므로 null 이 정상이다. **null 과 0 을
+   * 구분해서 그려야 한다** — "보고 안 함" 과 "0건" 은 다른 사실이다.
+   */
+  cpu_total_pct: number | null
+  queue_pending: number | null
+  max_node_cpu_pct: number | null
+  max_node_cpu_name: string | null
+  inventory_hash: string | null
+}
+
+/** GET /robots/{id}/inventory 응답. schemas.py 의 RobotInventoryOut 과 1:1. */
+export interface NodeGraphInfo {
+  name: string
+  namespace: string
+  count: number
+}
+
+export interface ProcessInfo {
+  pid: number
+  install_path: string
+  workspace_path: string | null
+  /** cmdline 리매핑에서 **추정한** 이름. 중복 판정에는 쓰지 않는다. */
+  matched_node_names: string[]
+  cpu_pct: number | null
+  /** 누적 CPU 초. 순간 100% 는 정상일 수 있지만 11시간 누적은 아니다. */
+  cpu_seconds_total: number | null
+}
+
+export interface WorkspaceInfo {
+  path: string
+  commit: string | null
+  branch: string | null
+  /** 커밋 안 된 변경이 있으면 커밋 해시만으로 재현이 불가능하다. */
+  dirty: boolean
+  process_count: number
+}
+
+export interface DuplicateNode {
+  name: string
+  namespace: string
+  count: number
+  severity: 'error' | 'warning'
+  reason: string
+}
+
+export interface RobotInventory {
+  robot_id: string
+  inventory_hash: string
+  reported_at: string
+  node_graph: NodeGraphInfo[]
+  processes: ProcessInfo[]
+  workspaces: WorkspaceInfo[]
+  ros_domain_id: number | null
+  /** 심각도 판정은 서버가 한다. 프론트가 다시 하면 두 곳이 어긋난다. */
+  duplicates: DuplicateNode[]
+  mixed_workspaces: boolean
 }
 
 export interface QrObservation {

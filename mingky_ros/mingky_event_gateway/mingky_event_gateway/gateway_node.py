@@ -21,10 +21,12 @@
 
 import json
 import math
+import os
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import rclpy
 import requests
@@ -35,6 +37,7 @@ from std_srvs.srv import Trigger
 
 from mingky_interfaces.msg import Event, GuideState, QrObservation
 
+from . import inventory
 from .queue_store import QueueStore
 
 _LEVEL_NAME = {
@@ -166,6 +169,10 @@ class EventGateway(Node):
         # 흐른다. 왕복이 200ms 인 것에 비하면 대기가 지연의 대부분이었다.
         # 서버 상한이 50초이고, 중간 프록시가 먼저 끊지 않도록 그보다 짧게 둔다.
         self.declare_parameter("order_wait_sec", 25.0)
+        # 인벤토리(실행 중인 코드 버전·노드 목록) 수집 주기. 0 이면 끈다.
+        # heartbeat 와 달리 느려도 된다 — 노드 목록과 커밋은 몇 시간에 한 번
+        # 바뀐다. 내용이 바뀌었을 때만 전송하므로 이 주기는 '확인 주기' 다.
+        self.declare_parameter("inventory_interval_sec", 30.0)
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -184,6 +191,9 @@ class EventGateway(Node):
             f"{base}/robots/{self.robot_id}/qr-observation")
         self.qr_observation_interval = float(
             self.get_parameter("qr_observation_interval_sec").value)
+        self.inventory_url = f"{base}/robots/{self.robot_id}/inventory"
+        self.inventory_interval = float(
+            self.get_parameter("inventory_interval_sec").value)
         self.orders_url = f"{base}/robots/{self.robot_id}/orders"
         self.order_interval = float(self.get_parameter("order_interval_sec").value)
         self.order_timeout = float(self.get_parameter("order_timeout_sec").value)
@@ -226,6 +236,21 @@ class EventGateway(Node):
         self._guide_session_state = GuideState.SESSION_NONE
         self._guide_patient_id = ''
         self._localization_active = False
+
+        # 인벤토리 수집 상태.
+        #
+        # 그래프 조회는 ROS 타이머(실행기 스레드)에서 하고, /proc·git 은
+        # 별도 스레드에서 한다. rclpy 그래프 API 를 실행기 밖에서 부르지
+        # 않기 위해서다. 대신 그래프 결과만 락으로 건네준다.
+        self._inventory_lock = threading.Lock()
+        self._graph_snapshot: list[tuple[str, str]] = []
+        self._inventory_hash: str | None = None
+        self._cpu_total_pct: float | None = None
+        self._max_node_cpu_pct: float | None = None
+        self._max_node_cpu_name: str | None = None
+        # 서버가 "그 해시 모른다" 고 답하면 다음 주기에 다시 보낸다.
+        self._need_inventory = threading.Event()
+        self._git_cache = inventory.GitCache()
 
         # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
         # 비임상 Waypoint 시험은 navigation_manager가 받는다.
@@ -273,6 +298,15 @@ class EventGateway(Node):
         if self.order_interval > 0:
             self._orders = threading.Thread(target=self._order_loop, daemon=True)
             self._orders.start()
+
+        self._inventory = None
+        if self.inventory_interval > 0:
+            # 그래프 조회만 실행기 스레드에서. 로컬 캐시를 읽는 것이라 빠르고
+            # I/O 가 없어 콜백을 붙들지 않는다.
+            self.create_timer(self.inventory_interval, self._sample_graph)
+            self._inventory = threading.Thread(
+                target=self._inventory_loop, daemon=True)
+            self._inventory.start()
 
         self.get_logger().info(
             f"event_gateway 시작 (대상={self.url}, 대기 {self.queue.count()}건)")
@@ -452,10 +486,7 @@ class EventGateway(Node):
             try:
                 response = session.post(
                     self.heartbeat_url,
-                    json={
-                        "system_state": self._system_state(),
-                        "localization_active": self._localization_active,
-                    },
+                    json=self._heartbeat_payload(),
                     timeout=self.heartbeat_timeout)
             except requests.RequestException as exc:
                 if not failing:
@@ -484,8 +515,156 @@ class EventGateway(Node):
                 self.get_logger().info("heartbeat 복구")
                 failing = False
             guard.success()
+            self._consume_heartbeat_response(response)
 
         session.close()
+
+    def _heartbeat_payload(self) -> dict:
+        """5초마다 나가는 본문. 작고 자주 바뀌는 것만 싣는다.
+
+        인벤토리 본문(노드 목록·커밋)은 여기 넣지 않는다. 로봇 수 × 12회/분
+        이라 payload 를 키우면 안 되고, 그 값들은 몇 시간에 한 번 바뀐다.
+        해시만 실어 서버가 자기가 아는 것과 다른지 판단하게 한다.
+        """
+        with self._inventory_lock:
+            payload = {
+                "system_state": self._system_state(),
+                "localization_active": self._localization_active,
+                "inventory_hash": self._inventory_hash,
+                "cpu_total_pct": self._cpu_total_pct,
+                "max_node_cpu_pct": self._max_node_cpu_pct,
+                "max_node_cpu_name": self._max_node_cpu_name,
+            }
+        # 큐 적체는 통신 두절이나 서버 거부가 진행 중이라는 신호다.
+        # 상한(max_queue_rows)에 가까우면 이미 데이터가 버려지는 중이다.
+        payload["queue_pending"] = self.queue.count()
+        return payload
+
+    def _consume_heartbeat_response(self, response) -> None:
+        """서버가 인벤토리를 다시 달라고 하면 표시해둔다.
+
+        서버가 재시작해 메모리를 잃었거나 우리 전송이 유실된 경우다.
+        본문이 JSON 이 아니어도 heartbeat 는 계속돼야 하므로 조용히 넘긴다.
+        """
+        if response.status_code == 204 or not response.content:
+            return
+        try:
+            body = response.json()
+        except ValueError:
+            return
+        if isinstance(body, dict) and body.get("need_inventory"):
+            self._need_inventory.set()
+
+    # ------------------------------------------------------------- inventory
+
+    def _sample_graph(self) -> None:
+        """ROS 타이머. 그래프만 읽어 넘긴다.
+
+        `ros2 node list` 를 subprocess 로 부르지 않는다 — 호출마다 노드를
+        새로 띄우고, 그 자체가 CPU 포화에 기여한다. rclpy 는 이미 로컬에
+        들고 있는 그래프 캐시를 돌려주므로 I/O 가 없다.
+        """
+        try:
+            names = self.get_node_names_and_namespaces()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().debug(f"노드 그래프 조회 실패: {exc}")
+            return
+        with self._inventory_lock:
+            self._graph_snapshot = [(name, ns) for name, ns in names]
+
+    def _collect_inventory(self, previous_cpu: dict, elapsed: float) -> dict:
+        """이번 표본. 사실만 담는다 — 심각도 판정은 서버가 한다."""
+        with self._inventory_lock:
+            graph = list(self._graph_snapshot)
+
+        processes = inventory.scan_processes()
+        for process in processes:
+            process["cpu_pct"] = inventory.cpu_percent(
+                previous_cpu.get(process["pid"]),
+                process["cpu_seconds_total"],
+                elapsed)
+
+        return {
+            "node_graph": inventory.parse_node_graph(graph),
+            "processes": processes,
+            "workspaces": inventory.build_workspaces(processes, self._git_cache),
+            "ros_domain_id": int(os.environ.get("ROS_DOMAIN_ID", 0)),
+        }
+
+    def _inventory_loop(self) -> None:
+        """인벤토리 수집과 전송.
+
+        heartbeat 에는 해시만 싣고, 본문은 **바뀌었을 때만** 보낸다. 노드
+        목록과 커밋은 몇 시간에 한 번 바뀌는데 5초마다 보낼 이유가 없다.
+
+        서버가 heartbeat 응답으로 need_inventory 를 주면 다시 보낸다.
+        서버가 재시작해 메모리를 잃었거나 우리 전송이 유실된 경우다.
+        """
+        session = requests.Session()
+        previous_cpu: dict[int, float] = {}
+        previous_total = None
+        last_at = time.monotonic()
+        sent_hash = None
+
+        while not self._stop.wait(self.inventory_interval):
+            now = time.monotonic()
+            elapsed = now - last_at
+            last_at = now
+
+            try:
+                payload = self._collect_inventory(previous_cpu, elapsed)
+            except OSError as exc:
+                self.get_logger().warn(f"인벤토리 수집 실패: {exc}")
+                continue
+
+            previous_cpu = {
+                p["pid"]: p["cpu_seconds_total"] for p in payload["processes"]}
+
+            # 전체 CPU 는 /proc/stat 에서 따로 읽는다. 노드별 합이 아니다 —
+            # 노드 하나가 100% 여도 코어가 4개면 여유가 있다.
+            try:
+                current_total = inventory.parse_total_cpu(
+                    Path("/proc/stat").read_text())
+            except OSError:
+                current_total = None
+            total_pct = inventory.total_cpu_percent(previous_total, current_total)
+            previous_total = current_total
+
+            busiest = inventory.busiest_process(payload["processes"])
+            digest = inventory.inventory_hash(payload)
+
+            with self._inventory_lock:
+                self._inventory_hash = digest
+                self._cpu_total_pct = total_pct
+                self._max_node_cpu_pct = busiest["cpu_pct"] if busiest else None
+                self._max_node_cpu_name = (
+                    (busiest["matched_node_names"] or [None])[0]
+                    if busiest else None)
+
+            if digest == sent_hash and not self._need_inventory.is_set():
+                continue
+
+            payload["inventory_hash"] = digest
+            payload["reported_at"] = datetime.now(timezone.utc).isoformat()
+            if self._post_inventory(session, payload):
+                sent_hash = digest
+                self._need_inventory.clear()
+
+        session.close()
+
+    def _post_inventory(self, session: requests.Session, payload: dict) -> bool:
+        """실패해도 큐에 쌓지 않는다. 다음 주기가 곧 재시도다."""
+        try:
+            response = session.post(
+                self.inventory_url, json=payload, timeout=self.timeout)
+        except requests.RequestException as exc:
+            self.get_logger().debug(f"인벤토리 전송 실패: {exc}")
+            return False
+        if not response.ok:
+            self.get_logger().warn(
+                f"인벤토리 거부: HTTP {response.status_code}")
+            return False
+        return True
 
     # --------------------------------------------------------------- battery
 
@@ -770,6 +949,8 @@ class EventGateway(Node):
             self._battery.join(timeout=2.0)
         if self._qr_sender is not None:
             self._qr_sender.join(timeout=2.0)
+        if self._inventory is not None:
+            self._inventory.join(timeout=2.0)
         if self._orders is not None:
             self._orders.join(timeout=2.0)
         self.queue.close()

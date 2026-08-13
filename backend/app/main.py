@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import db, heartbeat, registry
+from . import db, heartbeat, inventory_rules, registry
 from .routers import events, maps, orders, patients, qr, robots, sessions, teleop, waypoints
 
 log = logging.getLogger("mingky")
@@ -16,6 +16,9 @@ async def lifespan(app: FastAPI):
     # 검증 없이 뜨면 미등록 코드가 조용히 쌓이므로 그쪽이 더 나쁘다.
     codes = registry.load()
     log.info("event_codes 로드: %s (코드 %d개)", codes.source, len(codes))
+
+    # 중복 노드 심각도. 없어도 기본 등급으로 동작하므로 기동을 막지 않는다.
+    inventory_rules.load()
 
     await db.connect()
 
