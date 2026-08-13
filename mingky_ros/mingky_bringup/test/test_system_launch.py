@@ -57,8 +57,6 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     assert _argument(root, 'front_camera_ready_timeout').get('default') == '15.0'
     assert _argument(root, 'camera_preview_max_fps').get('default') == '10.0'
     assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
-    aruco_arg = _argument(root, 'start_rear_aruco_detector')
-    assert aruco_arg.get('default') == 'true'
     qr_distance_arg = _argument(root, 'start_rear_qr_distance')
     assert qr_distance_arg.get('default') == 'true'
     assert _argument(root, 'rear_qr_size').get('default') == '0.028'
@@ -79,14 +77,22 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
         == '$(var front_camera_ready_timeout)'
     )
     assert (
-        forwarded['start_aruco_detector']
-        == '$(var start_rear_aruco_detector)'
-    )
-    assert (
         forwarded['start_qr_distance']
         == '$(var start_rear_qr_distance)'
     )
     assert forwarded['qr_size'] == '$(var rear_qr_size)'
+
+
+def test_aruco_detector_is_not_started_by_integrated_launch() -> None:
+    system_text = LAUNCH_FILE.read_text(encoding='utf-8')
+    camera_text = (
+        LAUNCH_FILE.parent / 'camera_streams.launch.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'mingky_aruco_detector' not in system_text
+    assert 'start_rear_aruco_detector' not in system_text
+    assert 'mingky_aruco_detector' not in camera_text
+    assert 'start_aruco_detector' not in camera_text
 
 
 def test_adaptive_recovery_is_the_integrated_default() -> None:

@@ -1,4 +1,4 @@
-"""Rear camera, marker detectors, and low-bandwidth MJPEG preview."""
+"""Rear camera, QR distance detector, and low-bandwidth MJPEG preview."""
 
 from pathlib import Path
 
@@ -54,17 +54,6 @@ def _rear_camera_actions(context):
             'camera_info_url': camera_info_url,
         }.items(),
     )
-    aruco_detector = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(PathJoinSubstitution([
-            FindPackageShare('mingky_aruco_detector'),
-            'launch',
-            'aruco_detector.launch.py',
-        ])),
-        condition=IfCondition(LaunchConfiguration('start_aruco_detector')),
-        launch_arguments={
-            'calibration_file': calibration_file,
-        }.items(),
-    )
     qr_distance = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution([
             FindPackageShare('mingky_qr_distance'),
@@ -77,7 +66,7 @@ def _rear_camera_actions(context):
             'qr_size': LaunchConfiguration('qr_size'),
         }.items(),
     )
-    return [rear_camera, aruco_detector, qr_distance]
+    return [rear_camera, qr_distance]
 
 
 def _rear_stream_action() -> Node:
@@ -125,7 +114,6 @@ def generate_launch_description() -> LaunchDescription:
                 '보정 폴더 이름. 비우면 pinky-01/pinky-02에서 자동 선택'
             ),
         ),
-        DeclareLaunchArgument('start_aruco_detector', default_value='true'),
         DeclareLaunchArgument('start_qr_distance', default_value='true'),
         DeclareLaunchArgument(
             'qr_size', default_value='0.028',

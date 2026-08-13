@@ -18,7 +18,6 @@
     <!-- 전방은 QR Reader가 카메라를 단독 소유하면서 관제 미리보기도 제공한다. -->
     <arg name="qr_preview_port" default="8091"/>
     <arg name="start_rear_camera_stream" default="true"/>
-    <arg name="start_rear_aruco_detector" default="true"/>
     <arg name="start_rear_qr_distance" default="true"/>
     <arg name="rear_qr_size" default="0.028"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
@@ -80,7 +79,6 @@
              if="$(var start_rear_camera_stream)">
         <arg name="robot_id" value="$(var robot_id)"/>
         <arg name="camera_profile" value="$(var camera_profile)"/>
-        <arg name="start_aruco_detector" value="$(var start_rear_aruco_detector)"/>
         <arg name="start_qr_distance" value="$(var start_rear_qr_distance)"/>
         <arg name="qr_size" value="$(var rear_qr_size)"/>
         <arg name="rear_preview_port" value="$(var rear_preview_port)"/>
