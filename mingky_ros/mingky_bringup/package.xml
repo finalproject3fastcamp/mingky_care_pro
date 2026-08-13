@@ -23,6 +23,8 @@
   <exec_depend>pinky_bringup</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>ros2cli</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>twist_mux</exec_depend>
