@@ -2,10 +2,19 @@ import { useEffect, useState } from 'react'
 
 import { EventFilters } from '../components/EventFilters'
 import { EventTimeline } from '../components/EventTimeline'
+import { BatteryForecastLabel } from '../components/BatteryForecastLabel'
+import { BatteryReading } from '../components/BatteryReading'
 import { RobotInventoryCard } from '../components/RobotInventoryCard'
 import { RobotResourceCard } from '../components/RobotResourceCard'
+import { SessionEndingSummary } from '../components/SessionEndingSummary'
 import { UnknownCodePanel } from '../components/UnknownCodePanel'
-import { api, getRobotInventory, getRobots } from '../lib/api'
+import {
+  api,
+  getBatteryForecast,
+  getRobotInventory,
+  getRobots,
+  getSessionEndingContext,
+} from '../lib/api'
 import { EMPTY_FILTERS, toEventQuery } from '../lib/eventFilters'
 import type { EventFilterValues } from '../lib/eventFilters'
 import { listUnknownCodes } from '../lib/eventsApi'
@@ -25,6 +34,10 @@ const UNKNOWN_CODE_POLL_MS = 60000
 const ROBOT_POLL_MS = 5000
 // 인벤토리는 내용이 바뀔 때만 갱신된다. 몇 시간에 한 번이다.
 const INVENTORY_POLL_MS = 30000
+// 배터리 로그가 2분 주기라 그보다 자주 추정해도 같은 답이 나온다.
+const FORECAST_POLL_MS = 120000
+// 끝난 세션의 종료 창은 더 이상 안 바뀐다. 확인만 이따금 한다.
+const ENDING_POLL_MS = 30000
 
 const UPDATED_FORMAT = new Intl.DateTimeFormat('ko-KR', {
   hour: '2-digit',
@@ -94,7 +107,21 @@ export function EngineerDashboard() {
     (signal) => (target ? getRobotInventory(target, { signal }) : Promise.resolve(null)),
     INVENTORY_POLL_MS,
   )
+  const forecast = usePolling(
+    (signal) => (target ? getBatteryForecast(target, { signal }) : Promise.resolve(null)),
+    FORECAST_POLL_MS,
+  )
   const focusedRobot = robotState.data?.find((r) => r.robot_id === target) ?? null
+
+  // 세션으로 필터링하면 "왜 그렇게 끝났는지" 를 함께 보여준다. 이벤트
+  // 목록만으로는 종료 직전 창을 눈으로 골라내야 한다.
+  const sessionId = toEventQuery(filters).session_id ?? null
+  const ending = usePolling(
+    (signal) => (sessionId
+      ? getSessionEndingContext(sessionId, { signal })
+      : Promise.resolve(null)),
+    ENDING_POLL_MS,
+  )
 
   useEffect(() => {
     if (feed.page) setUpdatedAt(new Date())
@@ -179,6 +206,19 @@ export function EngineerDashboard() {
         </div>
       )}
 
+      {focusedRobot && (
+        <div className="card">
+          <div className="card-title">배터리</div>
+          <BatteryReading
+            voltage={focusedRobot.battery_voltage}
+            percent={focusedRobot.battery_percent}
+            recordedAt={focusedRobot.battery_recorded_at}
+            audience="engineer"
+          />
+          <BatteryForecastLabel forecast={forecast.data ?? null} audience="engineer" />
+        </div>
+      )}
+
       {focusedRobot && <RobotResourceCard robot={focusedRobot} />}
 
       <RobotInventoryCard
@@ -194,6 +234,10 @@ export function EngineerDashboard() {
       />
 
       <EventFilters values={filters} onChange={handleFilterChange} robots={robots} />
+
+      {ending.data && (
+        <SessionEndingSummary context={ending.data} audience="engineer" />
+      )}
 
       <EventTimeline page={feed.page} loading={feed.loading} error={feed.error} />
 

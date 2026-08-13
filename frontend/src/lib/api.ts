@@ -170,3 +170,31 @@ export async function getRobotInventory(
     throw error
   }
 }
+
+/**
+ * 충전/방전 예상. schemas.py 의 BatteryForecastOut 과 1:1.
+ *
+ * **seconds 가 null 인 경우가 정상적으로 흔하다.** 부하가 출렁이거나
+ * 표본이 모자라면 서버가 시간을 내지 않는다 — 틀린 시간은 없는 시간보다
+ * 나쁘기 때문이다. 그때는 direction 만 써서 "충전 중" 을 표시한다.
+ */
+export interface BatteryForecast {
+  robot_id: string
+  direction: 'charging' | 'discharging' | 'idle' | 'unknown'
+  seconds: number | null
+  slope_v_per_hour: number | null
+  r_squared: number | null
+  sample_count: number
+  reason: string | null
+}
+
+export async function getBatteryForecast(
+  robotId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<BatteryForecast> {
+  const { data } = await api.get<BatteryForecast>(
+    `/robots/${encodeURIComponent(robotId)}/battery-forecast`,
+    { signal: options.signal },
+  )
+  return data
+}

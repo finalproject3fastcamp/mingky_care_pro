@@ -186,6 +186,25 @@ class SessionEndingContextOut(BaseModel):
     events: list[EventOut] = Field(default_factory=list)
 
 
+class BatteryForecastOut(BaseModel):
+    """전압 추이로 낸 충전/방전 예상.
+
+    seconds 는 신뢰할 만할 때만 채운다. 부하가 출렁이는 구간의 기울기로
+    시간을 내면 "3분 남음" 이 다음 표본에 "47분 남음" 이 된다.
+    틀린 시간은 없는 시간보다 나쁘다 — 의료진이 그 숫자로 일정을 잡는다.
+    """
+
+    robot_id: str
+    direction: Literal["charging", "discharging", "idle", "unknown"] = "unknown"
+    seconds: int | None = None
+    slope_v_per_hour: float | None = None
+    # 적합도. 낮으면 부하가 출렁이는 중이다.
+    r_squared: float | None = None
+    sample_count: int = 0
+    # 시간을 못 낸 이유. 화면이 아니라 엔지니어가 읽는다.
+    reason: str | None = None
+
+
 class UnknownCodeOut(BaseModel):
     """config/event_codes.yaml 에 없는 코드가 얼마나 들어왔는가.
 

@@ -12,7 +12,8 @@ import { RobotMap } from '../components/RobotMap'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
-import { getActiveSessions, getRobots, sendOrder } from '../lib/api'
+import { getActiveSessions, getBatteryForecast, getRobots, sendOrder } from '../lib/api'
+import type { BatteryForecast } from '../lib/api'
 import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
@@ -23,6 +24,7 @@ import type { EventOut } from '../types/events'
 import type { ActiveSession, Robot } from '../types/monitoring'
 
 const POLL_MS = 3000
+const FORECAST_POLL_MS = 120000
 // QR 이 인식된 순간 확인 화면을 띄우고 있는 시간. 스캔 대기에서 안내 화면으로
 // 그냥 바뀌면 환자·의료진 모두 "인식이 된 건가?" 를 판단할 근거가 없다.
 // 너무 길면 안내 시작이 늦어지므로 읽고 넘어갈 만큼만 잡는다.
@@ -44,6 +46,13 @@ export function MedicalDashboard() {
 
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
+  // 배터리 로그가 2분 주기라 그보다 자주 추정해도 같은 답이 나온다.
+  const forecast = usePolling(
+    (signal) => (selectedRobotId
+      ? getBatteryForecast(selectedRobotId, { signal })
+      : Promise.resolve(null)),
+    FORECAST_POLL_MS,
+  )
   const events = usePolling(
     async (signal) => (
       await listEvents(
@@ -293,6 +302,7 @@ export function MedicalDashboard() {
           events={sessionEvents}
           mode={mode}
           robotConnected={teleop.robotConnected}
+          forecast={forecast.data ?? null}
         />
       ) : (
         // 스캔 대기 순간엔 카메라가 카드 안에 들어가 있어야 "여기에 QR 을
@@ -313,6 +323,8 @@ interface SessionViewProps {
   events: EventOut[]
   mode: 'auto' | 'manual' | 'estop' | null
   robotConnected: boolean
+  /** 충전/방전 예상. 시간이 없는 경우가 정상적으로 흔하다. */
+  forecast: BatteryForecast | null
 }
 
 function SessionView({
@@ -321,6 +333,7 @@ function SessionView({
   events,
   mode,
   robotConnected,
+  forecast,
 }: SessionViewProps) {
   const derivedState = deriveRobotState(events, {
     session_id: session.session_id,
@@ -343,8 +356,10 @@ function SessionView({
         <RobotStatusBadge
           state={derivedState}
           batteryPercent={robot.battery_percent ?? null}
+          batteryVoltage={robot.battery_voltage ?? null}
           batteryRecordedAt={robot.battery_recorded_at ?? null}
           currentDestination={derivedDestination}
+          forecast={forecast}
         />
       </div>
       <GuidanceStartCard

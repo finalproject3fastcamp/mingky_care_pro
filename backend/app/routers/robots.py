@@ -6,11 +6,19 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 
-from .. import arming, heartbeat, inventory_rules, qr_runtime, robot_runtime
+from .. import (
+    arming,
+    battery_forecast,
+    heartbeat,
+    inventory_rules,
+    qr_runtime,
+    robot_runtime,
+)
 from ..db import get_pool
 from ..schemas import (
+    BatteryForecastOut,
     BatterySampleIn,
     NodeGraphInfo,
     ProcessInfo,
@@ -411,6 +419,52 @@ async def post_battery(robot_id: str, sample: BatterySampleIn) -> Response:
     if not inserted:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
     return Response(status_code=204)
+
+
+@router.get("/{robot_id}/battery-forecast", response_model=BatteryForecastOut)
+async def get_battery_forecast(
+    robot_id: str,
+    window_min: int = Query(60, ge=10, le=720),
+) -> BatteryForecastOut:
+    """충전/방전 예상 시간. 전압 추이의 기울기로 낸다.
+
+    퍼센트로 계산하지 않는다. 7.6V 위는 전부 100% 라 기울기가 0 이고,
+    충전 중인지 만충인지 구분되지 않는다.
+
+    표본이 모자라거나 부하 변동으로 기울기가 불안정하면 시간을 내지 않고
+    방향만 돌려준다. 틀린 시간은 없는 시간보다 나쁘다.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT recorded_at, voltage
+            FROM robot_battery_log
+            WHERE robot_id = $1
+              AND recorded_at >= now() - ($2 || ' minutes')::interval
+            ORDER BY recorded_at
+            """,
+            robot_id, str(window_min),
+        )
+
+    result = battery_forecast.forecast(
+        [(row["recorded_at"], row["voltage"]) for row in rows])
+
+    if result is None:
+        # 표본이 모자라다. 방향조차 알 수 없으므로 unknown 이다.
+        return BatteryForecastOut(
+            robot_id=robot_id, sample_count=len(rows),
+            reason="insufficient_samples")
+
+    return BatteryForecastOut(
+        robot_id=robot_id,
+        direction=result.direction,
+        seconds=result.seconds,
+        slope_v_per_hour=result.slope_v_per_hour,
+        r_squared=result.r_squared,
+        sample_count=result.sample_count,
+        reason=result.reason,
+    )
 
 
 @router.post("/{robot_id}/qr-observation", status_code=204)

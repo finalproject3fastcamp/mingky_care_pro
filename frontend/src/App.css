@@ -2069,3 +2069,28 @@
   font-weight: 400;
   color: var(--text-muted);
 }
+
+/* ── 충전/방전 예상 ─────────────────────────────────────────────────── */
+
+.battery-forecast {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.battery-forecast--charging {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.battery-forecast-time {
+  font-weight: 600;
+}
+
+/* 시간을 못 낸 이유와 기울기는 엔지니어만 본다. */
+.battery-forecast-reason,
+.battery-forecast-slope {
+  color: var(--text-subtle);
+  font-weight: 400;
+}
