@@ -3,13 +3,15 @@
 <package format="3">
   <name>mingky_fire_evac</name>
   <version>0.0.0</version>
-  <description>화재(fire) 감지 시 대피 지점으로 이동 (실험 단계, 아직 관제/이벤트 미연동). 이 노드는 핑키에서 돈다 -- YOLO 추론은 HTTP로 AI 노트북에 위탁한다.</description>
+  <description>화재 감지 시 기존 안내를 종료하고 대피 지점으로 이동한다. YOLO 추론은 별도 HTTP 서버에 위탁한다.</description>
   <maintainer email="mingky-care@example.com">Mingky Care Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>mingky_interfaces</exec_depend>
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer='Mingky Care Team',
     maintainer_email='mingky-care@example.com',
-    description='YOLO로 화재를 감지하면 대피 지점으로 이동한다 (실험 단계).',
+    description='YOLO로 화재를 감지하면 기존 안내를 종료하고 대피 지점으로 이동한다.',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

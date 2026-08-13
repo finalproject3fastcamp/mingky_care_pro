@@ -1,8 +1,7 @@
 # mingky_fire_evac
 
-전방 카메라에 불(fire)이 잡히면 로봇을 대피 지점으로 자동 이동시키는 실험 단계 기능.
-
-> 아직 관제 대시보드 이벤트(`event_codes.yaml`)는 연동 안 했다. 로그로만 확인 가능.
+전방 카메라에 불(fire)이 잡히면 기존 안내를 안전하게 종료하고 로봇을 대피
+지점으로 자동 이동시키는 운영 기능이다. YOLO 추론은 별도 GPU 컴퓨터가 담당한다.
 
 ## 왜 로봇 위 노드 + 별도 HTTP 추론 서버로 나뉘어 있는가
 
@@ -35,7 +34,7 @@
 ```bash
 python3 -m venv fire_evac_venv
 source fire_evac_venv/bin/activate
-pip install ultralytics flask pillow
+pip install ultralytics flask pillow waitress
 
 python3 infer_server.py --model <가중치.pt 경로> --port 5000
 ```
@@ -51,10 +50,30 @@ curl http://<이 컴퓨터의 IP>:5000/health
   그 클래스만 필터링한다 — 이름이 다르면 `infer_server.py`의 `fire_class_id` 탐색 부분을 고쳐야 한다.
 - CPU만 있어도 동작은 하지만 프레임당 1초 이상 걸려서 사실상 실시간 감지가 안 된다. GPU 필수.
 
-### 2) 핑키에서 fire_evac_node 실행
+### 2) 운영 설치
 
-`mingky_system.launch.xml`에는 **포함돼 있지 않다** — 아직 실험 단계라 상시 기동 대상이 아니다. 필요할 때
-수동으로 띄운다:
+GPU 컴퓨터에는 저장소의 설치기를 실행한다.
+
+```bash
+cd deploy/fire-inference
+sudo ./install.sh /path/to/fire-model.pt
+curl http://127.0.0.1:5000/health
+```
+
+각 Pinky에서는 추론 서버 주소를 두 번째 인자로 주고 로봇 설치기를 다시 실행한다.
+
+```bash
+cd deploy/robot
+sudo ./install.sh pinky-01 http://<GPU-PC-IP>:5000/infer
+sudo systemctl restart mingky-system
+```
+
+설정은 `/etc/mingky/robot.env`에 보존되며 재부팅 후에도
+`mingky-system.service`가 화재 감지 노드를 자동 실행한다.
+
+### 3) 수동 실행
+
+통합 서비스와 별개로 노드만 점검할 때 사용한다:
 
 ```bash
 ros2 run mingky_fire_evac fire_evac_node --ros-args \
@@ -85,7 +104,8 @@ ros2 run mingky_fire_evac fire_evac_node --ros-args \
    자체 `NavigateToPose` 액션 클라이언트로 대피 좌표로 이동.
 4. 이동 중엔 `/fire_evac/active` (latched Bool)를 `true`로 발행 — `mingky_lcd_status`가 이걸 구독해서 긴급
    안내 화면으로 강제 전환한다.
-5. 도착(또는 실패) 시 `/fire_evac/active`를 다시 `false`로.
+5. 도착(또는 실패) 시 `/fire_evac/active`를 다시 `false`로 바꾸되 화재 경보는 유지한다.
+6. 운영자가 현장 안전을 확인하고 `fire_evac/reset_alarm`을 호출해야 새 화재를 감지한다.
 
 ## 테스트
 
@@ -97,16 +117,29 @@ ros2 service call fire_evac/trigger_test std_srvs/srv/Trigger
 
 감지 없이 바로 대피 이동을 시작한다.
 
+대피가 끝난 뒤 현장 안전을 확인하고 경보를 초기화한다:
+
+```bash
+ros2 service call fire_evac/reset_alarm std_srvs/srv/Trigger
+```
+
 ## 검증 이력
 
 - 실기(pinky-02), 2026-08-12~13: 실제 라이터 불꽃으로 감지 → 대피소 도착 2회 성공.
 - `fire` 클래스만 사용 (`smoke`는 오탐과 잘 안 갈라져서 제외 — 검증 데이터 기준 `fire`는 오탐 0건,
   `smoke`는 노을·조명 등에서 비슷한 신뢰도로 오탐 발생).
 
-## 남은 일
+## 운영 확인
 
-- 관제 대시보드 이벤트(`event_codes.yaml`) 연동 안 됨.
-- `mingky_system.launch.xml`에 포함 안 됨 — 상시 기동하려면 launch 인자로 `infer_server_url`을 받도록 추가
-  필요.
-- 추론 서버가 현재 특정 개인 컴퓨터에서만 수동으로 실행되는 상태 — 상시 운영하려면 GPU 컴퓨터에 서비스로
-  등록하는 게 필요.
+```bash
+# GPU 컴퓨터
+systemctl status mingky-fire-inference
+curl http://127.0.0.1:5000/health
+
+# Pinky
+systemctl status mingky-system
+ros2 node list | grep fire_evac
+```
+
+관제 이벤트에는 화재 감지, 대피 시작·성공·실패와 추론 서버 연결 상실·복구가
+기록된다. 비상정지가 걸려 있으면 이를 임의로 해제하지 않고 자동 대피를 거부한다.

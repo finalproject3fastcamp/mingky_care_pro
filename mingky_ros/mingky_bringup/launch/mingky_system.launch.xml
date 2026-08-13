@@ -14,6 +14,8 @@
 
     <arg name="start_robot_base" default="true"/>
     <arg name="start_qr_reader" default="true"/>
+    <arg name="start_fire_evac" default="false"/>
+    <arg name="fire_infer_server_url" default=""/>
     <arg name="qr_source" default="csi"/>
     <!-- 전방은 QR Reader가 카메라를 단독 소유하면서 관제 미리보기도 제공한다. -->
     <arg name="qr_preview_port" default="8091"/>
@@ -125,6 +127,14 @@
     <node pkg="mingky_lcd_status" exec="lcd_status"
           name="lcd_status" output="screen" if="$(var start_lcd_status)">
         <param name="robot_id" value="$(var robot_id)"/>
+    </node>
+
+    <!-- 화재 감지는 전방 카메라 프레임을 로컬 구독하고 GPU 추론만 HTTP로
+         위임한다. 운영 로봇은 robot.env에서 기능과 서버 주소를 명시한다. -->
+    <node pkg="mingky_fire_evac" exec="fire_evac_node"
+          name="fire_evac_node" output="screen" if="$(var start_fire_evac)">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="infer_server_url" value="$(var fire_infer_server_url)"/>
     </node>
 
     <node pkg="mingky_event_gateway" exec="event_gateway"

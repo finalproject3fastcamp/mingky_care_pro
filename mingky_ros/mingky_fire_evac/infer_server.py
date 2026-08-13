@@ -22,25 +22,38 @@ ROS2/DDS를 두 기기 사이에 걸치지 않고, 이미 확인된 TCP(HTTP) �
 
 import argparse
 import io
+import threading
 
 from flask import Flask, jsonify, request
 from PIL import Image
 from ultralytics import YOLO
+from waitress import serve
 
 app = Flask(__name__)
 model = None
 fire_class_id = None
+inference_lock = threading.Lock()
 
 
 @app.post("/infer")
 def infer():
     if "image" not in request.files:
         return jsonify({"error": "image 파일 파트가 없습니다"}), 400
-    conf = float(request.form.get("conf", 0.3))
-    image_bytes = request.files["image"].read()
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    results = model.predict(
-        image, conf=conf, classes=[fire_class_id], verbose=False)
+    try:
+        conf = float(request.form.get("conf", 0.3))
+        if not 0.0 < conf <= 1.0:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "conf는 0 초과 1 이하 숫자여야 합니다"}), 400
+    try:
+        image_bytes = request.files["image"].read()
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except (OSError, ValueError):
+        return jsonify({"error": "올바른 이미지가 아닙니다"}), 400
+    # 두 Pinky 요청이 동시에 와도 같은 YOLO/GPU 객체를 병렬 호출하지 않는다.
+    with inference_lock:
+        results = model.predict(
+            image, conf=conf, classes=[fire_class_id], verbose=False)
     boxes = results[0].boxes
     return jsonify({
         "fire": len(boxes) > 0,
@@ -68,7 +81,7 @@ def main():
     fire_class_id = next(i for i, name in model.names.items() if name == "fire")
     print(f"로딩 완료 (fire 클래스 id={fire_class_id}, device={model.device})")
 
-    app.run(host=args.host, port=args.port, threaded=True)
+    serve(app, host=args.host, port=args.port, threads=4)
 
 
 if __name__ == "__main__":

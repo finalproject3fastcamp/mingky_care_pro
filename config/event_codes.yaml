@@ -71,6 +71,34 @@ patient.regained:
 
 # === 주행 ===================================================================
 
+fire.detected:
+  level: error
+  payload: { detections: int, window_size: int, source: [camera, manual_test] }
+
+fire.evacuation_started:
+  level: error
+  payload: { shelter_x: float, shelter_y: float }
+
+fire.evacuation_succeeded:
+  level: info
+  payload: {}
+
+fire.evacuation_failed:
+  level: error
+  payload: { reason: string, status: int }
+
+fire.inference_unavailable:
+  level: error
+  payload: { reason: string }
+
+fire.inference_restored:
+  level: info
+  payload: {}
+
+fire.alarm_reset:
+  level: info
+  payload: {}
+
 nav.goal_sent:
   level: info
   payload: { visit_name: string }

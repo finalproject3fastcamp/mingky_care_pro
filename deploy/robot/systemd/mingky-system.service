@@ -8,7 +8,7 @@ Type=simple
 User=pinky
 EnvironmentFile=-/etc/environment
 EnvironmentFile=/etc/mingky/robot.env
-ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=${MINGKY_ROBOT_ID} backend_url:=${MINGKY_BACKEND_URL}'
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=${MINGKY_ROBOT_ID} backend_url:=${MINGKY_BACKEND_URL} start_fire_evac:=${MINGKY_FIRE_EVAC_ENABLED:-false} fire_infer_server_url:=${MINGKY_FIRE_INFER_SERVER_URL:-}'
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
