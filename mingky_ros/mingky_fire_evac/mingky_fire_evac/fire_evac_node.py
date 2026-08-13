@@ -26,7 +26,7 @@ HTTP GET 둘 다 성공).
 추론 하나만 HTTP로 AI 노트북에 위탁**한다. `infer_server_url` 로 지정한
 주소에 압축된 프레임(JPEG bytes)을 그대로 POST 하면, AI 노트북의 추론
 서버(별도 스크립트, ROS2 아님, 그냥 Flask)가 GPU로 YOLO 돌리고
-`{"fire": true/false}` 만 돌려준다. ROS2/DDS가 두 기기 사이를 오갈 필요가
+`{'fire': true/false}` 만 돌려준다. ROS2/DDS가 두 기기 사이를 오갈 필요가
 아예 없어져서, 와이파이의 UDP 차단과 완전히 무관해진다.
 
 카메라 프레임은 `qr_reader_node.py` 에 새로 추가한
@@ -52,33 +52,33 @@ import math
 import threading
 import time
 
-import rclpy
-import requests
 from action_msgs.srv import CancelGoal
 from nav2_msgs.action import NavigateToPose
+import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import (
-    DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data,
+    DurabilityPolicy, qos_profile_sensor_data, QoSProfile, ReliabilityPolicy,
 )
+import requests
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool, Trigger
 
 from .event_publisher import FireEventPublisher
 
-MODE_TOPIC = "/mode"
-MODE_SET_TOPIC = "/mode/set"
-CANCEL_NAV_SERVICE = "/navigate_to_pose/_action/cancel_goal"
-TEST_TRIGGER_SERVICE = "fire_evac/trigger_test"
-RESET_ALARM_SERVICE = "fire_evac/reset_alarm"
-GUIDE_EVAC_SERVICE = "/guide_manager/fire_evacuation"
+MODE_TOPIC = '/mode'
+MODE_SET_TOPIC = '/mode/set'
+CANCEL_NAV_SERVICE = '/navigate_to_pose/_action/cancel_goal'
+TEST_TRIGGER_SERVICE = 'fire_evac/trigger_test'
+RESET_ALARM_SERVICE = 'fire_evac/reset_alarm'
+GUIDE_EVAC_SERVICE = '/guide_manager/fire_evacuation'
 # lcd_status_node(mingky_lcd_status)가 이 토픽을 구독해서 True 인 동안
-# GuideState 화면 대신 "긴급 상황" 화면으로 강제 전환한다. GuideState 는
+# GuideState 화면 대신 '긴급 상황' 화면으로 강제 전환한다. GuideState 는
 # guide_manager 만 발행한다는 규칙이 있어서(GuideState.msg 참고) 새 상태를
 # 얹지 않고 별도 토픽으로 뺐다.
-EVAC_ACTIVE_TOPIC = "/fire_evac/active"
-AUTO_MODE = "auto"
+EVAC_ACTIVE_TOPIC = '/fire_evac/active'
+AUTO_MODE = 'auto'
 
 
 def _latched(depth: int = 1) -> QoSProfile:
@@ -101,67 +101,67 @@ def _detections_confirmed(results, required: int) -> bool:
 class FireEvacNode(Node):
 
     def __init__(self, **kwargs):
-        super().__init__("fire_evac_node", **kwargs)
+        super().__init__('fire_evac_node', **kwargs)
 
-        self.declare_parameter("robot_id", "pinky-01")
+        self.declare_parameter('robot_id', 'pinky-01')
         # qr_reader_node 가 발행하는 전방 카메라 압축 이미지 토픽.
-        self.declare_parameter("image_topic", "/front_camera/image_raw/compressed")
+        self.declare_parameter('image_topic', '/front_camera/image_raw/compressed')
         # 이 토픽에 새 프레임이 이 시간(초)보다 오래 안 오면 카메라/네트워크가
         # 끊겼다고 보고 감지를 쉰다 (오래된 프레임으로 계속 판단하지 않으려는
         # 것 -- mingky_localize 에서 라이다 신선도 체크한 것과 같은 이유).
-        self.declare_parameter("frame_max_age_sec", 2.0)
+        self.declare_parameter('frame_max_age_sec', 2.0)
         # AI 노트북에서 도는 추론 서버 주소 (mingky_fire_evac/infer_server.py,
         # ROS2 아님, 그냥 Flask). 필수값이라 기본값을 비워두고, 없으면 바로
         # 에러를 낸다 (qr_reader 의 robot_id 필수 파라미터와 같은 패턴).
-        self.declare_parameter("infer_server_url", "")
+        self.declare_parameter('infer_server_url', '')
         # 추론 요청 자체가 응답 없이 오래 걸리면(네트워크 끊김, 서버 다운
         # 등) 감지 루프가 거기서 계속 멈춰있으면 안 되므로 타임아웃을 짧게
         # 둔다. 실패하면 이번 프레임은 그냥 건너뛴다 (아래 _detect_fire 참고).
-        self.declare_parameter("infer_timeout_sec", 2.0)
-        self.declare_parameter("nav_result_timeout_sec", 120.0)
-        self.declare_parameter("conf_threshold", 0.3)
+        self.declare_parameter('infer_timeout_sec', 2.0)
+        self.declare_parameter('nav_result_timeout_sec', 120.0)
+        self.declare_parameter('conf_threshold', 0.3)
         # 최근 window_size 프레임 중 required_detections 프레임 이상에서
         # fire 가 감지돼야 확정한다. 순간적인 오탐(반사광 한 프레임 등)을
         # 거르기 위한 것 -- 저번에 실제 사진으로 검증했을 때 이 정도 비율이면
         # 랜덤노이즈/노을 같은 극단적 오탐 케이스가 아닌 이상 통과 안 한다.
-        self.declare_parameter("window_size", 7)
-        self.declare_parameter("required_detections", 5)
+        self.declare_parameter('window_size', 7)
+        self.declare_parameter('required_detections', 5)
         # 입원병동(ward_goal)과 CT실(ct_room_goal) 중앙점 (2026-08-12).
         # ward_goal(2.729600, 1.262527) 과 ct_room_goal(2.586657, 1.720020)
         # 의 평균이다. 지도 이미지(yun_map_highres_clean.pgm)로 사방 벽까지
         # 거리를 직접 재보니 이 지점이 이미 동쪽 벽에서 0.175m 거리라 --
-        # "벽에 가깝게" 요구사항을 이 좌표 자체가 자연스럽게 만족한다
+        # '벽에 가깝게' 요구사항을 이 좌표 자체가 자연스럽게 만족한다
         # (프로젝트 벽 최소 거리 기준 0.15m 보다 여유 있게 안전).
         #
         # 로봇을 이 자리에 세우고 auto_localize 재탐색으로 실측한 값
         # (/amcl_pose, 2026-08-13).
-        self.declare_parameter("shelter_x", 2.643918)
-        self.declare_parameter("shelter_y", 1.435542)
-        self.declare_parameter("shelter_yaw", 0.422299)
+        self.declare_parameter('shelter_x', 2.643918)
+        self.declare_parameter('shelter_y', 1.435542)
+        self.declare_parameter('shelter_yaw', 0.422299)
 
         get = self.get_parameter
-        self.robot_id = str(get("robot_id").value)
-        self.image_topic = str(get("image_topic").value)
-        self.frame_max_age_sec = float(get("frame_max_age_sec").value)
-        self.infer_server_url = str(get("infer_server_url").value)
+        self.robot_id = str(get('robot_id').value)
+        self.image_topic = str(get('image_topic').value)
+        self.frame_max_age_sec = float(get('frame_max_age_sec').value)
+        self.infer_server_url = str(get('infer_server_url').value)
         if not self.infer_server_url:
             raise RuntimeError(
-                "infer_server_url 파라미터가 필요합니다 (AI 노트북의 추론 서버 주소).")
-        self.infer_timeout_sec = float(get("infer_timeout_sec").value)
+                'infer_server_url 파라미터가 필요합니다 (AI 노트북의 추론 서버 주소).')
+        self.infer_timeout_sec = float(get('infer_timeout_sec').value)
         self.nav_result_timeout_sec = max(
-            1.0, float(get("nav_result_timeout_sec").value))
-        self.conf_threshold = float(get("conf_threshold").value)
-        self.window_size = int(get("window_size").value)
-        self.required_detections = int(get("required_detections").value)
+            1.0, float(get('nav_result_timeout_sec').value))
+        self.conf_threshold = float(get('conf_threshold').value)
+        self.window_size = int(get('window_size').value)
+        self.required_detections = int(get('required_detections').value)
         if self.window_size <= 0:
-            raise ValueError("window_size는 1 이상이어야 합니다.")
+            raise ValueError('window_size는 1 이상이어야 합니다.')
         if not 1 <= self.required_detections <= self.window_size:
             raise ValueError(
-                "required_detections는 1 이상 window_size 이하여야 합니다.")
+                'required_detections는 1 이상 window_size 이하여야 합니다.')
         self.shelter = (
-            float(get("shelter_x").value),
-            float(get("shelter_y").value),
-            float(get("shelter_yaw").value),
+            float(get('shelter_x').value),
+            float(get('shelter_y').value),
+            float(get('shelter_yaw').value),
         )
         self.events = FireEventPublisher(self, self.robot_id)
 
@@ -188,15 +188,15 @@ class FireEvacNode(Node):
         self.evac_active_pub.publish(Bool(data=False))
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
         self.guide_evac_client = self.create_client(SetBool, GUIDE_EVAC_SERVICE)
-        self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
-        # CV 파이프라인 없이도 "감지됐다고 치고" 이동 로직만 따로 테스트할 수
+        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        # CV 파이프라인 없이도 '감지됐다고 치고' 이동 로직만 따로 테스트할 수
         # 있게 만든 서비스. 카메라 앞에 매번 불을 갖다 댈 필요 없이 Nav2
         # 취소/목표전송 부분만 검증할 때 쓴다.
         self.create_service(Trigger, TEST_TRIGGER_SERVICE, self._on_test_trigger)
         self.create_service(Trigger, RESET_ALARM_SERVICE, self._on_reset_alarm)
 
         self.get_logger().info(
-            f"추론 서버: {self.infer_server_url}. 감지 스레드 시작.")
+            f'추론 서버: {self.infer_server_url}. 감지 스레드 시작.')
         threading.Thread(target=self._watch_loop, daemon=True).start()
 
     def destroy_node(self):
@@ -228,13 +228,13 @@ class FireEvacNode(Node):
     def _on_test_trigger(self, request, response):
         if self._evacuating:
             response.success = False
-            response.message = "이미 대피 이동 중입니다."
+            response.message = '이미 대피 이동 중입니다.'
             return response
         if self._alarm_latched:
             response.success = False
-            response.message = "화재 경보가 유지 중입니다. 먼저 경보를 초기화하세요."
+            response.message = '화재 경보가 유지 중입니다. 먼저 경보를 초기화하세요.'
             return response
-        self.get_logger().warn("수동 테스트 트리거 — 감지 없이 바로 대피 이동 시작합니다.")
+        self.get_logger().warn('수동 테스트 트리거 — 감지 없이 바로 대피 이동 시작합니다.')
         self.events.publish(
             'fire.detected',
             {'detections': 0, 'window_size': self.window_size, 'source': 'manual_test'},
@@ -243,25 +243,25 @@ class FireEvacNode(Node):
         self._set_evacuating(True)
         threading.Thread(target=self._start_evacuation, daemon=True).start()
         response.success = True
-        response.message = "대피 이동을 시작했습니다."
+        response.message = '대피 이동을 시작했습니다.'
         return response
 
     def _on_reset_alarm(self, request, response):
         """운영자가 현장 안전을 확인한 뒤 유지 중인 화재 경보를 해제한다."""
         if self._evacuating:
             response.success = False
-            response.message = "대피 이동 중에는 화재 경보를 초기화할 수 없습니다."
+            response.message = '대피 이동 중에는 화재 경보를 초기화할 수 없습니다.'
             return response
         if not self._alarm_latched:
             response.success = True
-            response.message = "초기화할 화재 경보가 없습니다."
+            response.message = '초기화할 화재 경보가 없습니다.'
             return response
 
         self._alarm_latched = False
         self._recent.clear()
         self.events.publish('fire.alarm_reset')
         response.success = True
-        response.message = "화재 경보를 초기화했습니다."
+        response.message = '화재 경보를 초기화했습니다.'
         return response
 
     # ------------------------------------------------------------ 감지 루프
@@ -269,8 +269,8 @@ class FireEvacNode(Node):
     # HTTP 요청(AI 노트북 추론 서버 호출)은 블로킹이고 네트워크 상황에 따라
     # 늦어질 수 있어서 rclpy.spin(self) 을 도는 메인 스레드(구독 콜백을
     # 처리하는 그 스레드)에서 직접 하면 안 된다 (mingky_localize 의
-    # _run_sequence 와 같은 이유). 그래서 별도 스레드에서, "_on_image 콜백이
-    # 마지막으로 저장해둔 프레임"을 폴링해서 처리한다.
+    # _run_sequence 와 같은 이유). 그래서 별도 스레드에서, '_on_image 콜백이
+    # 마지막으로 저장해둔 프레임'을 폴링해서 처리한다.
 
     def _watch_loop(self):
         while rclpy.ok() and not self._stop:
@@ -296,8 +296,8 @@ class FireEvacNode(Node):
             if _detections_confirmed(
                     self._recent, self.required_detections):
                 self.get_logger().warn(
-                    f"불꽃 반복 감지 ({sum(self._recent)}/{self.window_size}"
-                    "프레임) — 대피 이동을 시작합니다.")
+                    f'불꽃 반복 감지 ({sum(self._recent)}/{self.window_size}'
+                    '프레임) — 대피 이동을 시작합니다.')
                 self.events.publish(
                     'fire.detected',
                     {
@@ -316,14 +316,14 @@ class FireEvacNode(Node):
         """AI 노트북의 추론 서버에 프레임을 보내고 fire 감지 여부를 받는다.
 
         네트워크/서버 문제로 요청이 실패해도 이 노드를 죽이면 안 된다 --
-        이번 프레임만 "미감지"로 취급하고 다음 프레임에서 다시 시도한다
+        이번 프레임만 '미감지'로 취급하고 다음 프레임에서 다시 시도한다
         (최근 프레임 확인 로직이 어차피 한두 번 실패는 감당하게 돼있다).
         """
         try:
             resp = requests.post(
                 self.infer_server_url,
-                files={"image": ("frame.jpg", jpeg_bytes, "image/jpeg")},
-                data={"conf": str(self.conf_threshold)},
+                files={'image': ('frame.jpg', jpeg_bytes, 'image/jpeg')},
+                data={'conf': str(self.conf_threshold)},
                 timeout=self.infer_timeout_sec,
             )
             resp.raise_for_status()
@@ -331,13 +331,13 @@ class FireEvacNode(Node):
                 self.events.publish('fire.inference_restored')
                 self.get_logger().info('추론 서버 연결이 복구됐습니다.')
             self._inference_available = True
-            return bool(resp.json().get("fire", False))
+            return bool(resp.json().get('fire', False))
         except (requests.RequestException, ValueError) as exc:
             if self._inference_available is not False:
                 self.events.publish(
                     'fire.inference_unavailable', {'reason': str(exc)}, level='error')
             self._inference_available = False
-            self.get_logger().warn(f"추론 서버 호출 실패: {exc}", throttle_duration_sec=5.0)
+            self.get_logger().warn(f'추론 서버 호출 실패: {exc}', throttle_duration_sec=5.0)
             return False
 
     # ------------------------------------------------------------ 대피 이동
@@ -356,7 +356,7 @@ class FireEvacNode(Node):
 
             x, y, yaw = self.shelter
             goal = NavigateToPose.Goal()
-            goal.pose.header.frame_id = "map"
+            goal.pose.header.frame_id = 'map'
             goal.pose.header.stamp = self.get_clock().now().to_msg()
             goal.pose.pose.position.x = x
             goal.pose.pose.position.y = y
@@ -365,7 +365,7 @@ class FireEvacNode(Node):
             goal.pose.pose.orientation.w = qw
 
             if not self.nav_client.wait_for_server(timeout_sec=5.0):
-                self.get_logger().error("navigate_to_pose 액션 서버가 없습니다.")
+                self.get_logger().error('navigate_to_pose 액션 서버가 없습니다.')
                 self.events.publish(
                     'fire.evacuation_failed',
                     {'reason': 'nav2_unavailable', 'status': -1},
@@ -375,14 +375,14 @@ class FireEvacNode(Node):
             send_future = self.nav_client.send_goal_async(goal)
             goal_handle = self._wait_for_future(send_future, timeout_sec=5.0)
             if goal_handle is None or not goal_handle.accepted:
-                self.get_logger().error("대피 목표가 거부됐습니다.")
+                self.get_logger().error('대피 목표가 거부됐습니다.')
                 self.events.publish(
                     'fire.evacuation_failed',
                     {'reason': 'goal_rejected', 'status': -1},
                     level='error')
                 return
 
-            self.get_logger().info(f"대피 목표 전송됨: x={x:.2f}, y={y:.2f}, yaw={yaw:.2f}")
+            self.get_logger().info(f'대피 목표 전송됨: x={x:.2f}, y={y:.2f}, yaw={yaw:.2f}')
             self.events.publish(
                 'fire.evacuation_started',
                 {'shelter_x': x, 'shelter_y': y},
@@ -392,7 +392,7 @@ class FireEvacNode(Node):
                 result_future, timeout_sec=self.nav_result_timeout_sec)
             if result is None:
                 self.get_logger().error(
-                    "대피 이동 결과 타임아웃 — 대피 목표를 취소합니다.")
+                    '대피 이동 결과 타임아웃 — 대피 목표를 취소합니다.')
                 cancel_future = goal_handle.cancel_goal_async()
                 cancel_response = self._wait_for_future(cancel_future, timeout_sec=5.0)
                 if cancel_response is None:
@@ -400,7 +400,7 @@ class FireEvacNode(Node):
                     # 돌아가지 않는다. 운영자가 Nav2/비상정지를 확인해야 한다.
                     safe_to_clear = False
                     self.get_logger().fatal(
-                        "대피 목표 취소 응답이 없습니다. 대피 상태를 유지합니다.")
+                        '대피 목표 취소 응답이 없습니다. 대피 상태를 유지합니다.')
                     self.events.publish(
                         'fire.evacuation_failed',
                         {'reason': 'cancel_unconfirmed', 'status': -1},
@@ -410,20 +410,20 @@ class FireEvacNode(Node):
                 if terminal is None:
                     safe_to_clear = False
                     self.get_logger().fatal(
-                        "대피 목표 취소 후 종료 결과가 없습니다. 대피 상태를 유지합니다.")
+                        '대피 목표 취소 후 종료 결과가 없습니다. 대피 상태를 유지합니다.')
                     self.events.publish(
                         'fire.evacuation_failed',
                         {'reason': 'cancel_result_timeout', 'status': -1},
                         level='error')
                     return
                 self.get_logger().warn(
-                    f"대피 목표 취소 완료. status={terminal.status}")
+                    f'대피 목표 취소 완료. status={terminal.status}')
                 self.events.publish(
                     'fire.evacuation_failed',
                     {'reason': 'navigation_timeout', 'status': int(terminal.status)},
                     level='error')
             else:
-                self.get_logger().info(f"대피 이동 종료. status={result.status}")
+                self.get_logger().info(f'대피 이동 종료. status={result.status}')
                 if result.status == 4:
                     self.events.publish('fire.evacuation_succeeded')
                 else:
@@ -461,22 +461,22 @@ class FireEvacNode(Node):
         """Guide Manager가 기존 안내 상태를 정리한 뒤 대피를 시작하게 한다."""
         if not self.guide_evac_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error(
-                "Guide Manager 화재 대피 서비스가 없습니다. "
-                "안내 상태 정리 없이 대피를 계속합니다.")
+                'Guide Manager 화재 대피 서비스가 없습니다. '
+                '안내 상태 정리 없이 대피를 계속합니다.')
             return False
         future = self.guide_evac_client.call_async(SetBool.Request(data=active))
         response = self._wait_for_future(future, timeout_sec=3.0)
         if response is None or not response.success:
             self.get_logger().error(
-                "Guide Manager 화재 대피 상태 전환에 실패했습니다. "
-                "대피를 우선해 계속 진행합니다.")
+                'Guide Manager 화재 대피 상태 전환에 실패했습니다. '
+                '대피를 우선해 계속 진행합니다.')
             return False
         return True
 
     def _cancel_active_nav_goal(self):
         """Nav2 의 지금 목표를 강제로 전부 취소한다 (mingky_localize 와 동일 패턴).
 
-        goal_id/시각이 둘 다 비어있는 CancelGoal 요청은 "모든 목표 취소" 로
+        goal_id/시각이 둘 다 비어있는 CancelGoal 요청은 '모든 목표 취소' 로
         정의돼 있어서, 지금 목표를 누가 보냈는지(guide_manager 든
         navigation_manager 든) 몰라도 이거 하나로 정리된다.
         """
@@ -514,5 +514,5 @@ def main():
         rclpy.try_shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

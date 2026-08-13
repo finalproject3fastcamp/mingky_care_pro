@@ -16,6 +16,7 @@ _LEVELS = {
 
 
 class FireEventPublisher:
+
     def __init__(self, node, robot_id: str):
         self._node = node
         self._robot_id = robot_id
