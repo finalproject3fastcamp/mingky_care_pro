@@ -78,6 +78,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 - [config/event_codes.yaml](config/event_codes.yaml) — 이벤트 코드 정본 (발행 가능한 목록과 payload 형태)
 - [docs/system-communication.md](docs/system-communication.md) — 프론트·백엔드·로봇 통신 원칙과 데이터 흐름
 - [docs/monitoring-spec.md](docs/monitoring-spec.md) — 관제 기능 스펙과 기술 스택 결정 배경
+- [docs/omx-imitation-learning.md](docs/omx-imitation-learning.md) — OMX 모방학습을 어떻게 돌렸는지 (데이터·학습·평가와 겪은 문제)
 - [docs/infra-setup.md](docs/infra-setup.md) · [docs/nav2-debugging.md](docs/nav2-debugging.md) — 인프라 · 주행 진단
 
 ## 6. 기술 스택
