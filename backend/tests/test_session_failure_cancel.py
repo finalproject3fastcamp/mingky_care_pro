@@ -51,6 +51,7 @@ def test_long_failed_system_state_cancels_while_heartbeat_is_alive(monkeypatch):
     robot_runtime._states["pinky-01"] = robot_runtime.RuntimeState(
         system_state="failed",
         localization_active=False,
+        fire_alarm_active=False,
         reported_at=NOW - timedelta(seconds=1),
         state_since=NOW - timedelta(seconds=31),
     )

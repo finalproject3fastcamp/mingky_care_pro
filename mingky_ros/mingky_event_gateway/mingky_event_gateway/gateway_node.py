@@ -214,6 +214,8 @@ class EventGateway(Node):
             GuideState, "/guide_manager/state", self._on_guide_state, state_qos)
         self.create_subscription(
             Bool, "/auto_localize/active", self._on_localization_active, state_qos)
+        self.create_subscription(
+            Bool, "/fire_evac/alarm_active", self._on_fire_alarm_active, state_qos)
 
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
@@ -226,6 +228,7 @@ class EventGateway(Node):
         self._guide_session_state = GuideState.SESSION_NONE
         self._guide_patient_id = ''
         self._localization_active = False
+        self._fire_alarm_active = None
 
         # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
         # 비임상 Waypoint 시험은 navigation_manager가 받는다.
@@ -335,6 +338,9 @@ class EventGateway(Node):
 
     def _on_localization_active(self, msg: Bool) -> None:
         self._localization_active = bool(msg.data)
+
+    def _on_fire_alarm_active(self, msg: Bool) -> None:
+        self._fire_alarm_active = bool(msg.data)
 
     def _system_state(self) -> str:
         try:
@@ -457,6 +463,7 @@ class EventGateway(Node):
                     json={
                         "system_state": self._system_state(),
                         "localization_active": self._localization_active,
+                        "fire_alarm_active": self._fire_alarm_active,
                     },
                     timeout=self.heartbeat_timeout)
             except requests.RequestException as exc:

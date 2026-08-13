@@ -69,6 +69,11 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
     if body.command == "fire_alarm_reset" and body.argument != "run":
         raise HTTPException(
             status_code=422, detail="fire_alarm_reset requires argument 'run'")
+    if body.command == "fire_alarm_reset":
+        runtime = robot_runtime.snapshot().get(robot_id)
+        if runtime is not None and runtime.fire_alarm_active is False:
+            raise HTTPException(
+                status_code=409, detail="fire alarm is not active")
     if body.command.startswith("system_"):
         if body.argument != "run":
             raise HTTPException(

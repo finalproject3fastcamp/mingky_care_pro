@@ -143,6 +143,29 @@ def test_fire_alarm_reset_rejects_unknown_argument(monkeypatch):
     assert raised.value.status_code == 422
 
 
+def test_fire_alarm_reset_rejects_when_alarm_is_not_active(monkeypatch):
+    async def require_robot(robot_id):
+        return None
+
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+    monkeypatch.setattr(
+        orders_router.robot_runtime,
+        'snapshot',
+        lambda: {
+            'pinky-01': type('Runtime', (), {
+                'system_state': 'active',
+                'fire_alarm_active': False,
+            })(),
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(orders_router.create_order(
+            'pinky-01', OrderIn(command='fire_alarm_reset', argument='run')))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == 'fire alarm is not active'
+
 def test_localize_rejects_unknown_argument(monkeypatch):
     async def require_robot(robot_id):
         return None

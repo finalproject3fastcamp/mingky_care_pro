@@ -189,6 +189,7 @@ class RobotOut(BaseModel):
         "active", "activating", "deactivating", "inactive", "failed", "unknown"
     ] = "unknown"
     localization_active: bool = False
+    fire_alarm_active: bool | None = None
     runtime_reported_at: datetime | None = None
 
 
@@ -207,6 +208,8 @@ class RobotHeartbeatIn(BaseModel):
         "active", "activating", "deactivating", "inactive", "failed", "unknown"
     ] = "unknown"
     localization_active: bool = False
+    # None은 구버전 게이트웨이이거나 아직 화재 노드의 상태를 받지 못한 경우다.
+    fire_alarm_active: bool | None = None
 
 
 class BatterySampleIn(BaseModel):

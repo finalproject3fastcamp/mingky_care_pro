@@ -131,9 +131,15 @@ export function SystemDashboard() {
 
         <section className="card waypoint-localize-control">
           <div className="card-title">화재 경보</div>
+          <strong className={selectedRobot?.fire_alarm_active ? 'waypoint-localize-running' : ''}>
+            {selectedRobot?.fire_alarm_active === true
+              ? '경보 발동 중'
+              : selectedRobot?.fire_alarm_active === false ? '정상' : '상태 확인 중'}
+          </strong>
           <p>현장에 불이 없고 대피가 끝난 것을 직접 확인한 뒤에만 해제하세요. 해제 후에는 새 화재를 다시 감지할 수 있습니다.</p>
           <button type="button" className="btn danger"
-            disabled={busy || !online || selectedRobot?.system_state !== 'active'}
+            disabled={busy || !online || selectedRobot?.system_state !== 'active'
+              || selectedRobot?.fire_alarm_active !== true}
             onClick={() => issue(
               'fire_alarm_reset',
               '화재 경보 해제',

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 class RuntimeState:
     system_state: str
     localization_active: bool
+    fire_alarm_active: bool | None
     reported_at: datetime
     state_since: datetime
 
@@ -19,12 +20,18 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def update(robot_id: str, system_state: str, localization_active: bool) -> None:
+def update(
+    robot_id: str,
+    system_state: str,
+    localization_active: bool,
+    fire_alarm_active: bool | None = None,
+) -> None:
     now = _now()
     previous = _states.get(robot_id)
     _states[robot_id] = RuntimeState(
         system_state=system_state,
         localization_active=localization_active,
+        fire_alarm_active=fire_alarm_active,
         reported_at=now,
         state_since=(
             previous.state_since

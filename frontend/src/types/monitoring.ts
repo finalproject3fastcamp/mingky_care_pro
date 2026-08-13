@@ -69,6 +69,7 @@ export interface Robot {
   link_state: 'online' | 'offline' | 'unknown'
   system_state: 'active' | 'activating' | 'deactivating' | 'inactive' | 'failed' | 'unknown'
   localization_active: boolean
+  fire_alarm_active: boolean | null
   runtime_reported_at: string | null
 }
 

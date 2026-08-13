@@ -78,6 +78,7 @@ GUIDE_EVAC_SERVICE = '/guide_manager/fire_evacuation'
 # guide_manager 만 발행한다는 규칙이 있어서(GuideState.msg 참고) 새 상태를
 # 얹지 않고 별도 토픽으로 뺐다.
 EVAC_ACTIVE_TOPIC = '/fire_evac/active'
+ALARM_ACTIVE_TOPIC = '/fire_evac/alarm_active'
 AUTO_MODE = 'auto'
 
 
@@ -186,6 +187,9 @@ class FireEvacNode(Node):
             qos_profile_sensor_data)
         self.evac_active_pub = self.create_publisher(Bool, EVAC_ACTIVE_TOPIC, _latched())
         self.evac_active_pub.publish(Bool(data=False))
+        self.alarm_active_pub = self.create_publisher(
+            Bool, ALARM_ACTIVE_TOPIC, _latched())
+        self.alarm_active_pub.publish(Bool(data=False))
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
         self.guide_evac_client = self.create_client(SetBool, GUIDE_EVAC_SERVICE)
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -240,6 +244,7 @@ class FireEvacNode(Node):
             {'detections': 0, 'window_size': self.window_size, 'source': 'manual_test'},
             level='error')
         self._alarm_latched = True
+        self.alarm_active_pub.publish(Bool(data=True))
         self._set_evacuating(True)
         threading.Thread(target=self._start_evacuation, daemon=True).start()
         response.success = True
@@ -258,6 +263,7 @@ class FireEvacNode(Node):
             return response
 
         self._alarm_latched = False
+        self.alarm_active_pub.publish(Bool(data=False))
         self._recent.clear()
         self.events.publish('fire.alarm_reset')
         response.success = True
@@ -309,6 +315,7 @@ class FireEvacNode(Node):
                 # 스레드를 시작하기 전에 래치해 연속 프레임이 목표를 중복
                 # 전송하지 못하게 한다. 대피 실패 뒤에도 현장 확인 전까지 유지한다.
                 self._alarm_latched = True
+                self.alarm_active_pub.publish(Bool(data=True))
                 self._set_evacuating(True)
                 threading.Thread(target=self._start_evacuation, daemon=True).start()
 
