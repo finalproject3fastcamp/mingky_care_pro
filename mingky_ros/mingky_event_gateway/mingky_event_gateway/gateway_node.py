@@ -93,6 +93,28 @@ class HeartbeatFailureGuard:
         self.triggered = False
 
 
+class IntervalGate:
+    """반복 작업이 지정 주기보다 자주 실행되지 않게 한다.
+
+    작업할 payload 가 없거나 이전 값과 같아 실제 HTTP 전송을 생략해도 실행
+    시각은 소비한다. 그렇지 않으면 남은 대기 시간이 계속 0이 되어 스레드가
+    쉬지 않고 반복한다.
+    """
+
+    def __init__(self, interval_sec: float, now: float):
+        self.interval_sec = max(0.0, interval_sec)
+        self.last_attempt = now
+
+    def remaining(self, now: float) -> float:
+        return max(0.0, self.interval_sec - (now - self.last_attempt))
+
+    def consume(self, now: float) -> bool:
+        if self.remaining(now) > 0:
+            return False
+        self.last_attempt = now
+        return True
+
+
 def _iso(stamp) -> str:
     """builtin_interfaces/Time → ISO8601 UTC.
 
@@ -516,18 +538,14 @@ class EventGateway(Node):
     def _qr_observation_loop(self) -> None:
         """최신 QR 거리만 전송하고 실패한 과거 관측은 버린다."""
         session = requests.Session()
-        last_sent = 0.0
+        gate = IntervalGate(self.qr_observation_interval, time.monotonic())
         last_payload = None
         while not self._stop.is_set():
-            timeout = max(
-                0.0,
-                self.qr_observation_interval - (time.monotonic() - last_sent),
-            )
-            self._qr_wake.wait(timeout=timeout)
+            self._qr_wake.wait(timeout=gate.remaining(time.monotonic()))
             self._qr_wake.clear()
             if self._stop.is_set():
                 break
-            if time.monotonic() - last_sent < self.qr_observation_interval:
+            if not gate.consume(time.monotonic()):
                 continue
             with self._qr_lock:
                 payload = self._qr_observation
@@ -536,7 +554,6 @@ class EventGateway(Node):
             # 보이는 동안은 거리 변화를 계속 보내고, 미인식 전이는 한 번만 보낸다.
             if not payload["visible"] and payload == last_payload:
                 continue
-            last_sent = time.monotonic()
             last_payload = dict(payload)
             try:
                 response = session.post(

@@ -3,6 +3,7 @@
 from mingky_event_gateway.gateway_node import (
     ACTIVE_GUIDE_SESSION_STATES,
     HeartbeatFailureGuard,
+    IntervalGate,
     SYSTEM_COMMANDS,
     matches_guided_patient,
 )
@@ -54,3 +55,21 @@ def test_qr_distance_only_accepts_current_patient_while_guiding():
         observation, GuideState.SESSION_GUIDING, 'patient-002') is False
     assert matches_guided_patient(
         observation, GuideState.SESSION_IN_ROOM, 'patient-001') is False
+
+
+def test_interval_gate_starts_with_a_full_wait_period():
+    gate = IntervalGate(0.5, now=100.0)
+
+    assert gate.remaining(100.0) == 0.5
+    assert gate.consume(100.0) is False
+    assert gate.consume(100.5) is True
+
+
+def test_interval_gate_advances_even_when_caller_skips_work():
+    gate = IntervalGate(0.5, now=100.0)
+
+    # payload 없음/중복으로 HTTP 전송을 생략하는 경우에도 consume 자체가
+    # 다음 실행 시각을 전진시켜 timeout=0 busy loop 를 막는다.
+    assert gate.consume(100.5) is True
+    assert gate.remaining(100.5) == 0.5
+    assert gate.consume(100.5) is False
