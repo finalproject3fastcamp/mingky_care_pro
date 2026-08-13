@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
+import { GuidanceStartCard } from '../components/GuidanceStartCard'
+import { GuidanceRearCamera } from '../components/GuidanceRearCamera'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -10,7 +12,7 @@ import { RobotMap } from '../components/RobotMap'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
-import { getActiveSessions, getRobots } from '../lib/api'
+import { getActiveSessions, getRobots, sendOrder } from '../lib/api'
 import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
@@ -25,11 +27,6 @@ const POLL_MS = 3000
 // 그냥 바뀌면 환자·의료진 모두 "인식이 된 건가?" 를 판단할 근거가 없다.
 // 너무 길면 안내 시작이 늦어지므로 읽고 넘어갈 만큼만 잡는다.
 const SCAN_FLASH_MS = 2200
-// 로봇 QR 리더의 MJPEG 미리보기 URL. 미설정이면 카메라 카드를 숨긴다.
-// 지금은 단일 로봇 전제라 env 하나만 있다. 다중 로봇을 실제로 굴리게 되면
-// 로봇별 URL 매핑이 필요하다 (예: GET /robots 응답에 preview_url 추가).
-const CAMERA_STREAM_URL = import.meta.env.VITE_CAMERA_STREAM_URL as string | undefined
-
 export function MedicalDashboard() {
   // "지금 어떤 로봇을 담당하고 있는가" 는 URL 이 갖는다 (/medical/:robotId).
   // 서버 상태가 아니라 이 탭의 시야다 — 의료진이 탭을 각자 열어 각자 다른
@@ -42,11 +39,18 @@ export function MedicalDashboard() {
   // 방금 한 선택을 무효로 보고 선택 화면으로 튕긴다. 폴링이 따라잡을 때까지
   // 이 응답으로 덮어쓴다.
   const [justArmed, setJustArmed] = useState<Robot | null>(null)
+  const [locationBusy, setLocationBusy] = useState(false)
+  const [locationNotice, setLocationNotice] = useState<string | null>(null)
 
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
   const events = usePolling(
-    async (signal) => (await listEvents({ limit: 30 }, { signal })).items,
+    async (signal) => (
+      await listEvents(
+        { robot_id: selectedRobotId ?? undefined, limit: 100 },
+        { signal },
+      )
+    ).items,
     POLL_MS,
   )
 
@@ -54,7 +58,8 @@ export function MedicalDashboard() {
   // 조작이라 할 수 없고, 위치도 지도 위에서 끊겨 보인다.
   const teleop = useTeleopSocket(selectedRobotId)
 
-  // 모드는 대시보드의 이벤트 목록에서 찾지 않는다. 그 목록은 최근 30건이라
+  // 모드는 대시보드의 이벤트 목록에서 찾지 않는다. 그 목록은 선택 로봇의 최근
+  // 100건이라
   // nav.* 이 쌓이면 모드 변경이 창 밖으로 밀려 "확인 중" 으로 돌아간다.
   const mode = useRobotMode(selectedRobotId, POLL_MS)
 
@@ -152,6 +157,23 @@ export function MedicalDashboard() {
     navigate('/medical')
   }
 
+  async function findRobotLocation() {
+    if (!selectedRobotId || activeSession || selectedRobot?.localization_active) return
+    if (!window.confirm(
+      '로봇 위치를 다시 찾을까요?\n로봇이 제자리에서 돌거나 앞뒤로 움직일 수 있으니 주변을 비워주세요.',
+    )) return
+    setLocationBusy(true)
+    setLocationNotice(null)
+    try {
+      await sendOrder(selectedRobotId, 'localize', 'run')
+      setLocationNotice('로봇이 위치를 찾기 시작했습니다.')
+    } catch {
+      setLocationNotice('위치 찾기 요청을 보내지 못했습니다. 잠시 후 다시 시도하세요.')
+    } finally {
+      setLocationBusy(false)
+    }
+  }
+
   // 초회 로딩: robots 가 상태 전이의 뼈대다. 이것만 있으면 화면을 그릴 수 있다.
   if (robots.loading && !robots.data) {
     return <p>불러오는 중…</p>
@@ -232,6 +254,35 @@ export function MedicalDashboard() {
             />
           </div>
       )}
+      {selectedRobotId && (
+        <section className="card medical-location-control">
+          <div>
+            <div className="card-title">로봇 위치 다시 찾기</div>
+            <p>
+              지도에서 로봇 위치가 실제와 다를 때 사용하세요.
+              로봇이 주변을 확인하며 잠시 움직일 수 있습니다.
+            </p>
+          </div>
+          <div className="medical-location-control__action">
+            <strong>
+              {selectedRobot.localization_active ? '위치를 찾는 중입니다' : '필요할 때만 실행하세요'}
+            </strong>
+            <button
+              type="button"
+              className="btn"
+              disabled={locationBusy || activeSession != null
+                || !teleop.robotConnected || mode !== 'auto'
+                || selectedRobot.system_state !== 'active'
+                || selectedRobot.localization_active}
+              onClick={findRobotLocation}
+            >
+              로봇 위치 다시 찾기
+            </button>
+          </div>
+          {locationNotice && <p className="medical-location-control__notice" role="status">{locationNotice}</p>}
+          {activeSession && <p className="medical-location-control__disabled">환자 안내 중에는 위치를 다시 찾을 수 없습니다.</p>}
+        </section>
+      )}
       {activeSession ? (
         // 환자가 확인된 뒤로는 카메라를 보여주지 않는다. QR 을 대는 순간을
         // 안내하려고 띄우는 화면이라 그 순간이 지나면 쓸모가 없고, 로봇도
@@ -240,13 +291,15 @@ export function MedicalDashboard() {
           session={activeSession}
           robot={selectedRobot}
           events={sessionEvents}
+          mode={mode}
+          robotConnected={teleop.robotConnected}
         />
       ) : (
         // 스캔 대기 순간엔 카메라가 카드 안에 들어가 있어야 "여기에 QR 을
         // 대세요" 안내와 시선이 한 곳에 모인다.
         <ArmedWaiting
           robot={selectedRobot}
-          cameraStreamUrl={CAMERA_STREAM_URL}
+          cameraStreamUrl={`/camera/${encodeURIComponent(selectedRobot.robot_id)}/front/stream`}
           onDisarmed={handleDisarmed}
         />
       )}
@@ -258,9 +311,17 @@ interface SessionViewProps {
   session: ActiveSession
   robot: Robot
   events: EventOut[]
+  mode: 'auto' | 'manual' | 'estop' | null
+  robotConnected: boolean
 }
 
-function SessionView({ session, robot, events }: SessionViewProps) {
+function SessionView({
+  session,
+  robot,
+  events,
+  mode,
+  robotConnected,
+}: SessionViewProps) {
   const derivedState = deriveRobotState(events, {
     session_id: session.session_id,
     robot_id: session.robot_id,
@@ -286,6 +347,15 @@ function SessionView({ session, robot, events }: SessionViewProps) {
           currentDestination={derivedDestination}
         />
       </div>
+      <GuidanceStartCard
+        session={session}
+        events={sessionOnlyEvents}
+        mode={mode}
+        robotConnected={robotConnected}
+      />
+      {derivedState === '안내중' && (
+        <GuidanceRearCamera robotId={session.robot_id} />
+      )}
       <ProgressStepper
         steps={session.steps}
         currentStepOrder={session.current_step_order}
@@ -311,7 +381,9 @@ function ScanConfirmation({ session }: { session: ActiveSession }) {
         {session.patient.name}
         <span className="scan-confirm-id mono">{session.patient.patient_id}</span>
       </div>
-      <div className="scan-confirm-hint">안내를 시작합니다…</div>
+      <div className="scan-confirm-hint">
+        환자가 확인되었습니다. 안내 시작 버튼을 눌러주세요.
+      </div>
     </div>
   )
 }

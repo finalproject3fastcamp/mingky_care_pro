@@ -1,0 +1,328 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+import { RobotMap, type WaypointMarker } from '../components/RobotMap'
+import { RobotModeControl } from '../components/RobotModeControl'
+import { TeleopPad } from '../components/TeleopPad'
+import { PinkyModel } from '../components/PinkyModelCard'
+import {
+  checkWaypoints,
+  getRobots,
+  getWaypoints,
+  sendOrder,
+  type WaypointCheckResult,
+  type WaypointSet,
+  type WaypointValue,
+} from '../lib/api'
+import { usePolling } from '../lib/usePolling'
+import { useRobotMode } from '../lib/useRobotMode'
+import { useTeleopSocket } from '../lib/useTeleopSocket'
+
+const POLL_MS = 3000
+const SETTLE_MS = 700
+const EMPTY: WaypointValue = { x: 0, y: 0, yaw: 0 }
+
+export function WaypointDashboard() {
+  const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
+  const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
+  const [source, setSource] = useState<WaypointSet | null>(null)
+  const [drafts, setDrafts] = useState<Record<string, WaypointValue>>({})
+  const [selectedName, setSelectedName] = useState('')
+  const [newName, setNewName] = useState('')
+  const [checkResult, setCheckResult] = useState<WaypointCheckResult | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [settled, setSettled] = useState(true)
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const robotList = useMemo(
+    () => (robots.data ?? []).filter((robot) => (
+      robot.robot_type === 'mobile' && robot.robot_id.startsWith('pinky-')
+    )),
+    [robots.data],
+  )
+  useEffect(() => {
+    if (robotList.length === 0) return
+    if (selectedRobotId && robotList.some((robot) => robot.robot_id === selectedRobotId)) return
+    setSelectedRobotId(
+      robotList.find((robot) => robot.robot_id === 'pinky-02')?.robot_id
+        ?? robotList[0].robot_id,
+    )
+  }, [robotList, selectedRobotId])
+
+  useEffect(() => {
+    getWaypoints()
+      .then((data) => {
+        setSource(data)
+        setDrafts(data.waypoints)
+        setSelectedName(Object.keys(data.waypoints)[0] ?? '')
+      })
+      .catch(() => setNotice('Waypoint 설정을 불러오지 못했습니다.'))
+  }, [])
+
+  const selectedRobot = robotList.find((robot) => robot.robot_id === selectedRobotId) ?? null
+  const teleop = useTeleopSocket(selectedRobotId)
+  const mode = useRobotMode(selectedRobotId, POLL_MS)
+  const selected = drafts[selectedName] ?? EMPTY
+  const activeSession = selectedRobot?.active_session_id != null
+
+  const statusByName = useMemo(
+    () => new Map(checkResult?.items.map((item) => [item.name, item.status]) ?? []),
+    [checkResult],
+  )
+  const markers: WaypointMarker[] = useMemo(
+    () => Object.entries(drafts).map(([name, waypoint]) => ({
+      name,
+      ...waypoint,
+      status: statusByName.get(name),
+      selected: name === selectedName,
+    })),
+    [drafts, selectedName, statusByName],
+  )
+
+  const teleopDrive = teleop.drive
+  const drive = useCallback((linear: number, angular: number) => {
+    teleopDrive(linear, angular)
+    setSettled(false)
+    if (settleTimer.current) clearTimeout(settleTimer.current)
+    if (linear === 0 && angular === 0) {
+      settleTimer.current = setTimeout(() => setSettled(true), SETTLE_MS)
+    }
+  }, [teleopDrive])
+
+  useEffect(() => () => {
+    if (settleTimer.current) clearTimeout(settleTimer.current)
+  }, [])
+
+  const teleopEnabled = mode === 'manual' && teleop.robotConnected && !activeSession
+  const captureEnabled = teleopEnabled && settled && teleop.pose !== null
+  const selectedCheck = checkResult?.items.find((item) => item.name === selectedName) ?? null
+  const testEnabled = Boolean(
+    selectedRobotId && teleop.robotConnected && !activeSession && mode === 'auto'
+      && selectedRobot?.system_state === 'active'
+      && selectedCheck && !['blocked', 'outside'].includes(selectedCheck.status),
+  )
+
+  function updateSelected(field: keyof WaypointValue, value: number) {
+    if (!selectedName || !Number.isFinite(value)) return
+    setDrafts((current) => ({
+      ...current,
+      [selectedName]: { ...(current[selectedName] ?? EMPTY), [field]: value },
+    }))
+    setCheckResult(null)
+  }
+
+  function addWaypoint() {
+    const name = newName.trim()
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      setNotice('Waypoint 이름은 영문, 숫자, 밑줄과 하이픈만 사용할 수 있습니다.')
+      return
+    }
+    if (drafts[name]) {
+      setNotice('이미 존재하는 이름입니다.')
+      return
+    }
+    const pose = teleop.pose ?? EMPTY
+    setDrafts((current) => ({ ...current, [name]: { ...pose } }))
+    setSelectedName(name)
+    setNewName('')
+    setCheckResult(null)
+    setNotice(`${name} 초안을 추가했습니다.`)
+  }
+
+  function capturePose() {
+    if (!captureEnabled || !teleop.pose || !selectedName) return
+    setDrafts((current) => ({ ...current, [selectedName]: { ...teleop.pose! } }))
+    setCheckResult(null)
+    setNotice(`${selectedName}에 현재 AMCL 위치를 캡처했습니다.`)
+  }
+
+  async function runCheck() {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const result = await checkWaypoints(drafts)
+      setCheckResult(result)
+      setNotice(result.ok ? 'Waypoint Check를 통과했습니다.' : '도달 불가 좌표가 있습니다.')
+    } catch {
+      setNotice('Waypoint Check 요청에 실패했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function testDrive() {
+    if (!testEnabled || !selectedRobotId) return
+    if (!window.confirm(`${selectedRobotId}를 ${selectedName}(으)로 시험 주행할까요?`)) return
+    setBusy(true)
+    try {
+      await sendOrder(selectedRobotId, 'goto_pose', JSON.stringify({ name: selectedName, ...selected }))
+      setNotice('시험 주행 명령을 보냈습니다. 지도 경로와 비상정지를 확인하세요.')
+    } catch {
+      setNotice('시험 주행 명령을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function exportYaml() {
+    if (!source) return
+    const lines = ['# Waypoint 도구에서 내보낸 초안', 'visit_waypoints:']
+    for (const [visit, mapping] of Object.entries(source.visit_waypoints)) {
+      lines.push(`  ${visit}:`)
+      for (const [kind, name] of Object.entries(mapping)) {
+        lines.push(`    ${kind}: ${name ?? 'null'}`)
+      }
+    }
+    lines.push('', 'waypoints:')
+    for (const [name, waypoint] of Object.entries(drafts)) {
+      lines.push(`  ${name}:`)
+      lines.push(`    x: ${waypoint.x.toFixed(6)}`)
+      lines.push(`    y: ${waypoint.y.toFixed(6)}`)
+      lines.push(`    yaw: ${waypoint.yaw.toFixed(6)}`)
+    }
+    const blob = new Blob([`${lines.join('\n')}\n`], { type: 'text/yaml' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${source.map_name}_waypoints.yaml`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="waypoint-dashboard">
+      <header className="waypoint-page-header">
+        <div>
+          <span className="waypoint-page-header__eyebrow">ENGINEER TOOL</span>
+          <h1>Waypoint 관리</h1>
+          <p>로봇을 직접 이동시킨 뒤 현재 AMCL 위치를 캡처하고 검사합니다.</p>
+        </div>
+      </header>
+
+      <section className="waypoint-robot-picker" aria-label="작업 로봇 선택">
+        <div className="waypoint-robot-picker__heading">
+          <strong>작업 로봇 선택</strong>
+          <span>한 번에 핑키 한 대만 조작할 수 있습니다.</span>
+        </div>
+        <div className="waypoint-robot-cards">
+          {robotList.map((robot) => {
+            const selected = robot.robot_id === selectedRobotId
+            const linkLabel = robot.link_state === 'online'
+              ? '온라인' : robot.link_state === 'offline' ? '오프라인' : '연결 이력 없음'
+            return (
+              <button
+                key={robot.robot_id}
+                type="button"
+                className={`waypoint-robot-card${selected ? ' selected' : ''}`}
+                aria-pressed={selected}
+                onClick={() => setSelectedRobotId(robot.robot_id)}
+              >
+                <PinkyModel />
+                <span className="waypoint-robot-card__content">
+                  <span className="waypoint-robot-card__top">
+                    <strong>{robot.display_name}</strong>
+                    <span className={`waypoint-robot-card__link waypoint-robot-card__link--${robot.link_state}`}>
+                      {linkLabel}
+                    </span>
+                  </span>
+                  <span className="waypoint-robot-card__meta">
+                    <code>{robot.robot_id}</code>
+                    <span>{robot.battery_percent == null ? '배터리 정보 없음' : `배터리 ${robot.battery_percent}%`}</span>
+                    {robot.active_session_id != null && <span>환자 안내 중</span>}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
+          {!robots.loading && robotList.length === 0 && (
+            <p className="waypoint-robot-picker__empty">등록된 핑키가 없습니다.</p>
+          )}
+        </div>
+      </section>
+
+      {activeSession && (
+        <div className="waypoint-safety-banner" role="alert">
+          이 로봇은 환자 안내 중입니다. 조회와 편집만 가능하며 조작·시험 주행은 차단됩니다.
+        </div>
+      )}
+      {notice && <div className="waypoint-notice" role="status">{notice}</div>}
+
+      <div className="waypoint-workspace">
+        <section className="waypoint-control-column">
+          {selectedRobotId && (
+            <RobotModeControl robotId={selectedRobotId} mode={mode} robotConnected={teleop.robotConnected} />
+          )}
+          <TeleopPad
+            drive={drive}
+            enabled={teleopEnabled}
+            disabledReason={activeSession
+              ? '환자 안내 중에는 수동 조작할 수 없습니다.'
+              : !teleop.robotConnected
+                ? '로봇이 관제에 연결되어 있지 않습니다.'
+                : mode === 'estop'
+                  ? '비상정지가 걸려 있습니다.'
+                  : '수동 조작 모드로 전환하세요.'}
+              />
+        </section>
+
+        <RobotMap
+          pose={teleop.pose}
+          live={teleop.robotConnected}
+          scan={teleop.scan}
+          particles={teleop.particles}
+          plan={teleop.plan}
+          waypoints={markers}
+          onSelectWaypoint={setSelectedName}
+        />
+
+        <section className="waypoint-editor card">
+          <div className="card-title">좌표 초안</div>
+          <div className="waypoint-add-row">
+            <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="새 waypoint 이름" />
+            <button type="button" className="btn" onClick={addWaypoint}>추가</button>
+          </div>
+          <label>
+            Waypoint
+            <select value={selectedName} onChange={(event) => setSelectedName(event.target.value)}>
+              {Object.keys(drafts).map((name) => <option key={name}>{name}</option>)}
+            </select>
+          </label>
+          <div className="waypoint-coordinate-grid">
+            {(['x', 'y', 'yaw'] as const).map((field) => (
+              <label key={field}>
+                {field}
+                <input type="number" step="0.001" value={selected[field]} onChange={(event) => updateSelected(field, Number(event.target.value))} />
+              </label>
+            ))}
+          </div>
+          <button type="button" className="btn primary waypoint-capture" disabled={!captureEnabled} onClick={capturePose}>
+            현재 위치를 Waypoint로 저장
+          </button>
+          {!captureEnabled && (
+            <p className="waypoint-help">수동 모드에서 로봇을 멈춘 뒤 약 {SETTLE_MS / 1000}초 기다리세요.</p>
+          )}
+          {selectedCheck && (
+            <div className={`waypoint-check-item waypoint-check-item--${selectedCheck.status}`}>
+              <strong>{selectedCheck.status.toUpperCase()}</strong>
+              <span>{selectedCheck.message}</span>
+              {selectedCheck.clearance != null && <span>벽 여유 {selectedCheck.clearance.toFixed(3)}m</span>}
+            </div>
+          )}
+          <div className="waypoint-editor-actions">
+            <button type="button" className="btn" disabled={busy} onClick={runCheck}>Waypoint Check</button>
+            <button type="button" className="btn primary" disabled={busy || !testEnabled} onClick={testDrive}>선택 지점 시험 주행</button>
+            <button type="button" className="btn" disabled={!source} onClick={exportYaml}>YAML 내보내기</button>
+          </div>
+          {checkResult && checkResult.conflicts.length > 0 && (
+            <div className="waypoint-conflicts">
+              <strong>간격 경고 {checkResult.conflicts.length}건</strong>
+              {checkResult.conflicts.slice(0, 5).map((item) => (
+                <span key={`${item.first}-${item.second}`}>{item.first} ↔ {item.second} · {item.distance.toFixed(3)}m</span>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}

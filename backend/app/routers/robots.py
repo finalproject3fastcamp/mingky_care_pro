@@ -8,9 +8,16 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import arming, heartbeat
+from .. import arming, heartbeat, qr_runtime, robot_runtime
 from ..db import get_pool
-from ..schemas import BatterySampleIn, RobotArmingOut, RobotOut
+from ..schemas import (
+    BatterySampleIn,
+    QrObservationIn,
+    QrObservationOut,
+    RobotArmingOut,
+    RobotHeartbeatIn,
+    RobotOut,
+)
 
 router = APIRouter(prefix="/robots", tags=["robots"])
 
@@ -29,7 +36,9 @@ _SQL = """
            b.battery_percent,
            b.recorded_at    AS battery_recorded_at,
            s.session_id     AS active_session_id,
-           s.patient_id     AS active_patient_id
+           s.patient_id     AS active_patient_id,
+           last_session.ended_at AS last_session_ended_at,
+           last_session.end_reason AS last_session_end_reason
     FROM robots r
     LEFT JOIN LATERAL (
         SELECT voltage, battery_percent, recorded_at
@@ -42,6 +51,13 @@ _SQL = """
     -- 이 조인이 행을 늘리지 않는다.
     LEFT JOIN guidance_sessions s
         ON s.robot_id = r.robot_id AND s.ended_at IS NULL
+    LEFT JOIN LATERAL (
+        SELECT ended_at, end_reason
+        FROM guidance_sessions
+        WHERE robot_id = r.robot_id AND ended_at IS NOT NULL
+        ORDER BY ended_at DESC
+        LIMIT 1
+    ) last_session ON TRUE
     ORDER BY r.robot_id
 """
 
@@ -88,6 +104,7 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
     그 순간의 생존 여부가 관심사가 아닌 경로에서 굳이 조회하지 않기 위해서다.
     """
     last_seen, offline = (seen or {}).get(row["robot_id"], (None, False))
+    runtime = robot_runtime.snapshot().get(row["robot_id"])
     return RobotOut(
         **dict(row),
         armed_at=armed_map.get(row["robot_id"]),
@@ -97,6 +114,9 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
         # 링크가 없다. 이걸 두절로 표시하면 타임라인이 오탐으로 덮인다.
         link_state=("unknown" if last_seen is None
                     else "offline" if offline else "online"),
+        system_state=runtime.system_state if runtime else "unknown",
+        localization_active=runtime.localization_active if runtime else False,
+        runtime_reported_at=runtime.reported_at if runtime else None,
     )
 
 
@@ -141,7 +161,10 @@ async def arm_robot(robot_id: str) -> RobotOut:
                     status_code=409,
                     detail=f"robot busy with session {row['active_session_id']}")
             seen = heartbeat.snapshot().get(robot_id)
-            if seen is not None and seen[1]:
+            if seen is None:
+                raise HTTPException(
+                    status_code=409, detail="robot connection is unknown")
+            if seen[1]:
                 raise HTTPException(status_code=409, detail="robot is offline")
             percent = row["battery_percent"]
             if percent is None or percent < MIN_BATTERY_PERCENT:
@@ -194,7 +217,9 @@ async def get_arming(robot_id: str) -> RobotArmingOut:
 
 
 @router.post("/{robot_id}/heartbeat", status_code=204)
-async def post_heartbeat(robot_id: str) -> Response:
+async def post_heartbeat(
+    robot_id: str, body: RobotHeartbeatIn | None = None,
+) -> Response:
     """로봇 생존 신호.
 
     게이트웨이의 이벤트 큐를 타지 않는 별도 경로다. 실패하면 로봇 쪽에서
@@ -214,6 +239,9 @@ async def post_heartbeat(robot_id: str) -> Response:
             raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
     heartbeat.touch(robot_id)
+    if body is not None:
+        robot_runtime.update(
+            robot_id, body.system_state, body.localization_active)
     return Response(status_code=204)
 
 
@@ -242,3 +270,28 @@ async def post_battery(robot_id: str, sample: BatterySampleIn) -> Response:
     if not inserted:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
     return Response(status_code=204)
+
+
+@router.post("/{robot_id}/qr-observation", status_code=204)
+async def post_qr_observation(
+    robot_id: str, observation: QrObservationIn,
+) -> Response:
+    """후방 QR 거리 최신값을 갱신한다. 이벤트·DB에는 저장하지 않는다."""
+    if not heartbeat.is_tracked(robot_id):
+        raise HTTPException(status_code=409, detail="robot is not connected")
+    qr_runtime.update(robot_id, observation.visible, observation.distance)
+    return Response(status_code=204)
+
+
+@router.get("/{robot_id}/qr-observation", response_model=QrObservationOut)
+async def get_qr_observation(robot_id: str) -> QrObservationOut:
+    """관제 화면에 현재 QR 인식 여부와 거리만 제공한다."""
+    observation = qr_runtime.get(robot_id)
+    if observation is None:
+        return QrObservationOut(robot_id=robot_id)
+    return QrObservationOut(
+        robot_id=robot_id,
+        visible=observation.visible,
+        distance=observation.distance,
+        observed_at=observation.observed_at,
+    )

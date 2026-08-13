@@ -5,7 +5,7 @@ Mingky Care 프로젝트의 통합 실행 설정과 병원 waypoint를 관리하
 ## 운영 통합 실행
 
 실제 로봇 베이스, Nav2, 속도 명령 중재기, 배터리 감시, 비상정지 안전 게이트,
-Guide Manager를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
+Guide Manager, Navigation Manager와 LCD 상태 표시를 한 번에 실행합니다. 배터리 publisher, 이벤트 gateway와 원격
 조작 bridge·모드 관리자·속도 제한기는 로봇 설치 시 등록한 systemd 상시
 서비스를 사용합니다.
 
@@ -14,10 +14,68 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
   robot_id:=pinky-01 backend_url:=https://mingkycarepro.site/api
 ```
 
+통합 launch는 전방 QR 카메라, 후방 USB 카메라와 후방 QR 거리 측정을 함께
+실행합니다. 원본 영상은 로봇 내부의 QR 거리 측정에 사용하고, 관제 화면을 연
+동안에만 최대 640px·10 FPS·JPEG 품질 60으로 인코딩합니다. `robot_id`에 따라
+`pinky-01`은 `pinky_6294`, `pinky-02`는 `pinky_15e2`의 후방 카메라 보정값을
+자동으로 사용합니다.
+
+```text
+전방 MJPEG  http://127.0.0.1:8091/stream
+후방 MJPEG  http://127.0.0.1:8092/stream
+```
+
+카메라가 없는 개발 환경에서는 각각 끌 수 있습니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  start_qr_reader:=false start_rear_camera_stream:=false
+```
+
+ArUco 검출기는 후방 QR 거리 측정과 같은 영상을 중복 처리하므로 통합 launch에
+포함하지 않습니다. 별도 시험이 필요할 때만 `mingky_aruco_detector` 패키지를
+직접 실행합니다. 등록되지 않은 새 로봇은 `camera_profile`에 보정 폴더 이름을
+명시합니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  robot_id:=pinky-03 camera_profile:=pinky_abcd
+```
+
+대역폭을 더 낮추려면 다음 인자를 사용합니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  camera_preview_max_width:=320 camera_preview_max_fps:=2.0 \
+  camera_preview_jpeg_quality:=55
+```
+
 실로봇 기본값은 CSI QR 카메라와 LiDAR 적응형 복구를 함께 실행합니다. QR
 Reader는 인식 후 백엔드에서 받은 세션을 Guide Manager로 전달하며, 일반
 주행이 실패하면 적응형 복구가 안전한 임시 탈출 지점을 찾아 원래 목표를 다시
 시도합니다. 전역 경로 계획기는 검증된 `navfn`을 그대로 사용합니다.
+
+Guide Manager는 환자 세션과 검사실 순서를 관리합니다. 엔지니어 화면의 저장
+Waypoint·임시 좌표 시험 주행은 별도 Navigation Manager가 담당합니다. 시험
+주행은 한 번에 하나만 허용하며 환자 안내, 저전압 또는 비상정지 상태에서는
+시작하지 않습니다. 시험 중 환자 세션이 확인되면 시험 목표를 취소합니다.
+
+LCD는 환자 확인, `출발 위치 → X-ray` 또는 `X-ray → CT` 안내, 검사실 도착,
+대기 장소 이동·도착과 안내 완료를 표시합니다. 비상정지와 배터리 부족은 안내
+문구보다 우선합니다. LCD를 쓰지 않는 개발 PC에서는
+`start_lcd_status:=false`를 전달합니다. 같은 SPI 장치를 사용하는
+`pinky_emotion emotion_server`와 동시에 실행하면 안 됩니다.
+
+로봇 이미지의 기존 `battery` 명령도 LCD를 직접 초기화하므로 LCD 상태 노드와
+동시에 실행하면 안 됩니다. 빌드 후 아래 설치기를 한 번 실행하면 `battery`를
+ROS 토픽만 읽는 안전한 명령으로 교체합니다. 기존 LCD 표시 명령은
+`battery-lcd`로 보존하지만 LCD 상태 노드 실행 중에는 사용하지 마세요.
+
+```bash
+ros2 run mingky_bringup install_battery_command.sh
+source ~/.bashrc
+battery
+```
 
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
@@ -46,11 +104,26 @@ Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`�
 `mode_manager`와 `teleop_limiter`는 `fg-teleop.service`가 상시 실행합니다.
 통합 launch는 이 노드를 중복 실행하지 않고 `twist_mux`만 소유합니다.
 
+로봇 설치 스크립트는 통합 launch를 `mingky-system.service`로 등록합니다.
+엔지니어 시스템 관리 화면(`/engineer/system`)에서 실제 systemd 상태를 확인하고 가동·중지·재시작할
+수 있습니다. 이벤트 gateway, 배터리 publisher와 원격 조작 수신기는 이 유닛
+밖의 상시 서비스이므로 통합 시스템이 중지돼도 관제 명령과 상태 보고는
+유지됩니다. 활성 환자 안내 중에는 중지·재시작 명령을 서버와 로봇 양쪽에서
+거부합니다.
+
+같은 화면의 `AMCL 위치 재탐색`은 엔지니어가 명시적으로 실행합니다. 의료진은
+선택한 로봇 화면의 `로봇 위치 다시 찾기`로 같은 기능을 실행할 수 있습니다. 활성 안내
+세션 전체와 Waypoint 시험 주행 중에는 시작할 수 없고, 재탐색이 실행 중일 때도
+새 안내·시험 주행을 시작할 수 없습니다.
+
 ## QR 안내 상태머신 테스트
 
 QR을 인식하면 Guide Manager는 세션을 `patient_confirmed` 상태로 저장하고
-관제 출발 명령을 기다립니다. 관제 시작 버튼이 연결되기 전에는 현재 세션 ID를
-확인한 뒤 테스트 명령으로 동일한 출발 신호를 보낼 수 있습니다.
+`session.ready` 이벤트를 발행한 뒤 관제 출발 명령을 기다립니다. 의료진 화면에서
+로봇을 자동 주행 모드로 전환하고 **안내 시작**을 누르면 현재 세션 ID가
+HTTP 명령 큐와 Event Gateway를 거쳐 Guide Manager로 전달됩니다.
+
+아래 스크립트는 대시보드 없이 ROS 배관만 점검할 때 사용합니다.
 
 ```bash
 ros2 topic echo --once /guide_manager/state
@@ -97,12 +170,13 @@ sudo apt install ros-jazzy-v4l2-camera
 ```
 
 후방 카메라는 번호가 바뀌는 `/dev/videoN` 대신 장치의 고정 by-id 경로를
-사용합니다. 기본 영상은 ArUco 처리에 맞춘 `640x480 mono8`이며 로봇 내부의
+사용합니다. 기본 영상은 QR 거리 측정에 맞춘 `640x480 mono8`이며 로봇 내부의
 다음 토픽으로 발행됩니다.
 
 ```text
 /rear_camera/image_raw
 /rear_camera/camera_info
+/rear_qr/observation
 ```
 
 실행과 확인:
@@ -111,6 +185,7 @@ sudo apt install ros-jazzy-v4l2-camera
 ros2 launch mingky_bringup rear_camera.launch.py
 ros2 topic hz /rear_camera/image_raw
 ros2 topic echo /rear_camera/camera_info --once
+ros2 topic echo /rear_qr/observation
 ```
 
 다른 장치를 시험할 때만 launch 인자로 덮어씁니다.

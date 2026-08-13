@@ -43,7 +43,56 @@ def test_qr_reader_is_enabled_for_robot_operation() -> None:
         'robot_id': '$(var robot_id)',
         'backend_url': '$(var backend_url)',
         'preview_port': '$(var qr_preview_port)',
+        'preview_max_fps': '$(var camera_preview_max_fps)',
+        'preview_max_width': '$(var camera_preview_max_width)',
+        'preview_jpeg_quality': '$(var camera_preview_jpeg_quality)',
     }
+
+
+def test_low_bandwidth_camera_streams_are_integrated() -> None:
+    root = _root()
+
+    assert _argument(root, 'qr_preview_port').get('default') == '8091'
+    assert _argument(root, 'rear_preview_port').get('default') == '8092'
+    assert _argument(root, 'front_camera_ready_timeout').get('default') == '15.0'
+    assert _argument(root, 'camera_preview_max_fps').get('default') == '10.0'
+    assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
+    qr_distance_arg = _argument(root, 'start_rear_qr_distance')
+    assert qr_distance_arg.get('default') == 'true'
+    assert _argument(root, 'rear_qr_size').get('default') == '0.028'
+
+    rear = next(
+        item for item in root.findall('include')
+        if item.get('file', '').endswith('/launch/camera_streams.launch.py')
+    )
+    assert rear.get('if') == '$(var start_rear_camera_stream)'
+    forwarded = {
+        item.get('name'): item.get('value') for item in rear.findall('arg')
+    }
+    assert forwarded['robot_id'] == '$(var robot_id)'
+    assert forwarded['camera_profile'] == '$(var camera_profile)'
+    assert forwarded['wait_for_front_camera'] == '$(var start_qr_reader)'
+    assert (
+        forwarded['front_camera_ready_timeout']
+        == '$(var front_camera_ready_timeout)'
+    )
+    assert (
+        forwarded['start_qr_distance']
+        == '$(var start_rear_qr_distance)'
+    )
+    assert forwarded['qr_size'] == '$(var rear_qr_size)'
+
+
+def test_aruco_detector_is_not_started_by_integrated_launch() -> None:
+    system_text = LAUNCH_FILE.read_text(encoding='utf-8')
+    camera_text = (
+        LAUNCH_FILE.parent / 'camera_streams.launch.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'mingky_aruco_detector' not in system_text
+    assert 'start_rear_aruco_detector' not in system_text
+    assert 'mingky_aruco_detector' not in camera_text
+    assert 'start_aruco_detector' not in camera_text
 
 
 def test_adaptive_recovery_is_the_integrated_default() -> None:
@@ -51,6 +100,33 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
 
     assert _argument(root, 'recovery_mode').get('default') == 'adaptive'
     assert _argument(root, 'planner_mode').get('default') == 'navfn'
+
+
+def test_non_clinical_navigation_has_a_separate_manager() -> None:
+    root = _root()
+    managers = {
+        item.get('name'): item
+        for item in root.findall('node')
+        if item.get('name') in ('guide_manager', 'navigation_manager')
+    }
+
+    assert set(managers) == {'guide_manager', 'navigation_manager'}
+    assert managers['guide_manager'].get('pkg') == 'mingky_guide_manager'
+    assert managers['navigation_manager'].get('pkg') == 'mingky_navigation_manager'
+
+
+def test_lcd_status_is_the_only_integrated_lcd_owner() -> None:
+    root = _root()
+
+    assert _argument(root, 'start_lcd_status').get('default') == 'true'
+    lcd_nodes = [
+        item for item in root.findall('node')
+        if item.get('name') == 'lcd_status'
+    ]
+    assert len(lcd_nodes) == 1
+    assert lcd_nodes[0].get('pkg') == 'mingky_lcd_status'
+    assert lcd_nodes[0].get('if') == '$(var start_lcd_status)'
+    assert all(item.get('pkg') != 'pinky_emotion' for item in root.findall('node'))
 
 
 def test_systemd_owned_publishers_are_not_duplicated() -> None:
@@ -116,3 +192,4 @@ def test_systemd_starts_the_teleop_control_nodes() -> None:
         'cat <<EOF', 1)[0]
     assert 'mingky-teleop-bridge' in enable_block
     assert 'fg-teleop' in enable_block
+    assert 'mingky-system' in enable_block

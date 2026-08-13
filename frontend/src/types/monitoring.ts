@@ -62,9 +62,21 @@ export interface Robot {
   battery_recorded_at: string | null
   active_session_id: number | null
   active_patient_id: string | null
+  last_session_ended_at: string | null
+  last_session_end_reason: string | null
   armed_at: string | null
   last_seen_at: string | null
   link_state: 'online' | 'offline' | 'unknown'
+  system_state: 'active' | 'activating' | 'deactivating' | 'inactive' | 'failed' | 'unknown'
+  localization_active: boolean
+  runtime_reported_at: string | null
+}
+
+export interface QrObservation {
+  robot_id: string
+  visible: boolean
+  distance: number | null
+  observed_at: string | null
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error'

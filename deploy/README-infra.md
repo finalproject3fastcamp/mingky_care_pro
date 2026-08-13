@@ -12,7 +12,7 @@
 
 ```
 deploy/robot/          로봇(핑키)에 들어가는 것
-  systemd/*.service      부팅 시 뜨는 7 개
+  systemd/*.service      부팅 시 뜨는 8 개
   bin/foxglove-remote.sh
   robot.env.example      로봇의 정체(MINGKY_ROBOT_ID)
   install.sh             ← 로봇에서 실행
@@ -41,8 +41,8 @@ deploy/cloud/          관제 서버에 들어가는 것
 `/etc/mingky/robot.env` 에 적는다. 유닛 파일에는 번호가 없다.
 
 ```
-pinky-01   SSH 22021   Foxglove 18765
-pinky-02   SSH 22022   Foxglove 18766
+pinky-01   SSH 22021   Foxglove 18765   Camera front/rear 18801/18802
+pinky-02   SSH 22022   Foxglove 18766   Camera front/rear 18803/18804
 pinky-03   SSH 22023   Foxglove 18767
 ```
 
@@ -69,6 +69,7 @@ sudo ./install.sh pinky-01        # 2호기는 pinky-02
 | `mingky-gateway` | 이벤트·heartbeat 상향, 명령 하향 |
 | `mingky-battery-pub` | 배터리 발행 |
 | `mingky-teleop-bridge` | 대시보드 실시간 조작·위치 |
+| `mingky-camera-tunnel` | 전·후방 저FPS MJPEG를 관제 서버로 역터널 |
 | `fg-bridge` `fg-tunnel` | Foxglove 관측 (필요할 때만) |
 | `fg-teleop` | 주행 모드 관리·원격 조작 속도 상한 (상시) |
 
@@ -88,7 +89,7 @@ sudo ./install.sh pinky-01        # 2호기는 pinky-02
 열도록 제한한다 — 이게 없으면 로봇 하나가 아무 포트나 열 수 있다.
 
 ```
-restrict,port-forwarding,permitlisten="22021" ssh-ed25519 AAAA... pinky-01-tunnel
+restrict,port-forwarding,permitlisten="127.0.0.1:22021",permitlisten="127.0.0.1:18765",permitlisten="127.0.0.1:18801",permitlisten="127.0.0.1:18802" ssh-ed25519 AAAA... fgtunnel-pinky-01
 ```
 
 **Wi-Fi 자동 접속.** 저장소로 옮길 수 없는 기기별 설정이다.

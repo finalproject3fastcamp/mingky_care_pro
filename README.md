@@ -1,4 +1,4 @@
-# AI 기반 대학병원 환자 안내 및 약국 자동 조제 로봇 시스템
+# 대학병원 안내·조제 로봇 (Mingky Care)
 
 Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연동하여
 환자의 병원 이용 전 과정을 지원하는 AI 기반 스마트 병원 서비스 프로젝트입니다.
@@ -40,59 +40,114 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 ```
 .
-├── pinky/                   # Pinky 기본 ROS2 패키지
-├── omx/                     # OMX 제어·모방학습
-├── mingky_ros/              # 프로젝트 전용 ROS2 패키지
-│   ├── mingky_interfaces/   # 공통 msg, srv, action
-│   ├── mingky_qr_reader/    # 후방 웹캠 기반 QR 인식
-│   ├── mingky_guide_manager/# 환자 안내 절차와 상태 관리
-│   ├── mingky_event_gateway/# 이벤트 전달 (로컬 큐 + 재시도)
-│   └── mingky_bringup/      # 프로젝트 통합 launch 및 설정
-├── backend/                 # FastAPI 수집·조회 서버
-├── frontend/                # React 기반 관제 대시보드
-├── database/                # PostgreSQL 스키마와 초기 데이터
-├── config/                  # 서비스 간 공유 설정 (event_codes.yaml)
-├── docs/                    # 설계 문서와 다이어그램
-└── README.md
+├── pinky/         # Pinky 기본 ROS2 패키지 (pinklab-art/pinky_pro 기반)
+├── omx/           # OMX 제어 · 모방학습
+├── mingky_ros/    # 프로젝트 전용 ROS2 패키지 모음
+│   ├── mingky_guide_manager/   # 환자 안내 절차와 상태 관리
+│   ├── mingky_qr_reader/       # 후방 웹캠 기반 QR 인식
+│   ├── mingky_event_gateway/   # 이벤트 전달 (로컬 큐 + 재시도)
+│   ├── mingky_bringup/         # 프로젝트 통합 launch 및 설정
+│   └── ...                     # 그 외 teleop · battery · aruco 등
+├── backend/       # FastAPI 수집·조회 서버
+├── frontend/      # React 관제 대시보드
+├── database/      # PostgreSQL 스키마와 초기 데이터
+├── config/        # 서비스 간 공유 설정 (event_codes.yaml)
+├── deploy/        # 관제 서버 배포 · 인프라 스크립트
+├── tools/         # 진단 · 캘리브레이션 · 보조 도구
+└── docs/          # 설계 문서와 다이어그램
 ```
 
-각 파트의 상세 사용법과 오픈소스 출처는 하위 README를 참고한다.
+## 5. 문서
 
-| 파트 | 문서 | 기반 오픈소스 |
-| --- | --- | --- |
-| Pinky | [pinky/README.md](pinky/README.md) | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
-| OMX | [omx/README.md](omx/README.md) | [huggingface/lerobot](https://github.com/huggingface/lerobot) |
-| Mingky ROS | [mingky_ros/README.md](mingky_ros/README.md) | 프로젝트 전용 패키지 |
-| Backend | [backend/README.md](backend/README.md) | FastAPI · asyncpg |
+> **[GitHub Wiki](https://github.com/finalproject3fastcamp/mingky_care_pro/wiki)** — 회의록, 실험 기록, 데모 영상 등 프로젝트 히스토리 아카이브
 
-운영·디버깅 문서
+파트별 상세 사용법과 오픈소스 출처는 하위 README를 참고한다.
 
-| 문서 | 내용 |
-| --- | --- |
-| [docs/monitoring-spec.md](docs/monitoring-spec.md) | 관제 기능 스펙과 기술 스택 결정 배경 |
-| [config/event_codes.yaml](config/event_codes.yaml) | **이벤트 코드 정본.** 발행 가능한 목록과 payload 형태 |
-| **[docs/robot-onboarding.md](docs/robot-onboarding.md)** | **로봇을 처음 쓰는 사람이 따라 하는 순서** |
-| [docs/omx-imitation-learning.md](docs/omx-imitation-learning.md) | OMX 모방학습을 어떻게 돌렸는지 (데이터·학습·평가와 겪은 문제) |
-| [docs/infra-setup.md](docs/infra-setup.md) | 네트워크·도메인·시간 동기화·로봇 복구 |
-| [docs/nav2-debugging.md](docs/nav2-debugging.md) | 주행 문제 진단 순서와 파라미터 튜닝 |
+| 파트                                         | 기반 오픈소스                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| [pinky/README.md](pinky/README.md)           | [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro) |
+| [omx/README.md](omx/README.md)               | [huggingface/lerobot](https://github.com/huggingface/lerobot)     |
+| [mingky_ros/README.md](mingky_ros/README.md) | 프로젝트 전용 패키지                                              |
+| [backend/README.md](backend/README.md)       | FastAPI · asyncpg                                                 |
+| [frontend/README.md](frontend/README.md)     | React · Vite · TypeScript                                         |
+| [deploy/README.md](deploy/README.md)         | Docker Compose · Nginx                                            |
 
-## 5. 개발 환경
+핵심 운영 문서
 
-- Ubuntu 24.04 / ROS2 Jazzy
-- Pinky Pro (SLAM Toolbox, Nav2)
-- OpenManipulator-X 리더 - 팔로워 암 (Dynamixel SDK)
+- [docs/robot-onboarding.md](docs/robot-onboarding.md) — 로봇을 처음 쓰는 사람이 따라 하는 순서
+- [config/event_codes.yaml](config/event_codes.yaml) — 이벤트 코드 정본 (발행 가능한 목록과 payload 형태)
+- [docs/system-communication.md](docs/system-communication.md) — 프론트·백엔드·로봇 통신 원칙과 데이터 흐름
+- [docs/monitoring-spec.md](docs/monitoring-spec.md) — 관제 기능 스펙과 기술 스택 결정 배경
+- [docs/omx-imitation-learning.md](docs/omx-imitation-learning.md) — OMX 모방학습을 어떻게 돌렸는지 (데이터·학습·평가와 겪은 문제)
+- [docs/infra-setup.md](docs/infra-setup.md) · [docs/nav2-debugging.md](docs/nav2-debugging.md) — 인프라 · 주행 진단
 
-## 6. 팀원 역할
+## 6. 기술 스택
 
-> 추후 업데이트 예정
+| 영역          | 기술                                                                 |
+| ------------- | -------------------------------------------------------------------- |
+| OS · 미들웨어 | Ubuntu 24.04 · ROS2 Jazzy                                            |
+| 자율주행      | Pinky Pro · Nav2 · SLAM Toolbox                                      |
+| 로봇팔        | OpenManipulator-X (리더-팔로워) · Dynamixel SDK · LeRobot (모방학습) |
+| 비전          | OpenCV · ArUco · YOLO                                                |
+| 백엔드        | FastAPI · Uvicorn · asyncpg · Pydantic                               |
+| 프론트엔드    | React 19 · Vite · TypeScript · React Router · Axios · Three.js       |
+| 데이터베이스  | PostgreSQL                                                           |
+| 인프라 · 배포 | Docker Compose · Nginx                                               |
 
-## 7. 기대 효과
+## 7. 팀원 역할
 
-- 대학병원 내 환자의 복잡한 진료 동선을 자동으로 안내하여 이동 편의성을 향상한다.
-- 의료진의 반복적인 환자 안내 및 약품 전달 업무를 일부 자동화한다.
-- 자율주행과 모방학습을 결합한 통합 AI 의료 서비스의 가능성을 검증한다.
-- 실제 병원 환경을 고려한 서비스 시나리오를 구현하고 검증한다.
-- ROS2, 컴퓨터 비전, 모방학습, 웹 서비스를 통합한 실무형 AI 로봇 프로젝트를 수행한다.
+<table>
+  <tr>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/soojjung">
+        <img src="https://github.com/soojjung.png" width="120" height="120" alt="정수진"/><br/>
+        <b>정수진</b>
+      </a>
+      <br/>
+      <sub>의료진 대시보드<br/>QR 스캔 파이프라인<br/>로봇 arming</sub>
+    </td>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/vanillaturtlechips">
+        <img src="https://github.com/vanillaturtlechips.png" width="120" height="120" alt="이명일"/><br/>
+        <b>이명일</b>
+      </a>
+      <br/>
+      <sub>엔지니어 대시보드<br/>백엔드 · 이벤트 게이트웨이<br/>teleop · safety · 인프라</sub>
+    </td>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/YANGJONGSU">
+        <img src="https://github.com/YANGJONGSU.png" width="120" height="120" alt="양종수"/><br/>
+        <b>양종수</b>
+      </a>
+      <br/>
+      <sub>OMX 조제 (로봇팔)<br/>모방학습<br/>초기 저장소 세팅</sub>
+    </td>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/wmkimDev">
+        <img src="https://github.com/wmkimDev.png" width="120" height="120" alt="김원민"/><br/>
+        <b>김원민</b>
+      </a>
+      <br/>
+      <sub>Mingky ROS 골격<br/>DB · waypoint · ArUco<br/>deploy · waypoint UI</sub>
+    </td>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/153yjw">
+        <img src="https://github.com/153yjw.png" width="120" height="120" alt="윤정우"/><br/>
+        <b>윤정우</b>
+      </a>
+      <br/>
+      <sub>배터리 저전압 감시<br/>충전소 복귀<br/>&nbsp;</sub>
+    </td>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/kimyunseo">
+        <img src="https://github.com/kimyunseo.png" width="120" height="120" alt="김윤서"/><br/>
+        <b>김윤서</b>
+      </a>
+      <br/>
+      <sub>YOLO 기반<br/>환자 인형 검출<br/>&nbsp;</sub>
+    </td>
+  </tr>
+</table>
 
 ## 라이선스
 

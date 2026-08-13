@@ -15,12 +15,32 @@
     <arg name="start_robot_base" default="true"/>
     <arg name="start_qr_reader" default="true"/>
     <arg name="qr_source" default="csi"/>
-    <arg name="qr_preview_port" default="0"/>
+    <!-- 전방은 QR Reader가 카메라를 단독 소유하면서 관제 미리보기도 제공한다. -->
+    <arg name="qr_preview_port" default="8091"/>
+    <arg name="start_rear_camera_stream" default="true"/>
+    <arg name="start_rear_qr_distance" default="true"/>
+    <arg name="rear_qr_size" default="0.028"/>
+    <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
+    <arg name="camera_profile" default=""/>
+    <arg name="rear_preview_port" default="8092"/>
+    <arg name="front_camera_ready_timeout" default="15.0"/>
+    <arg name="camera_preview_max_fps" default="10.0"/>
+    <arg name="camera_preview_max_width" default="640"/>
+    <arg name="camera_preview_jpeg_quality" default="60"/>
     <!-- 로봇 설치 시 gateway와 teleop bridge는 systemd 상시 서비스다. gateway를
          여기서도 띄우면 heartbeat·명령 폴링이 중복되므로 기본은 끈다. -->
     <arg name="start_event_gateway" default="false"/>
+    <!-- LCD SPI/GPIO는 이 노드가 단독 소유한다. pinky_emotion emotion_server와
+         동시에 실행하지 않는다. -->
+    <arg name="start_lcd_status" default="true"/>
     <arg name="use_buzzer" default="true"/>
+    <arg name="arrival_notice_sec" default="3.0"/>
     <arg name="use_led" default="true"/>
+    <!-- AMCL 전역 재탐색은 기존 위치 추정을 지우고 로봇을 움직이기까지 한다.
+         부팅 때마다 무조건 도는 건 위험해서(관제 팀 리뷰, 2026-08-12)
+         기본은 꺼두고, 관제 화면에서 운영자가 auto_localize/trigger 로
+         명시적으로 실행하게 한다. -->
+    <arg name="auto_localize_run_on_start" default="false"/>
 
     <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"
              if="$(var start_robot_base)">
@@ -48,6 +68,28 @@
         <arg name="robot_id" value="$(var robot_id)"/>
         <arg name="backend_url" value="$(var backend_url)"/>
         <arg name="preview_port" value="$(var qr_preview_port)"/>
+        <arg name="preview_max_fps" value="$(var camera_preview_max_fps)"/>
+        <arg name="preview_max_width" value="$(var camera_preview_max_width)"/>
+        <arg name="preview_jpeg_quality" value="$(var camera_preview_jpeg_quality)"/>
+    </include>
+
+    <!-- 후방 원본은 로봇 내부 ROS 토픽에 남기고, 관제에는 접속자가 있을 때만
+         축소 JPEG를 낮은 FPS로 보낸다. -->
+    <include file="$(find-pkg-share mingky_bringup)/launch/camera_streams.launch.py"
+             if="$(var start_rear_camera_stream)">
+        <arg name="robot_id" value="$(var robot_id)"/>
+        <arg name="camera_profile" value="$(var camera_profile)"/>
+        <arg name="start_qr_distance" value="$(var start_rear_qr_distance)"/>
+        <arg name="qr_size" value="$(var rear_qr_size)"/>
+        <arg name="rear_preview_port" value="$(var rear_preview_port)"/>
+        <!-- QR Reader가 Picamera2 초기화를 마쳤다는 신호를 받은 뒤 후방 카메라를
+             시작해 Pi 5 카메라 드라이버의 동시 초기화를 피한다. -->
+        <arg name="wait_for_front_camera" value="$(var start_qr_reader)"/>
+        <arg name="front_camera_ready_timeout"
+             value="$(var front_camera_ready_timeout)"/>
+        <arg name="preview_max_fps" value="$(var camera_preview_max_fps)"/>
+        <arg name="preview_max_width" value="$(var camera_preview_max_width)"/>
+        <arg name="preview_jpeg_quality" value="$(var camera_preview_jpeg_quality)"/>
     </include>
 
     <!-- 실제 /cmd_vel 의 유일한 발행자. Nav2/teleop 입력과 모터 출력을 분리한다. -->
@@ -70,11 +112,32 @@
         <param name="charging_waypoint" value="$(var charging_waypoint)" type="str"/>
         <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
+        <param name="arrival_notice_sec" value="$(var arrival_notice_sec)"/>
+        <param name="use_arrival_chime" value="$(var use_buzzer)"/>
+    </node>
+
+    <node pkg="mingky_navigation_manager" exec="navigation_manager"
+          name="navigation_manager" output="screen">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="map_name" value="$(var map_name)"/>
+    </node>
+
+    <node pkg="mingky_lcd_status" exec="lcd_status"
+          name="lcd_status" output="screen" if="$(var start_lcd_status)">
+        <param name="robot_id" value="$(var robot_id)"/>
     </node>
 
     <node pkg="mingky_event_gateway" exec="event_gateway"
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="backend_url" value="$(var backend_url)"/>
+    </node>
+
+    <!-- AMCL 이 active 되면 자동으로 위치를 잡는다. RViz 손조작 대체.
+         cmd_vel_localize_probe 는 twist_mux 의 별도 채널을 거친다. -->
+    <node pkg="mingky_localize" exec="auto_localize_node"
+          name="auto_localize_node" output="screen">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="auto_run_on_start" value="$(var auto_localize_run_on_start)"/>
     </node>
 </launch>

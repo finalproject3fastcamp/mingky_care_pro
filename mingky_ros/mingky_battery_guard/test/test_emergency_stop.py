@@ -5,6 +5,7 @@ from mingky_battery_guard.emergency_stop import EmergencyStop
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
+from std_msgs.msg import Bool
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -53,3 +54,14 @@ def test_engaged_state_survives_node_restart(tmp_path):
     assert second.reason == 'operator'
     second.release()
     second.destroy_node()
+
+
+def test_communication_loss_engages_persistent_stop(tmp_path):
+    node = make_gate(tmp_path / 'emergency.state')
+
+    node.on_communication(Bool(data=True))
+
+    assert node.engaged is True
+    assert node.reason == 'communication_loss'
+    node.release()
+    node.destroy_node()

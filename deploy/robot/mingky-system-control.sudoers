@@ -1,0 +1,4 @@
+# mingky-gateway가 통합 launch 유닛 하나만 제어하도록 허용한다.
+pinky ALL=(root) NOPASSWD: /usr/bin/systemctl start mingky-system.service
+pinky ALL=(root) NOPASSWD: /usr/bin/systemctl stop mingky-system.service
+pinky ALL=(root) NOPASSWD: /usr/bin/systemctl restart mingky-system.service

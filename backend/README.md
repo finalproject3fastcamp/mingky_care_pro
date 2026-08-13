@@ -47,9 +47,16 @@ uvicorn app.main:app --reload
 | --- | --- | --- |
 | `HEARTBEAT_OFFLINE_AFTER_SEC` | `15` | 이 시간 무응답이면 두절로 판정 |
 | `HEARTBEAT_CHECK_INTERVAL_SEC` | `5` | 판정 주기. 감지가 최대 이만큼 늦어진다 |
+| `SESSION_FAILURE_CANCEL_AFTER_SEC` | `30` | 이 시간 이상 두절·시스템 장애가 지속되면 활성 안내 취소 |
 
 기본값은 실측 전 잠정값이다. 주행 실측이 나오면 Nav2 목표 하나 소요 시간의
 절반 이하로 다시 잡는다.
+
+활성 안내 중 heartbeat 공백이 30초 이상 지속되면 백엔드가 세션을
+`robot_offline` 사유로 종료한다. heartbeat는 계속 오지만 통합 시스템 상태가
+`inactive` 또는 `failed`로 30초 이상 유지되면 `system_failure`로 종료한다.
+순간적인 Wi-Fi 손실과 정상적인 시작 전환을 취소로 오판하지 않으며, 종료된
+세션은 로봇이 복구되어도 자동으로 재개하지 않는다.
 
 > **단일 프로세스 전제.**
 > 워커나 레플리카를 2개 이상으로 늘리면 로봇 상태가 프로세스마다 갈라진다.

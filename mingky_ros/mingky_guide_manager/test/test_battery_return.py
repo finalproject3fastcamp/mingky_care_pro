@@ -1,5 +1,6 @@
 """저전압 세션 종료와 충전소 복귀 흐름의 회귀 테스트."""
 
+import json
 from types import SimpleNamespace
 
 from mingky_guide_manager.guide_manager_node import GuideManager
@@ -39,7 +40,10 @@ def ros():
 
 @pytest.fixture
 def manager():
-    node = GuideManager(parameter_overrides=[Parameter('robot_id', value='pinky-01')])
+    node = GuideManager(parameter_overrides=[
+        Parameter('robot_id', value='pinky-01'),
+        Parameter('use_arrival_chime', value=False),
+    ])
     node.nav = FakeNav()
     published = []
     node.events.publish = lambda code, payload=None, session_id=0, level=None: (
@@ -66,6 +70,27 @@ def test_low_battery_ends_active_session_before_dock_return(manager):
     assert node.session_state == GuideState.SESSION_NONE
     assert node.patient_id == ''
     assert len(node.nav.sent) == 1
+
+
+def test_long_communication_failure_ends_and_clears_active_session(manager):
+    node, published = manager
+    node.session_id = 43
+    node.session_state = GuideState.SESSION_GUIDING
+    node.patient_id = 'patient-1'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray']
+
+    node._on_cancel_session(String(data='robot_offline'))
+
+    assert published == [
+        ('session.ended', {'end_reason': 'robot_offline'}, 43),
+    ]
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_PAUSED
 
 
 def test_dock_success_never_emits_clinical_nav_success(manager):
@@ -122,12 +147,46 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
     assert node.nav.sent[0].pose.pose.position.x == 1.0
     assert node.robot_state == GuideState.ROBOT_MOVING
     assert node.session_state == GuideState.SESSION_GUIDING
+    assert node.previous_visit == ''
     assert node.current_visit == 'X-ray'
     assert published == [
+        ('session.ready', {'current_visit': 'X-ray'}, 71),
+        ('session.start_rejected', {'reason': 'session_mismatch'}, 71),
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
 
 
-def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
+def test_auto_localization_blocks_confirmed_session_departure(manager):
+    node, published = manager
+    node.session_id = 72
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = 'X-ray'
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node.visit_waypoints['X-ray'] = {'goal': 'xray_room_goal'}
+    node._on_localization_active(Bool(data=True))
+
+    node._on_start_guidance(String(data='72'))
+
+    assert node.nav.sent == []
+    assert published == [
+        ('session.start_rejected', {'reason': 'localization_active'}, 72)]
+
+
+def test_resumed_session_restores_previous_visit_for_display(manager):
+    node, _ = manager
+
+    node._on_session_start(SessionStart(
+        session_id=73,
+        patient_id='patient-resumed',
+        current_step_order=2,
+        visit_names=['X-ray', 'CT', '물리치료실'],
+    ))
+
+    assert node.previous_visit == 'X-ray'
+    assert node.current_visit == 'CT'
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+
+
+def test_clinical_goal_waits_for_notice_before_moving_to_waiting_spot(manager):
     node, published = manager
     node.session_id = 74
     node.current_visit = 'X-ray'
@@ -143,6 +202,15 @@ def test_clinical_goal_moves_to_waiting_spot_without_duplicate_arrival(manager):
 
     node._on_goal_result(
         succeeded, 5, 'xray_room_goal', False, 74)
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_ARRIVED
+    assert node._arrival_notice_timer is not None
+    assert published == [
+        ('nav.goal_succeeded', {'visit_name': 'X-ray'}, 74)]
+
+    node._finish_arrival_notice()
 
     assert len(node.nav.sent) == 1
     assert node.nav.sent[0].pose.pose.position.x == 3.0
@@ -171,6 +239,9 @@ def test_missing_waiting_spot_pauses_for_operator(manager):
     succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
 
     node._on_goal_result(succeeded, 8, 'ct_room_goal', False, 75)
+
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    node._finish_arrival_notice()
 
     assert node.nav.sent == []
     assert node.robot_state == GuideState.ROBOT_PAUSED
@@ -207,6 +278,9 @@ def test_explicit_no_waiting_spot_waits_at_clinical_goal(manager):
         session_id,
     )
 
+    assert node.session_state == GuideState.SESSION_ARRIVED
+    node._finish_arrival_notice()
+
     assert node.nav.sent == []
     assert node.robot_state == GuideState.ROBOT_WAITING
     assert node.session_state == GuideState.SESSION_IN_ROOM
@@ -215,8 +289,40 @@ def test_explicit_no_waiting_spot_waits_at_clinical_goal(manager):
     ]
 
 
-def test_start_guidance_rejects_unknown_visit_mapping(manager):
+def test_emergency_stop_cancels_pending_waiting_move(manager):
     node, _ = manager
+    node.session_id = 77
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_ARRIVED
+    node._schedule_waiting_move('X-ray', 77)
+
+    node._on_emergency_state(Bool(data=True))
+
+    assert node._arrival_notice_timer is None
+    assert node._pending_waiting_move is None
+    assert node.nav.sent == []
+
+
+def test_low_battery_cancels_pending_waiting_move(manager):
+    node, _ = manager
+    node.session_id = 78
+    node.current_visit = 'X-ray'
+    node.session_state = GuideState.SESSION_ARRIVED
+    node.percent = 35
+    node._schedule_waiting_move('X-ray', 78)
+
+    node._on_battery_low(Bool(data=True))
+
+    assert node._arrival_notice_timer is None
+    assert node._pending_waiting_move is None
+    assert all(
+        goal.pose.pose.position.x != 3.0
+        for goal in node.nav.sent
+    )
+
+
+def test_start_guidance_rejects_unknown_visit_mapping(manager):
+    node, published = manager
     node.session_id = 72
     node.session_state = GuideState.SESSION_CONFIRMED
     node.current_visit = '등록되지 않은 검사실'
@@ -225,6 +331,8 @@ def test_start_guidance_rejects_unknown_visit_mapping(manager):
 
     assert node.nav.sent == []
     assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert published == [
+        ('session.start_rejected', {'reason': 'missing_waypoint'}, 72)]
 
 
 def test_completed_schedule_does_not_restart_first_visit(manager):
@@ -241,6 +349,92 @@ def test_completed_schedule_does_not_restart_first_visit(manager):
 
     assert node.current_visit == ''
     assert node.nav.sent == []
+
+
+def test_waypoint_result_updates_robot_but_not_session_state(manager):
+    node, published = manager
+    node.session_state = GuideState.SESSION_NONE
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'started',
+        'waypoint_name': 'hall_corner',
+        'x': 1.25,
+        'y': -0.5,
+        'yaw': 1.2,
+    })))
+
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node.session_state == GuideState.SESSION_NONE
+    assert published == [('waypoint.test_started', {
+        'waypoint_name': 'hall_corner',
+        'x': 1.25,
+        'y': -0.5,
+        'yaw': 1.2,
+    }, 0)]
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'succeeded',
+        'waypoint_name': 'hall_corner',
+    })))
+
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_NONE
+    assert published[-1] == (
+        'waypoint.test_succeeded', {'waypoint_name': 'hall_corner'}, 0)
+
+
+def test_guidance_does_not_start_while_waypoint_test_is_active(manager):
+    node, published = manager
+    node.session_id = 80
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = 'X-ray'
+    node.visit_waypoints['X-ray'] = {'goal': 'xray_room_goal'}
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node._maintenance_nav_active = True
+
+    node._on_start_guidance(String(data='80'))
+
+    assert node.nav.sent == []
+    assert published == [
+        ('session.start_rejected', {'reason': 'waypoint_test_active'}, 80)]
+
+
+def test_nav2_unavailable_returns_session_to_confirmed_for_retry(manager):
+    node, published = manager
+    node.session_id = 86
+    node.session_state = GuideState.SESSION_CONFIRMED
+    node.current_visit = 'X-ray'
+    node.visit_waypoints['X-ray'] = {'goal': 'xray_room_goal'}
+    node.waypoints['xray_room_goal'] = {'x': 1.0, 'y': 2.0, 'yaw': 0.0}
+    node.nav.wait_for_server = lambda timeout_sec: False
+
+    node._on_start_guidance(String(data='86'))
+
+    assert node.nav.sent == []
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert published == [('nav.goal_aborted', {
+        'visit_name': 'X-ray',
+        'error_code': -3,
+    }, 86)]
+
+
+def test_rejected_second_waypoint_does_not_clear_active_robot_state(manager):
+    node, published = manager
+    node._maintenance_nav_active = True
+    node.robot_state = GuideState.ROBOT_MOVING
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'rejected',
+        'waypoint_name': 'second',
+        'error_code': -5,
+    })))
+
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert published == [('waypoint.test_failed', {
+        'waypoint_name': 'second',
+        'error_code': -5,
+    }, 0)]
 
 
 def test_waiting_qr_completes_step_and_starts_next_visit(manager):
@@ -266,6 +460,7 @@ def test_waiting_qr_completes_step_and_starts_next_visit(manager):
     ))
 
     assert node.current_step_order == 2
+    assert node.previous_visit == 'X-ray'
     assert node.current_visit == 'CT'
     assert node.session_state == GuideState.SESSION_GUIDING
     assert node.robot_state == GuideState.ROBOT_MOVING
@@ -295,6 +490,7 @@ def test_waiting_qr_completes_final_step_and_session(manager):
     ))
 
     assert node.current_step_order == 0
+    assert node.previous_visit == 'CT'
     assert node.session_state == GuideState.SESSION_COMPLETED
     assert node.robot_state == GuideState.ROBOT_IDLE
     assert node.nav.sent == []

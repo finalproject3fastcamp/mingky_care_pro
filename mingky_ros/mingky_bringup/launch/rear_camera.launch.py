@@ -3,6 +3,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -14,6 +15,7 @@ DEFAULT_VIDEO_DEVICE = (
 
 
 def generate_launch_description() -> LaunchDescription:
+    """Build the rear V4L2 camera launch description."""
     config_path = PathJoinSubstitution([
         FindPackageShare('mingky_bringup'),
         'config',
@@ -35,6 +37,11 @@ def generate_launch_description() -> LaunchDescription:
         default_value='mono8',
         description='ROS Image 인코딩. 컬러 확인이 필요하면 bgr8 사용',
     )
+    camera_info_url_arg = DeclareLaunchArgument(
+        'camera_info_url',
+        default_value='',
+        description='로봇별 후방 카메라 보정 YAML의 file:// URL',
+    )
 
     camera_node = Node(
         package='v4l2_camera',
@@ -48,6 +55,7 @@ def generate_launch_description() -> LaunchDescription:
                 'video_device': LaunchConfiguration('video_device'),
                 'camera_frame_id': LaunchConfiguration('camera_frame_id'),
                 'output_encoding': LaunchConfiguration('output_encoding'),
+                'camera_info_url': LaunchConfiguration('camera_info_url'),
             },
         ],
     )
@@ -56,5 +64,6 @@ def generate_launch_description() -> LaunchDescription:
         video_device_arg,
         camera_frame_id_arg,
         output_encoding_arg,
+        camera_info_url_arg,
         camera_node,
     ])

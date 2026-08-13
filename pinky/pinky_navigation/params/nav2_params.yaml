@@ -38,7 +38,21 @@ amcl:
     z_short: 0.05
     scan_topic: scan
     set_initial_pose: true
-    initial_pose: [0, 0, 0]
+    # amcl 은 initial_pose.x/.y/.z/.yaw 를 개별 파라미터로 선언한다.
+    # [0, 0, 0] 리스트 형식은 선언되지 않은 이름이라 조용히 무시되고,
+    # 로봇은 항상 (0,0,0)에서 시작한다고 확신한 채 켜졌다 (2026-08-11
+    # 로봇에서 ros2 param get 으로 직접 확인). 아래는 충전소 좌표.
+    #
+    # 핑키 1호·2호가 이 파일을 공유하는데, 두 충전소는 위치는 거의 같고
+    # yaw 만 약 176도 다르다 (실측, PINKY_HANDOFF.md). 그래서 이 값은 한쪽
+    # 로봇에겐 정확하고 다른 쪽에겐 약 180도 틀린 채로 시작할 수 있다.
+    # 그 오차를 잡아주는 게 auto_localize_node 의 역할이다 -- 이 값은
+    # "대충 맞는 시작점" 정도면 충분하고, 완벽하지 않아도 된다.
+    initial_pose:
+      x: 1.172951
+      y: 0.176816
+      z: 0.0
+      yaw: -1.125216
 
 bt_navigator:
   ros__parameters:
