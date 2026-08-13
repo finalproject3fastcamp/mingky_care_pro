@@ -158,6 +158,13 @@ def test_fire_evacuation_is_configurable_in_integrated_launch() -> None:
     assert 'fire_infer_server_url:=${MINGKY_FIRE_INFER_SERVER_URL:-}' in unit
 
 
+def test_systemd_uses_a_writable_working_directory() -> None:
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+
+    # lgpio creates notification files relative to the process directory.
+    assert 'WorkingDirectory=/home/pinky' in unit
+
+
 def test_systemd_owned_publishers_are_not_duplicated() -> None:
     root = _root()
 
