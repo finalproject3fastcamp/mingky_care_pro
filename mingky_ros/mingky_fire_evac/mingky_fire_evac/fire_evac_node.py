@@ -90,6 +90,11 @@ def _yaw_to_quat(yaw: float) -> tuple[float, float]:
     return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
+def _detections_confirmed(results, required: int) -> bool:
+    """Return whether enough frames in the rolling window detected fire."""
+    return sum(bool(result) for result in results) >= required
+
+
 class FireEvacNode(Node):
 
     def __init__(self, **kwargs):
@@ -111,12 +116,12 @@ class FireEvacNode(Node):
         # 둔다. 실패하면 이번 프레임은 그냥 건너뛴다 (아래 _detect_fire 참고).
         self.declare_parameter("infer_timeout_sec", 2.0)
         self.declare_parameter("conf_threshold", 0.3)
-        # 최근 window_size 프레임 중 consecutive_required 프레임 이상에서
+        # 최근 window_size 프레임 중 required_detections 프레임 이상에서
         # fire 가 감지돼야 확정한다. 순간적인 오탐(반사광 한 프레임 등)을
         # 거르기 위한 것 -- 저번에 실제 사진으로 검증했을 때 이 정도 비율이면
         # 랜덤노이즈/노을 같은 극단적 오탐 케이스가 아닌 이상 통과 안 한다.
         self.declare_parameter("window_size", 7)
-        self.declare_parameter("consecutive_required", 5)
+        self.declare_parameter("required_detections", 5)
         # 입원병동(ward_goal)과 CT실(ct_room_goal) 중앙점 (2026-08-12).
         # ward_goal(2.729600, 1.262527) 과 ct_room_goal(2.586657, 1.720020)
         # 의 평균이다. 지도 이미지(yun_map_highres_clean.pgm)로 사방 벽까지
@@ -141,7 +146,12 @@ class FireEvacNode(Node):
         self.infer_timeout_sec = float(get("infer_timeout_sec").value)
         self.conf_threshold = float(get("conf_threshold").value)
         self.window_size = int(get("window_size").value)
-        self.consecutive_required = int(get("consecutive_required").value)
+        self.required_detections = int(get("required_detections").value)
+        if self.window_size <= 0:
+            raise ValueError("window_size는 1 이상이어야 합니다.")
+        if not 1 <= self.required_detections <= self.window_size:
+            raise ValueError(
+                "required_detections는 1 이상 window_size 이하여야 합니다.")
         self.shelter = (
             float(get("shelter_x").value),
             float(get("shelter_y").value),
@@ -245,9 +255,10 @@ class FireEvacNode(Node):
             self._last_processed_at = frame_at
 
             self._recent.append(self._detect_fire(jpeg))
-            if sum(self._recent) >= self.consecutive_required:
+            if _detections_confirmed(
+                    self._recent, self.required_detections):
                 self.get_logger().warn(
-                    f"불꽃 연속 감지 ({sum(self._recent)}/{self.window_size}"
+                    f"불꽃 반복 감지 ({sum(self._recent)}/{self.window_size}"
                     "프레임) — 대피 이동을 시작합니다.")
                 self._set_evacuating(True)
                 threading.Thread(target=self._start_evacuation, daemon=True).start()
@@ -257,7 +268,7 @@ class FireEvacNode(Node):
 
         네트워크/서버 문제로 요청이 실패해도 이 노드를 죽이면 안 된다 --
         이번 프레임만 "미감지"로 취급하고 다음 프레임에서 다시 시도한다
-        (연속 프레임 확인 로직이 어차피 한두 번 실패는 감당하게 돼있다).
+        (최근 프레임 확인 로직이 어차피 한두 번 실패는 감당하게 돼있다).
         """
         try:
             resp = requests.post(

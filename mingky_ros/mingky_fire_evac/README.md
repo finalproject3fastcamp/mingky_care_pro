@@ -74,13 +74,13 @@ ros2 run mingky_fire_evac fire_evac_node --ros-args \
 | `infer_timeout_sec` | `2.0` | 추론 요청 타임아웃. 실패해도 노드는 안 죽고 그 프레임만 미감지 처리 |
 | `conf_threshold` | `0.3` | YOLO confidence 임계값 |
 | `window_size` | `7` | 최근 몇 프레임을 볼지 |
-| `consecutive_required` | `5` | `window_size` 중 몇 프레임 이상 fire여야 확정할지 (순간 오탐 필터) |
+| `required_detections` | `5` | 최근 `window_size`장 중 몇 장 이상 fire여야 확정할지 (순간 오탐·단일 미검출 필터) |
 | `shelter_x` / `shelter_y` / `shelter_yaw` | 실측값 | 대피 목표 좌표 (map 프레임). 대피소가 바뀌면 이 셋만 수정 |
 
 ## 동작
 
 1. `qr_reader_node`가 이미 JPEG로 압축해서 발행한 프레임을 그대로 HTTP로 전달 (디코드/재인코드 없음).
-2. 최근 `window_size`프레임 중 `consecutive_required`프레임 이상 fire 판정 → 확정.
+2. 최근 `window_size`프레임 중 `required_detections`프레임 이상 fire 판정 → 확정.
 3. 확정되면 `/navigate_to_pose/_action/cancel_goal`로 진행 중이던 목표(누가 보냈든 상관없이)를 강제 취소하고,
    자체 `NavigateToPose` 액션 클라이언트로 대피 좌표로 이동.
 4. 이동 중엔 `/fire_evac/active` (latched Bool)를 `true`로 발행 — `mingky_lcd_status`가 이걸 구독해서 긴급
