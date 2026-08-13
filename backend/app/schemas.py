@@ -163,6 +163,26 @@ class EventPage(BaseModel):
     items: list[EventOut]
 
 
+class UnknownCodeOut(BaseModel):
+    """config/event_codes.yaml 에 없는 코드가 얼마나 들어왔는가.
+
+    ingest 는 모르는 코드도 버리지 않고 원본을 그대로 적재한 뒤
+    system.unknown_event_code 마커를 함께 남긴다(규칙 4). 그래서 별도
+    수집 테이블 없이 마커를 집계하면 된다.
+
+    이 목록이 비어 있지 않다는 것은 로봇이 보내는 이벤트를 서버가
+    해석하지 못하고 있다는 뜻이다. 적재는 됐지만 상태 갱신은 일어나지
+    않았으므로(ingest 는 known 인 것만 _apply_state 한다) 화면·판정에서
+    통째로 빠져 있다.
+    """
+
+    event_code: str
+    robot_id: str | None = None
+    count: int
+    first_seen: datetime
+    last_seen: datetime
+
+
 class RobotOut(BaseModel):
     robot_id: str
     robot_type: str

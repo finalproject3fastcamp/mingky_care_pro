@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react'
 
 import { EventFilters } from '../components/EventFilters'
 import { EventTimeline } from '../components/EventTimeline'
+import { UnknownCodePanel } from '../components/UnknownCodePanel'
 import { api } from '../lib/api'
 import { EMPTY_FILTERS, toEventQuery } from '../lib/eventFilters'
 import type { EventFilterValues } from '../lib/eventFilters'
+import { listUnknownCodes } from '../lib/eventsApi'
 import { useEventFeed } from '../lib/useEventFeed'
+import { usePolling } from '../lib/usePolling'
 
 /** GET /robots 응답 중 필터가 쓰는 부분만. 전체 스키마는 schemas.py 의 RobotOut. */
 interface RobotSummary {
@@ -15,6 +18,7 @@ interface RobotSummary {
 
 const PAGE_SIZE = 50
 const POLL_MS = 3000
+const UNKNOWN_CODE_POLL_MS = 60000
 
 const UPDATED_FORMAT = new Intl.DateTimeFormat('ko-KR', {
   hour: '2-digit',
@@ -63,6 +67,13 @@ export function EngineerDashboard() {
   const feed = useEventFeed(
     { ...toEventQuery(filters), limit: PAGE_SIZE, offset },
     live ? POLL_MS : null,
+  )
+
+  // 미등록 코드는 몇 시간에 한 번 바뀌는 값이라 이벤트 피드와 같은 주기로
+  // 물어볼 이유가 없다. 집계 쿼리라 비싸기도 하다.
+  const unknownCodes = usePolling(
+    (signal) => listUnknownCodes({ signal }),
+    UNKNOWN_CODE_POLL_MS,
   )
 
   useEffect(() => {
@@ -129,6 +140,12 @@ export function EngineerDashboard() {
           </button>
         </div>
       </div>
+
+      <UnknownCodePanel
+        codes={unknownCodes.data ?? []}
+        loading={unknownCodes.loading}
+        error={unknownCodes.error}
+      />
 
       <EventFilters values={filters} onChange={handleFilterChange} robots={robots} />
 
