@@ -71,14 +71,34 @@ def percent_from_voltage(volt):
     return round(max(0.0, min(100.0, percent)), 2)
 
 
+# 초음파 유효 범위. min 은 센서 사양, max 는 변환식이 실제로 낼 수 있는 상한.
+#
+# 상한을 어림값(0.97 이나 1.0)으로 두면 안 된다. Nav2 RangeSensorLayer 의
+# clear_on_max_reading 이 "읽은 값 == max_range" 일 때만 코스트맵을 지우는데,
+# max_range 가 도달 불가능한 값이면 그 조건이 영원히 성립하지 않는다.
+# 장애물이 사라져도 코스트맵에 남는다.
+US_MIN_RANGE = 0.02
+US_MAX_RANGE = (4095 / 4096.0) - 0.03
+
+
 def distance_from_count(count):
     """ADC 값 -> 거리(m). pinkylib/ultrasonic.py 및 main_node.cpp 와 같은 식.
 
     이 식이 실제 거리와 어떤 관계인지는 확인된 바 없다. 그대로 옮겨 두되,
-    초음파를 실제로 쓰기 전에 특성 측정이 필요하다. 식이 낼 수 있는 최댓값은
-    약 0.97m 인데 main_node.cpp 는 max_range 를 3.0 으로 선언한다.
+    초음파를 실제로 쓰기 전에 특성 측정이 필요하다.
     """
     return (count / 4096.0) - 0.03
+
+
+def clamped_range(count):
+    """유효 범위로 자른 거리.
+
+    ADC 가 낮게 읽히면 식이 음수(-0.03m 까지)를 낸다. Range 메시지에서
+    min_range 미만은 "측정 불가" 로 해석되는데, 그 처리는 구독자마다 다르다.
+    Nav2 RangeSensorLayer 는 범위 밖 값을 clear_on_max_reading 등의 규칙으로
+    다루므로, 발행 측에서 정의된 구간으로 잘라 보낸다.
+    """
+    return min(max(distance_from_count(count), US_MIN_RANGE), US_MAX_RANGE)
 
 
 class AdcReader(Node):
@@ -202,11 +222,11 @@ class AdcReader(Node):
         msg.header.frame_id = 'ultrasonic_link'
         msg.radiation_type = Range.ULTRASOUND
         msg.field_of_view = 0.26
-        msg.min_range = 0.02
-        # 변환식이 낼 수 있는 최댓값. main_node.cpp 는 3.0 으로 선언하는데
+        msg.min_range = US_MIN_RANGE
+        # 변환식이 낼 수 있는 최댓값. 상류 main_node.cpp 는 3.0 으로 선언하는데
         # (4095/4096 - 0.03) = 0.97 이라 그 값은 나올 수 없다.
-        msg.max_range = 0.97
-        msg.range = float(distance_from_count(us))
+        msg.max_range = US_MAX_RANGE
+        msg.range = float(clamped_range(us))
         self.range_pub.publish(msg)
 
         self.ir_pub.publish(UInt16MultiArray(data=[int(v) for v in ir]))
