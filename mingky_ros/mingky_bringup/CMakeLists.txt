@@ -12,6 +12,8 @@ install(
   PROGRAMS
     scripts/run_waypoint_teleop.sh
     scripts/capture_waypoint.sh
+    scripts/battery_status.py
+    scripts/install_battery_command.sh
     scripts/run_nav2_manual_test.sh
     scripts/run_nav2_waypoint_test.sh
     scripts/start_guidance_test.sh
@@ -36,6 +38,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_system_launch test/test_system_launch.py)
   ament_add_pytest_test(test_waypoint_config test/test_waypoint_config.py)
+  ament_add_pytest_test(test_battery_command test/test_battery_command.py)
 endif()
 
 ament_package()
