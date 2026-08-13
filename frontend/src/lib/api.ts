@@ -1,5 +1,6 @@
 import axios from 'axios'
 
+import type { EventOut } from '../types/events'
 import type { ActiveSession, QrObservation, Robot } from '../types/monitoring'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -111,5 +112,33 @@ export async function checkWaypoints(
   waypoints: Record<string, WaypointValue>,
 ): Promise<WaypointCheckResult> {
   const { data } = await api.post<WaypointCheckResult>('/waypoints/check', { waypoints })
+  return data
+}
+
+/**
+ * 세션이 왜 그렇게 끝났는지 — 종료 직전 60초 창의 이벤트.
+ * schemas.py 의 SessionEndingContextOut 과 1:1.
+ */
+export interface SessionEndingContext {
+  session_id: number
+  ended_at: string | null
+  end_reason: string | null
+  /** 창 안에서 가장 이른 경고/오류. 인과의 시작점이다. */
+  lead_event_code: string | null
+  lead_event_at: string | null
+  /** 그 경고가 종료보다 몇 초 앞섰는가. */
+  lead_sec: number | null
+  /** 발생 순(ASC). 인과는 시간 순으로 읽는다. */
+  events: EventOut[]
+}
+
+export async function getSessionEndingContext(
+  sessionId: number,
+  options: { signal?: AbortSignal } = {},
+): Promise<SessionEndingContext> {
+  const { data } = await api.get<SessionEndingContext>(
+    `/sessions/${sessionId}/ending-context`,
+    { signal: options.signal },
+  )
   return data
 }

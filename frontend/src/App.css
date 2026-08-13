@@ -1841,3 +1841,61 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+/* ── 세션 종료 인과 ─────────────────────────────────────────────────── */
+
+.ending-summary {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ending-summary-reason {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ending-summary-lead {
+  color: var(--text-muted);
+}
+
+.ending-timeline {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ending-timeline-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+
+.ending-timeline-row.warning {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.ending-timeline-row.error {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.ending-timeline-offset {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ending-timeline-code {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
