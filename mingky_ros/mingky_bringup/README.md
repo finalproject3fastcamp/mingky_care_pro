@@ -66,6 +66,17 @@ LCD는 환자 확인, `출발 위치 → X-ray` 또는 `X-ray → CT` 안내, �
 `start_lcd_status:=false`를 전달합니다. 같은 SPI 장치를 사용하는
 `pinky_emotion emotion_server`와 동시에 실행하면 안 됩니다.
 
+로봇 이미지의 기존 `battery` 명령도 LCD를 직접 초기화하므로 LCD 상태 노드와
+동시에 실행하면 안 됩니다. 빌드 후 아래 설치기를 한 번 실행하면 `battery`를
+ROS 토픽만 읽는 안전한 명령으로 교체합니다. 기존 LCD 표시 명령은
+`battery-lcd`로 보존하지만 LCD 상태 노드 실행 중에는 사용하지 마세요.
+
+```bash
+ros2 run mingky_bringup install_battery_command.sh
+source ~/.bashrc
+battery
+```
+
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
 `charging_waypoint:=charging_station_1`을 전달합니다.
