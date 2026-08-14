@@ -4,3 +4,5 @@ qr_reader_node:
     debounce_seconds: 5.0
     http_timeout_seconds: 3.0
     usb_device_index: 0
+    session_retry_seconds: 1.0
+    session_retry_limit: 10

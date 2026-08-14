@@ -10,6 +10,7 @@ const RESULT_CODES = new Set([
   'session.start_rejected',
 ])
 const RESPONSE_TIMEOUT_MS = 15_000
+const SESSION_SYNC_DELAY_MS = 15_000
 
 const REJECTION_MESSAGE: Record<string, string> = {
   invalid_session_id: '안내 세션 번호가 올바르지 않습니다.',
@@ -38,6 +39,10 @@ export function GuidanceStartCard({ session, events, mode, robotConnected }: Pro
     (event) => event.event_code === 'session.ready',
   )
   const ready = latestReadyIndex >= 0
+  // 활성 세션이 있다는 것 자체가 QR 인식과 백엔드 등록은 끝났다는 뜻이다.
+  // session.ready 전에는 "QR 대기"가 아니라 로봇 내부 동기화 단계다.
+  const syncDelayed =
+    !ready && Date.now() - Date.parse(session.started_at) >= SESSION_SYNC_DELAY_MS
   const latestNavigationAttemptIndex = sessionEvents.findIndex(
     (event) =>
       event.event_code === 'nav.goal_sent' || event.event_code === 'nav.goal_aborted',
@@ -90,7 +95,9 @@ export function GuidanceStartCard({ session, events, mode, robotConnected }: Pro
   if (guidanceStarted || session.current_step_order == null) return null
 
   const disabledReason = !ready
-    ? '로봇이 QR 세션을 확인하기를 기다리는 중입니다.'
+    ? syncDelayed
+      ? 'QR 인식은 완료됐지만 로봇 세션 동기화가 지연되고 있습니다.'
+      : 'QR 인식이 완료되어 로봇과 세션 정보를 동기화하는 중입니다.'
     : !robotConnected
       ? '로봇 조작 연결이 끊겨 있어 안내를 시작할 수 없습니다.'
       : mode !== 'auto'
@@ -121,10 +128,14 @@ export function GuidanceStartCard({ session, events, mode, robotConnected }: Pro
     <section className="guidance-start card" aria-labelledby="guidance-start-title">
       <div className="guidance-start__copy">
         <span className="guidance-start__eyebrow">
-          {retrying ? '주행 재시도' : '환자 확인 완료'}
+          {!ready ? '환자 QR 확인 완료' : retrying ? '주행 재시도' : '환자 확인 완료'}
         </span>
         <h2 id="guidance-start-title">
-          {retrying
+          {!ready
+            ? syncDelayed
+              ? '로봇 세션 동기화가 지연되고 있습니다'
+              : '로봇과 세션 정보를 연결하고 있습니다'
+            : retrying
             ? '목적지 안내를 다시 시작할 수 있습니다'
             : '안내를 시작할 준비가 되었습니다'}
         </h2>

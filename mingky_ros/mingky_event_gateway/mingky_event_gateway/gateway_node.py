@@ -21,10 +21,12 @@
 
 import json
 import math
+import os
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import rclpy
 import requests
@@ -35,6 +37,7 @@ from std_srvs.srv import Trigger
 
 from mingky_interfaces.msg import Event, GuideState, QrObservation
 
+from . import inventory
 from .queue_store import QueueStore
 
 _LEVEL_NAME = {
@@ -67,6 +70,12 @@ TRANSIENT_STATUSES = frozenset({408, 429})
 # 전송 성공 없이 연속으로 폐기할 수 있는 상한. 이걸 넘으면 나쁜 이벤트가
 # 섞인 게 아니라 서버 계약이 어긋난 것이다. 계속 가려내면 큐 전체를 지운다.
 MAX_CONSECUTIVE_REJECTS = 5
+
+# 배터리 표본을 이 시간보다 오래 못 받았으면 낡은 것으로 본다.
+#
+# 발행 주기는 5초다. 세 번 연속 놓칠 때까지는 정상으로 보고, 그 뒤로는
+# 보내지 않는다. heartbeat 의 두절 판정(15초)과 같은 계산이다.
+BATTERY_STALE_AFTER_SEC = 20.0
 
 
 def matches_guided_patient(
@@ -127,6 +136,24 @@ class IntervalGate:
             return False
         self.last_attempt = now
         return True
+
+
+def battery_is_stale(sample_at, now, max_age_sec=BATTERY_STALE_AFTER_SEC) -> bool:
+    """마지막 표본이 너무 오래됐는가.
+
+    이 판정이 없으면 구독이 끊긴 뒤에도 캐시된 마지막 값을 계속 보낸다.
+    서버는 수신 시각으로 recorded_at 을 찍으므로 화면에는 '방금 들어온
+    최신값' 으로 보인다 — 9시간 전 값이 25초 전 것으로 표시됐다.
+
+    값과 신선도의 출처가 다르면 신선도 배지는 아무것도 보장하지 못한다.
+    낡은 값은 보내지 않는 쪽이 맞다. 화면에 '정보 없음' 이 뜨는 편이
+    틀린 숫자가 떠 있는 것보다 낫다.
+
+    한 번도 못 받았으면(None) 낡은 것으로 본다.
+    """
+    if sample_at is None:
+        return True
+    return (now - sample_at) > max_age_sec
 
 
 def send_outcome(status_code: int) -> str:
@@ -279,6 +306,10 @@ class EventGateway(Node):
         # 흐른다. 왕복이 200ms 인 것에 비하면 대기가 지연의 대부분이었다.
         # 서버 상한이 50초이고, 중간 프록시가 먼저 끊지 않도록 그보다 짧게 둔다.
         self.declare_parameter("order_wait_sec", 25.0)
+        # 인벤토리(실행 중인 코드 버전·노드 목록) 수집 주기. 0 이면 끈다.
+        # heartbeat 와 달리 느려도 된다 — 노드 목록과 커밋은 몇 시간에 한 번
+        # 바뀐다. 내용이 바뀌었을 때만 전송하므로 이 주기는 '확인 주기' 다.
+        self.declare_parameter("inventory_interval_sec", 30.0)
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -297,6 +328,9 @@ class EventGateway(Node):
             f"{base}/robots/{self.robot_id}/qr-observation")
         self.qr_observation_interval = float(
             self.get_parameter("qr_observation_interval_sec").value)
+        self.inventory_url = f"{base}/robots/{self.robot_id}/inventory"
+        self.inventory_interval = float(
+            self.get_parameter("inventory_interval_sec").value)
         self.orders_url = f"{base}/robots/{self.robot_id}/orders"
         self.order_interval = float(self.get_parameter("order_interval_sec").value)
         self.order_timeout = float(self.get_parameter("order_timeout_sec").value)
@@ -333,6 +367,11 @@ class EventGateway(Node):
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
         self._battery_percent = None
+        # 마지막으로 표본을 받은 시각. 값과 함께 봐야 한다 — 값만 들고 있으면
+        # 구독이 끊겨도 마지막 값을 영원히 재전송하게 된다.
+        self._battery_at = None
+        # 끊김 로그를 매 주기 찍지 않기 위한 전이 표시.
+        self._battery_stale_logged = False
         self._battery_wake = threading.Event()
         self._qr_lock = threading.Lock()
         self._qr_observation = None
@@ -342,6 +381,21 @@ class EventGateway(Node):
         self._guide_patient_id = ''
         self._localization_active = False
         self._fire_alarm_active = None
+
+        # 인벤토리 수집 상태.
+        #
+        # 그래프 조회는 ROS 타이머(실행기 스레드)에서 하고, /proc·git 은
+        # 별도 스레드에서 한다. rclpy 그래프 API 를 실행기 밖에서 부르지
+        # 않기 위해서다. 대신 그래프 결과만 락으로 건네준다.
+        self._inventory_lock = threading.Lock()
+        self._graph_snapshot: list[tuple[str, str]] = []
+        self._inventory_hash: str | None = None
+        self._cpu_total_pct: float | None = None
+        self._max_node_cpu_pct: float | None = None
+        self._max_node_cpu_name: str | None = None
+        # 서버가 "그 해시 모른다" 고 답하면 다음 주기에 다시 보낸다.
+        self._need_inventory = threading.Event()
+        self._git_cache = inventory.GitCache()
 
         # 관제 명령을 각 책임 노드에 넘기는 통로. 환자 세션은 guide_manager,
         # 비임상 Waypoint 시험은 navigation_manager가 받는다.
@@ -392,6 +446,15 @@ class EventGateway(Node):
             self._orders = threading.Thread(target=self._order_loop, daemon=True)
             self._orders.start()
 
+        self._inventory = None
+        if self.inventory_interval > 0:
+            # 그래프 조회만 실행기 스레드에서. 로컬 캐시를 읽는 것이라 빠르고
+            # I/O 가 없어 콜백을 붙들지 않는다.
+            self.create_timer(self.inventory_interval, self._sample_graph)
+            self._inventory = threading.Thread(
+                target=self._inventory_loop, daemon=True)
+            self._inventory.start()
+
         self.get_logger().info(
             f"event_gateway 시작 (대상={self.url}, 대기 {self.queue.count()}건)")
 
@@ -417,6 +480,7 @@ class EventGateway(Node):
             return
         with self._battery_lock:
             self._battery_voltage = float(msg.data)
+            self._battery_at = time.monotonic()
         self._battery_wake.set()
 
     def _on_battery_percent(self, msg: Float32) -> None:
@@ -425,6 +489,7 @@ class EventGateway(Node):
             return
         with self._battery_lock:
             self._battery_percent = int(round(max(0.0, min(100.0, msg.data))))
+            self._battery_at = time.monotonic()
         self._battery_wake.set()
 
     def _on_qr_observation(self, msg: QrObservation) -> None:
@@ -628,11 +693,7 @@ class EventGateway(Node):
             try:
                 response = session.post(
                     self.heartbeat_url,
-                    json={
-                        "system_state": self._system_state(),
-                        "localization_active": self._localization_active,
-                        "fire_alarm_active": self._fire_alarm_active,
-                    },
+                    json=self._heartbeat_payload(),
                     timeout=self.heartbeat_timeout)
             except requests.RequestException as exc:
                 if not failing:
@@ -661,17 +722,183 @@ class EventGateway(Node):
                 self.get_logger().info("heartbeat 복구")
                 failing = False
             guard.success()
+            self._consume_heartbeat_response(response)
 
         session.close()
+
+    def _heartbeat_payload(self) -> dict:
+        """5초마다 나가는 본문. 작고 자주 바뀌는 것만 싣는다.
+
+        인벤토리 본문(노드 목록·커밋)은 여기 넣지 않는다. 로봇 수 × 12회/분
+        이라 payload 를 키우면 안 되고, 그 값들은 몇 시간에 한 번 바뀐다.
+        해시만 실어 서버가 자기가 아는 것과 다른지 판단하게 한다.
+        """
+        with self._inventory_lock:
+            payload = {
+                "system_state": self._system_state(),
+                "localization_active": self._localization_active,
+                "fire_alarm_active": self._fire_alarm_active,
+                "inventory_hash": self._inventory_hash,
+                "cpu_total_pct": self._cpu_total_pct,
+                "max_node_cpu_pct": self._max_node_cpu_pct,
+                "max_node_cpu_name": self._max_node_cpu_name,
+            }
+        # 큐 적체는 통신 두절이나 서버 거부가 진행 중이라는 신호다.
+        # 상한(max_queue_rows)에 가까우면 이미 데이터가 버려지는 중이다.
+        payload["queue_pending"] = self.queue.count()
+        return payload
+
+    def _consume_heartbeat_response(self, response) -> None:
+        """서버가 인벤토리를 다시 달라고 하면 표시해둔다.
+
+        서버가 재시작해 메모리를 잃었거나 우리 전송이 유실된 경우다.
+        본문이 JSON 이 아니어도 heartbeat 는 계속돼야 하므로 조용히 넘긴다.
+        """
+        if response.status_code == 204 or not response.content:
+            return
+        try:
+            body = response.json()
+        except ValueError:
+            return
+        if isinstance(body, dict) and body.get("need_inventory"):
+            self._need_inventory.set()
+
+    # ------------------------------------------------------------- inventory
+
+    def _sample_graph(self) -> None:
+        """ROS 타이머. 그래프만 읽어 넘긴다.
+
+        `ros2 node list` 를 subprocess 로 부르지 않는다 — 호출마다 노드를
+        새로 띄우고, 그 자체가 CPU 포화에 기여한다. rclpy 는 이미 로컬에
+        들고 있는 그래프 캐시를 돌려주므로 I/O 가 없다.
+        """
+        try:
+            names = self.get_node_names_and_namespaces()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().debug(f"노드 그래프 조회 실패: {exc}")
+            return
+        with self._inventory_lock:
+            self._graph_snapshot = [(name, ns) for name, ns in names]
+
+    def _collect_inventory(self, previous_cpu: dict, elapsed: float) -> dict:
+        """이번 표본. 사실만 담는다 — 심각도 판정은 서버가 한다."""
+        with self._inventory_lock:
+            graph = list(self._graph_snapshot)
+
+        processes = inventory.scan_processes()
+        for process in processes:
+            process["cpu_pct"] = inventory.cpu_percent(
+                previous_cpu.get(process["pid"]),
+                process["cpu_seconds_total"],
+                elapsed)
+
+        return {
+            "node_graph": inventory.parse_node_graph(graph),
+            "processes": processes,
+            "workspaces": inventory.build_workspaces(processes, self._git_cache),
+            "ros_domain_id": int(os.environ.get("ROS_DOMAIN_ID", 0)),
+        }
+
+    def _inventory_loop(self) -> None:
+        """인벤토리 수집과 전송.
+
+        heartbeat 에는 해시만 싣고, 본문은 **바뀌었을 때만** 보낸다. 노드
+        목록과 커밋은 몇 시간에 한 번 바뀌는데 5초마다 보낼 이유가 없다.
+
+        서버가 heartbeat 응답으로 need_inventory 를 주면 다시 보낸다.
+        서버가 재시작해 메모리를 잃었거나 우리 전송이 유실된 경우다.
+        """
+        session = requests.Session()
+        previous_cpu: dict[int, float] = {}
+        previous_total = None
+        last_at = time.monotonic()
+        sent_hash = None
+
+        while not self._stop.wait(self.inventory_interval):
+            now = time.monotonic()
+            elapsed = now - last_at
+            last_at = now
+
+            try:
+                payload = self._collect_inventory(previous_cpu, elapsed)
+            except OSError as exc:
+                self.get_logger().warn(f"인벤토리 수집 실패: {exc}")
+                continue
+
+            previous_cpu = {
+                p["pid"]: p["cpu_seconds_total"] for p in payload["processes"]}
+
+            # 전체 CPU 는 /proc/stat 에서 따로 읽는다. 노드별 합이 아니다 —
+            # 노드 하나가 100% 여도 코어가 4개면 여유가 있다.
+            try:
+                current_total = inventory.parse_total_cpu(
+                    Path("/proc/stat").read_text())
+            except OSError:
+                current_total = None
+            total_pct = inventory.total_cpu_percent(previous_total, current_total)
+            previous_total = current_total
+
+            busiest = inventory.busiest_process(payload["processes"])
+            digest = inventory.inventory_hash(payload)
+
+            with self._inventory_lock:
+                self._inventory_hash = digest
+                self._cpu_total_pct = total_pct
+                self._max_node_cpu_pct = busiest["cpu_pct"] if busiest else None
+                self._max_node_cpu_name = (
+                    (busiest["matched_node_names"] or [None])[0]
+                    if busiest else None)
+
+            if digest == sent_hash and not self._need_inventory.is_set():
+                continue
+
+            payload["inventory_hash"] = digest
+            payload["reported_at"] = datetime.now(timezone.utc).isoformat()
+            if self._post_inventory(session, payload):
+                sent_hash = digest
+                self._need_inventory.clear()
+
+        session.close()
+
+    def _post_inventory(self, session: requests.Session, payload: dict) -> bool:
+        """실패해도 큐에 쌓지 않는다. 다음 주기가 곧 재시도다."""
+        try:
+            response = session.post(
+                self.inventory_url, json=payload, timeout=self.timeout)
+        except requests.RequestException as exc:
+            self.get_logger().debug(f"인벤토리 전송 실패: {exc}")
+            return False
+        if not response.ok:
+            self.get_logger().warn(
+                f"인벤토리 거부: HTTP {response.status_code}")
+            return False
+        return True
 
     # --------------------------------------------------------------- battery
 
     def _battery_payload(self) -> dict | None:
+        """보낼 표본. 낡았으면 None 을 돌려 전송 자체를 건너뛴다."""
         with self._battery_lock:
             voltage = self._battery_voltage
             percent = self._battery_percent
+            sample_at = self._battery_at
         if voltage is None and percent is None:
             return None
+        if battery_is_stale(sample_at, time.monotonic()):
+            # 구독이 끊겼거나 발행 노드가 죽었다. 마지막 값을 계속 보내면
+            # 서버가 그것을 최신값으로 기록해 화면이 조용히 거짓말을 한다.
+            if not self._battery_stale_logged:
+                age = time.monotonic() - sample_at if sample_at else None
+                self.get_logger().error(
+                    "배터리 표본이 끊겼습니다"
+                    + (f" ({age:.0f}초 경과)" if age else "")
+                    + ". 낡은 값을 보내지 않고 멈춥니다 — "
+                    "battery/voltage 발행 노드를 확인하세요.")
+                self._battery_stale_logged = True
+            return None
+        if self._battery_stale_logged:
+            self.get_logger().info("배터리 표본 복구")
+            self._battery_stale_logged = False
         return {"voltage": voltage, "battery_percent": percent}
 
     def _battery_loop(self) -> None:
@@ -697,6 +924,13 @@ class EventGateway(Node):
 
             payload = self._battery_payload()
             if payload is None:
+                # 표본이 없거나 낡았다. 이때도 실행 시각은 소비한다 —
+                # 안 그러면 남은 대기가 계속 0이 되어 스레드가 쉬지 않고
+                # 돈다(IntervalGate 와 같은 이유). 한 번이라도 보낸 뒤에만
+                # 해당한다. 첫 표본 전에는 last_sent 가 None 이라 wake 를
+                # 무기한 기다리므로 원래 돌지 않는다.
+                if last_sent is not None:
+                    last_sent = time.monotonic()
                 continue
             last_sent = time.monotonic()
             try:
@@ -977,6 +1211,8 @@ class EventGateway(Node):
             self._battery.join(timeout=2.0)
         if self._qr_sender is not None:
             self._qr_sender.join(timeout=2.0)
+        if self._inventory is not None:
+            self._inventory.join(timeout=2.0)
         if self._orders is not None:
             self._orders.join(timeout=2.0)
         self.queue.close()

@@ -1,0 +1,69 @@
+# 노드가 중복으로 떴을 때의 심각도.
+#
+# 판정을 로봇이 아니라 서버가 하는 이유는, 임계나 문구를 바꾸려고 로봇을
+# 재배포하는 상황을 만들지 않기 위해서다. 로봇은 "이 노드가 두 번 떴다" 는
+# 사실만 보고하고, 그게 얼마나 나쁜지는 여기서 정한다.
+#
+# 등급
+#   error    측정값이 오염되거나 주행이 불안정해진다. 조용히 틀린다.
+#   warning  자원을 낭비하지만 결과는 틀리지 않는다.
+#
+# 여기 없는 노드는 warning 으로 본다. 중복 자체가 정상은 아니기 때문이다.
+
+default_severity: warning
+default_reason: 중복으로 실행되어 자원을 낭비합니다
+
+nodes:
+  # ── 하드웨어를 단독 점유해야 하는 노드 ──────────────────────────────
+  # 두 프로세스가 같은 I2C 버스를 동시에 읽으면 측정값이 조용히 내려간다.
+  # 배터리 57% 오표시가 정확히 이 경로였다. 에러도 안 나고 값만 틀린다.
+  adc_reader:
+    severity: error
+    reason: I2C 에 동시에 접근해 측정값이 조용히 틀어집니다
+
+  battery_guard:
+    severity: error
+    reason: 저전압 판정이 두 번 일어나 안전 게이트가 어긋납니다
+
+  emergency_stop:
+    severity: error
+    reason: 정지 게이트가 둘이라 어느 쪽이 적용됐는지 알기 어렵습니다
+
+  lcd_status:
+    severity: error
+    reason: LCD 버스가 경합해 표시가 깨지고 I2C 가 막힙니다
+
+  # ── TF·주행에 영향을 주는 노드 ─────────────────────────────────────
+  joint_state_publisher:
+    severity: error
+    reason: TF 가 흔들려 Nav2 가 불안정해집니다
+
+  robot_state_publisher:
+    severity: error
+    reason: 같은 프레임을 두 번 발행해 TF 트리가 깨집니다
+
+  navigation_manager:
+    severity: error
+    reason: 목표가 두 번 발행돼 로봇이 예측하기 어렵게 움직입니다
+
+  guide_manager:
+    severity: error
+    reason: 상태머신이 둘이라 세션 상태가 갈라집니다
+
+  # ── 관제 연결 ──────────────────────────────────────────────────────
+  event_gateway:
+    severity: error
+    reason: 같은 이벤트가 두 번 적재되고 heartbeat 가 서로를 덮습니다
+
+  # ── 자원만 낭비하는 노드 ───────────────────────────────────────────
+  camera_image_streamer:
+    severity: warning
+    reason: 카메라가 중복으로 스트리밍되어 CPU 를 낭비합니다
+
+  aruco_detector:
+    severity: warning
+    reason: 인식이 두 번 돌아 CPU 를 낭비합니다
+
+  rear_qr_distance:
+    severity: warning
+    reason: 같은 관측을 두 번 보고합니다

@@ -1801,3 +1801,296 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ── 미등록 event_code ──────────────────────────────────────────────── */
+
+.unknown-code-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unknown-code-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+}
+
+.unknown-code-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+
+.unknown-code-robot {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.unknown-code-count {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ── 세션 종료 인과 ─────────────────────────────────────────────────── */
+
+.ending-summary {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ending-summary-reason {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ending-summary-lead {
+  color: var(--text-muted);
+}
+
+.ending-timeline {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ending-timeline-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+
+.ending-timeline-row.warning {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.ending-timeline-row.error {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.ending-timeline-offset {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ending-timeline-code {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ── 실행 중인 코드 / 인벤토리 ──────────────────────────────────────── */
+
+.card-subtitle {
+  margin-top: 14px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.inventory-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.inventory-alert {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.inventory-alert.error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-left: 3px solid var(--danger);
+}
+
+.inventory-workspaces {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inventory-workspaces li {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+}
+
+.inventory-workspace-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.inventory-dirty {
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.inventory-workspace-path {
+  font-size: 0.78rem;
+  color: var(--text-subtle);
+  overflow-wrap: anywhere;
+}
+
+.inventory-workspace-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.inventory-duplicates {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.inventory-duplicate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+}
+
+.inventory-duplicate.error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.inventory-duplicate.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.inventory-duplicate-reason {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.inventory-processes {
+  margin-top: 12px;
+  font-size: 0.82rem;
+}
+
+.inventory-processes summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.inventory-processes ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.inventory-processes li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.inventory-process-name {
+  overflow-wrap: anywhere;
+}
+
+.inventory-process-cpu {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.inventory-cpu-time {
+  color: var(--text-subtle);
+}
+
+/* ── 자원 지표 강조 ─────────────────────────────────────────────────── */
+
+.metric-warn {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.metric-error {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.metric-note {
+  font-size: 0.76rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* ── 충전/방전 예상 ─────────────────────────────────────────────────── */
+
+.battery-forecast {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.battery-forecast--charging {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.battery-forecast-time {
+  font-weight: 600;
+}
+
+/* 시간을 못 낸 이유와 기울기는 엔지니어만 본다. */
+.battery-forecast-reason,
+.battery-forecast-slope {
+  color: var(--text-subtle);
+  font-weight: 400;
+}
