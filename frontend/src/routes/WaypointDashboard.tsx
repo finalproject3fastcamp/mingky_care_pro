@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { RobotMap, type WaypointMarker } from '../components/RobotMap'
+import { HospitalMap3D, type WaypointMarker } from '../components/HospitalMap3D'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { TeleopPad } from '../components/TeleopPad'
 import { PinkyModel } from '../components/PinkyModelCard'
@@ -321,7 +321,7 @@ export function WaypointDashboard() {
               />
         </section>
 
-        <RobotMap
+        <HospitalMap3D
           pose={teleop.pose}
           live={teleop.robotConnected}
           scan={teleop.scan}
