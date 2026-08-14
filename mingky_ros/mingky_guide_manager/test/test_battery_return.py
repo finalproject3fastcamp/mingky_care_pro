@@ -94,6 +94,53 @@ def test_long_communication_failure_ends_and_clears_active_session(manager):
     assert node.robot_state == GuideState.ROBOT_PAUSED
 
 
+def test_medical_cancel_stops_navigation_and_returns_robot_to_idle(manager):
+    node, published = manager
+    node.session_id = 45
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    node.patient_id = 'patient-1'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray']
+    cancelled = []
+    node.navigation_cancel_pub = SimpleNamespace(
+        publish=lambda message: cancelled.append(message.data))
+
+    node._on_cancel_session(String(data=json.dumps({
+        'reason': 'aborted',
+        'session_id': 45,
+    })))
+
+    assert cancelled == [True]
+    assert published == [('session.ended', {'end_reason': 'aborted'}, 45)]
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_IDLE
+
+
+def test_medical_cancel_for_an_old_session_does_not_stop_current_session(manager):
+    node, published = manager
+    node.session_id = 46
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    cancelled = []
+    node.navigation_cancel_pub = SimpleNamespace(
+        publish=lambda message: cancelled.append(message.data))
+
+    node._on_cancel_session(String(data=json.dumps({
+        'reason': 'aborted',
+        'session_id': 45,
+    })))
+
+    assert cancelled == []
+    assert published == []
+    assert node.session_id == 46
+    assert node.session_state == GuideState.SESSION_GUIDING
+
+
 def test_fire_evacuation_ends_session_and_invalidates_navigation(manager):
     node, published = manager
     node.session_id = 44

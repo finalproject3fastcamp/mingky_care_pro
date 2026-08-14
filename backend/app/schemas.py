@@ -120,12 +120,14 @@ class OrderIn(BaseModel):
     """
 
     command: Literal[
-        "goto", "goto_pose", "start_session", "start_guidance", "set_mode",
+        "goto", "goto_pose", "start_session", "start_guidance",
+        "cancel_guidance", "set_mode",
         "localize", "system_start", "system_stop", "system_restart",
         "fire_alarm_reset",
     ]
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
-    # start_session 이면 patient_id, start_guidance 면 session_id,
+    # start_session 이면 patient_id,
+    # start_guidance/cancel_guidance 면 session_id,
     # set_mode 면 auto | manual | estop, 나머지 제어 명령은 run.
     #
     # 모드는 로봇이 정본을 갖는다. 여기서 보내는 것은 요청이고, 반영 여부는

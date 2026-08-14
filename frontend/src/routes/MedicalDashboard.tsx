@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
+import { GuidanceCancelCard } from '../components/GuidanceCancelCard'
 import { GuidanceStartCard } from '../components/GuidanceStartCard'
 import { GuidanceRearCamera } from '../components/GuidanceRearCamera'
 import { NotificationArea } from '../components/NotificationArea'
@@ -381,6 +382,10 @@ function SessionView({
         session={session}
         events={sessionOnlyEvents}
         mode={mode}
+        robotConnected={robotConnected}
+      />
+      <GuidanceCancelCard
+        session={session}
         robotConnected={robotConnected}
       />
       {derivedState === '안내중' && (

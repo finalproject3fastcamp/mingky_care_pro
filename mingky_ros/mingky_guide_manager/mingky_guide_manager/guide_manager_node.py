@@ -407,13 +407,34 @@ class GuideManager(Node):
             self._emergency_reason = msg.data
 
     def _on_cancel_session(self, msg: String) -> None:
-        """로봇 내부 안전 감시가 장기 장애를 판정하면 안내를 재개 없이 끝낸다."""
-        reason = msg.data.strip()
-        if reason not in ('robot_offline', 'system_failure'):
+        """장애 또는 의료진 취소 요청을 받아 안내를 재개 없이 끝낸다."""
+        raw = msg.data.strip()
+        requested_session_id = 0
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            reason = raw
+        else:
+            if not isinstance(payload, dict):
+                self.get_logger().warn(f'잘못된 세션 취소 요청을 무시합니다: {raw!r}')
+                return
+            reason = str(payload.get('reason', '')).strip()
+            try:
+                requested_session_id = int(payload.get('session_id', 0))
+            except (TypeError, ValueError):
+                self.get_logger().warn(f'잘못된 세션 취소 요청을 무시합니다: {raw!r}')
+                return
+
+        if reason not in ('aborted', 'robot_offline', 'system_failure'):
             self.get_logger().warn(f'알 수 없는 세션 취소 사유를 무시합니다: {reason!r}')
             return
         if self.session_id <= 0 or self.session_state in (
                 GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+            return
+        if requested_session_id > 0 and requested_session_id != self.session_id:
+            self.get_logger().warn(
+                f'현재 세션과 다른 취소 요청을 무시합니다: '
+                f'requested={requested_session_id}, current={self.session_id}')
             return
 
         active_session_id = self.session_id
@@ -432,9 +453,14 @@ class GuideManager(Node):
         self.previous_visit = ''
         self.current_visit = ''
         self.session_visits = []
-        self.robot_state = GuideState.ROBOT_PAUSED
-        self.get_logger().error(
-            f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
+        if reason == 'aborted':
+            self.robot_state = GuideState.ROBOT_IDLE
+            self.get_logger().info(
+                f'의료진 요청으로 안내 세션 {active_session_id} 취소')
+        else:
+            self.robot_state = GuideState.ROBOT_PAUSED
+            self.get_logger().error(
+                f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
 
     def _on_fire_evacuation(self, request, response):
         """화재 대피가 안내 상태와 기존 Nav2 콜백을 안전하게 선점하게 한다."""

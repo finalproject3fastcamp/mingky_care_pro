@@ -58,6 +58,7 @@ export type RobotCommand =
   | 'goto_pose'
   | 'start_session'
   | 'start_guidance'
+  | 'cancel_guidance'
   | 'set_mode'
   | 'localize'
   | 'system_start'

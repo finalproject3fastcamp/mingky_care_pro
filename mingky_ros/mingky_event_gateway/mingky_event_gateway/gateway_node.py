@@ -378,6 +378,7 @@ class EventGateway(Node):
         self._qr_wake = threading.Event()
         self._clinical_active = False
         self._guide_session_state = GuideState.SESSION_NONE
+        self._guide_session_id = 0
         self._guide_patient_id = ''
         self._localization_active = False
         self._fire_alarm_active = None
@@ -508,6 +509,7 @@ class EventGateway(Node):
 
     def _on_guide_state(self, msg: GuideState) -> None:
         self._guide_session_state = msg.session_state
+        self._guide_session_id = int(msg.session_id)
         self._guide_patient_id = msg.patient_id
         self._clinical_active = (
             msg.session_id > 0
@@ -1146,6 +1148,35 @@ class EventGateway(Node):
             future = self._fire_alarm_reset_client.call_async(Trigger.Request())
             future.add_done_callback(self._on_fire_alarm_reset_response)
             self.get_logger().info("명령 실행: fire_alarm_reset(run)")
+            return True
+
+        if command == "cancel_guidance":
+            try:
+                session_id = int(argument)
+            except (TypeError, ValueError):
+                self.get_logger().error(
+                    f"잘못된 안내 취소 세션 ID: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if session_id <= 0:
+                self.get_logger().error(
+                    f"잘못된 안내 취소 세션 ID: {session_id}")
+                return True
+
+            # 서버 검증과 실제 전달 사이에 세션이 이미 끝났거나 바뀐 경우,
+            # 예전 취소 명령이 새 환자 안내를 중단하지 않게 한다.
+            if self._guide_session_id not in (0, session_id):
+                self.get_logger().warn(
+                    f"현재 세션과 다른 안내 취소 명령을 폐기합니다: "
+                    f"requested={session_id}, current={self._guide_session_id}")
+                return True
+
+            self._session_cancel_pub.publish(String(data=json.dumps({
+                "reason": "aborted",
+                "session_id": session_id,
+            })))
+            self.get_logger().info(
+                f"명령 실행: cancel_guidance(session_id={session_id})")
             return True
 
         publisher = self._order_pubs.get(command)
