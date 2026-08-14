@@ -53,7 +53,10 @@ class NavigationManager(Node):
         self._active = False
         self._generation = 0
         self._goal_handle = None
-        self._context: dict | None = None
+        # Node._context 는 rclpy 자체가 ROS Context를 보관하는 내부 속성이다.
+        # 시험 목표 메타데이터는 별도 이름으로 두어 ActionClient가 사용하는
+        # ROS Context를 덮어쓰지 않는다.
+        self._test_context: dict | None = None
 
         state_qos = QoSProfile(
             depth=1,
@@ -246,14 +249,14 @@ class NavigationManager(Node):
         self._generation += 1
         generation = self._generation
         self._active = True
-        self._context = {
+        self._test_context = {
             'waypoint_name': name,
             'x': float(waypoint['x']),
             'y': float(waypoint['y']),
             'yaw': float(waypoint['yaw']),
         }
         self._publish_active()
-        self._publish_result('started', self._context)
+        self._publish_result('started', self._test_context)
 
         future = self.nav.send_goal_async(goal)
         future.add_done_callback(
@@ -292,13 +295,13 @@ class NavigationManager(Node):
             self._finish('failed', status, f'Waypoint 시험 주행 실패 (status={status})')
 
     def _cancel_active(self, error_code: int, message: str) -> None:
-        context = dict(self._context or {})
+        context = dict(self._test_context or {})
         self._generation += 1
         if self._goal_handle is not None:
             self._goal_handle.cancel_goal_async()
         self._goal_handle = None
         self._active = False
-        self._context = None
+        self._test_context = None
         self._publish_active()
         self._publish_result('failed', {
             **context,
@@ -307,10 +310,10 @@ class NavigationManager(Node):
         })
 
     def _finish(self, status: str, error_code: int, message: str) -> None:
-        context = dict(self._context or {})
+        context = dict(self._test_context or {})
         self._goal_handle = None
         self._active = False
-        self._context = None
+        self._test_context = None
         self._publish_active()
         self._publish_result(status, {
             **context,

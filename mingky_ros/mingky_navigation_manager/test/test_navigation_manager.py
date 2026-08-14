@@ -63,6 +63,14 @@ def _pose(name='draft') -> String:
     }))
 
 
+def test_test_metadata_does_not_replace_ros_context(manager):
+    node, _ = manager
+
+    assert node.context is not None
+    assert node.context.ok()
+    assert node._test_context is None
+
+
 def test_temporary_pose_starts_one_nav2_goal(manager):
     node, published = manager
 
