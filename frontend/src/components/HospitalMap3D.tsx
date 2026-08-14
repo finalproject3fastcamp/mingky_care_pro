@@ -57,7 +57,7 @@ export interface WaypointMarker {
   selected?: boolean
 }
 
-interface Props extends DiagLayers {
+export interface HospitalMap3DProps extends DiagLayers {
   pose: RobotPose | null
   live: boolean
   /** 3D 바닥을 찍어 "로봇이 여기 있다" 를 알린다. 없으면 지정 모드가 안 뜬다. */
@@ -116,7 +116,7 @@ export interface Look {
   viewFrom: readonly [number, number, number]
 }
 
-export const LOOK: Look = {
+const LOOK: Look = {
   /**
    * 3D 뒤에 깔리는 색. 빛이 아니라서 **건물 밝기에는 영향이 없다** —
    * 건물이 흰색이라 배경이 밝으면 경계가 흐려지므로 어둡게 깔아 도드라지게 한다.
@@ -218,7 +218,7 @@ export function HospitalMap3D({
   onSelectWaypoint,
   estop = false,
   selected = false,
-}: Props) {
+}: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
   const handles = useRef<Handles | null>(null)
