@@ -117,8 +117,12 @@ export function simulateParticles(x: number, y: number, spread = 0.05, n = 500):
 // ---------------------------------------------------------------- 경로
 
 const CELL = CELL_W
-/** 로봇 반지름(0.1 m)만큼 벽을 부풀려 둔다. 그래야 벽에 스치는 경로가 안 나온다. */
-const CLEAR = 0.1
+/**
+ * 로봇 반지름만큼 벽을 부풀려 둔다. 그래야 벽에 스치는 경로가 안 나온다.
+ * 핑키는 실측 11.6 cm 라 반지름이 5.8 cm 다 — 20 cm 로 잡으면 좁은 통로가
+ * 전부 막혀 경로가 아예 안 나온다.
+ */
+const CLEAR = 0.06
 
 const GRID = (() => {
   const w = GW
@@ -159,9 +163,28 @@ export function simulatePlan(
     if (i < 0 || j < 0 || i >= w || j >= h) return -1
     return j * w + i
   }
-  const start = idx(x, y)
-  const goal = idx(gx, gy)
-  if (start < 0 || goal < 0 || blocked[start] || blocked[goal]) return []
+  /** 부풀린 벽에 걸리면 가장 가까운 빈 칸으로 옮긴다. 웨이포인트는 벽에서
+   *  20 cm 안쪽에 있는 것이 많아 부풀린 뒤에는 막힌 칸이 되기 쉽다. */
+  const nearestFree = (c: number) => {
+    if (c < 0 || !blocked[c]) return c
+    const ci = c % w
+    const cj = (c - ci) / w
+    for (let r = 1; r < 40; r += 1) {
+      for (let dj = -r; dj <= r; dj += 1) {
+        for (let di = -r; di <= r; di += 1) {
+          if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue
+          const ni = ci + di
+          const nj = cj + dj
+          if (ni < 0 || nj < 0 || ni >= w || nj >= h) continue
+          if (!blocked[nj * w + ni]) return nj * w + ni
+        }
+      }
+    }
+    return -1
+  }
+  const start = nearestFree(idx(x, y))
+  const goal = nearestFree(idx(gx, gy))
+  if (start < 0 || goal < 0) return []
 
   const prev = new Int32Array(w * h).fill(-1)
   const seen = new Uint8Array(w * h)

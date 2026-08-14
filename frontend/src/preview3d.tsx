@@ -26,6 +26,7 @@ function App() {
   const [goal, setGoal] = useState('ct_room_goal')
   const [live, setLive] = useState(true)
   const [estop, setEstop] = useState(false)
+  const [sel, setSel] = useState(true)
   const [showWp, setShowWp] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
 
@@ -101,6 +102,7 @@ function App() {
         particles={particles}
         plan={plan}
         estop={estop}
+        selected={sel}
         waypoints={waypoints}
         onSelectWaypoint={setSelected}
         onSetPose={(nx, ny, nyaw) => {
@@ -134,6 +136,9 @@ function App() {
         </label>
         <label>
           <input type="checkbox" checked={estop} onChange={(e) => setEstop(e.target.checked)} /> 비상정지
+        </label>
+        <label>
+          <input type="checkbox" checked={sel} onChange={(e) => setSel(e.target.checked)} /> 선택(박동)
         </label>
         <label>
           <input type="checkbox" checked={showWp} onChange={(e) => setShowWp(e.target.checked)} /> 웨이포인트

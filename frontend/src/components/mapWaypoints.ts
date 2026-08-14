@@ -80,9 +80,9 @@ export const SIGNS: Sign[] = [
   { label: '임상병리실', icon: 'lab', u: 1.954, v: 0.95, w: 0.578, h: 0.152, y: 0.211, rank: 1 },
   { label: 'MRI 촬영실', icon: 'scan', u: 2.589, v: 0.95, w: 0.578, h: 0.152, y: 0.211, rank: 1 },
   { label: '입원 병동', icon: 'ward', u: 3.206, v: 0.95, w: 0.578, h: 0.152, y: 0.211, rank: 1 },
-  { label: '접수', sub: '수납', icon: 'reception', u: 0.465, v: 0.682, w: 0.19, h: 0.3, y: 0.221, rank: 1 },
+  { label: '접수 수납', icon: 'reception', u: 0.546, v: 0.519, w: 0.19, h: 0.3, y: 0.221, rank: 1 },
   { label: '약국', icon: 'pharmacy', u: 0.458, v: 2.024, w: 0.34, h: 0.12, y: 0.211, rank: 1 },
-  { label: '충전소', icon: 'charge', u: 1.397, v: 0.089, w: 0.3, h: 0.13, y: 0.211, rank: 2 },
-  { label: '화장실', icon: 'restroom', u: 1.587, v: 0.746, w: 0.3, h: 0.14, y: 0.211, rank: 2 },
+  { label: '충전소', icon: 'charge', u: 1.397, v: 0.089, w: 0.3, h: 0.13, y: 0.211, rank: 1 },
+  { label: '화장실', icon: 'restroom', u: 1.587, v: 0.746, w: 0.3, h: 0.14, y: 0.211, rank: 1 },
   { label: '비상구', icon: 'exit', u: 3.54, v: 1.513, w: 0.34, h: 0.14, y: 0.211, rank: 2 },
 ]

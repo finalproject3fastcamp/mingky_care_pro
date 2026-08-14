@@ -28,6 +28,10 @@
  * (118 MB → 556 KB, 삼각형 260만 → 11만). 재질은 네 갈래(FLOOR·WALL·MARK·
  * FIXTURE)로 묶여 있어서 색을 여기서 바꿀 수 있다.
  * **원점을 옮겨 다시 내보내면 좌표가 전부 어긋난다.**
+ *
+ * public/pinky.glb — 로봇. 예전 모형 파일에 붙박이로 들어 있던 핑키를 한 대만
+ * 떼어 발밑 한가운데를 원점으로 옮긴 것이다(실측 11.6 x 13.6 x 11.0 cm).
+ * 몸통은 흰색이었는데 바닥도 흰색이라 보이지 않아 파랑으로 바꿨다.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -60,8 +64,10 @@ interface Props extends DiagLayers {
   onSetPose?: (x: number, y: number, yaw: number) => void
   waypoints?: WaypointMarker[]
   onSelectWaypoint?: (name: string) => void
-  /** 비상정지 중이면 로봇을 붉게 칠한다. */
+  /** 비상정지 중이면 로봇을 붉게 칠하고 붉게 박동한다. */
   estop?: boolean
+  /** 이 로봇을 고른 상태인지. 켜면 초록으로 박동한다. */
+  selected?: boolean
   /** 안내판 목록. 기본은 mapWaypoints 의 SIGNS 다. 편집 화면만 이걸 바꿔 넘긴다. */
   signs?: Sign[]
   /** 켜면 글자를 끌어 옮길 수 있다. 편집 화면 전용이다. */
@@ -122,12 +128,22 @@ const COLOR = {
   scan: 0xef4444,
   particles: 0x10b981,
   plan: 0x2563eb,
-  robot: 0x2563eb,
+  /** 박동 색. 선택은 초록, 비상정지는 빨강 — 움직임은 같고 색만 다르다 */
+  selected: 0x22c55e,
   estop: 0xef4444,
   wpOk: 0x2563eb,
   wpWarn: 0xf59e0b,
   wpBad: 0xdc2626,
 } as const
+
+/**
+ * 모형 안에서 로봇이 바라보던 쪽과 우리가 0도로 삼는 쪽의 차이(rad).
+ * 라이노에서 놓인 방향이 지도의 0도와 같을 이유가 없어서 여기서 맞춘다.
+ */
+const FACING = 0
+
+/** 박동 한 주기(ms). 2D 지도에서 쓰던 1.5초와 같다. */
+const PULSE_MS = 1500
 
 /** 미리 잡아 두는 점 개수. 이보다 많이 오면 앞에서부터 잘라 쓴다. */
 const MAX_SCAN = 4096
@@ -140,8 +156,9 @@ interface Handles {
   controls: OrbitControls
   renderer: THREE.WebGLRenderer
   robot: THREE.Group
-  robotBody: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>
-  robotArrow: THREE.Mesh<THREE.ConeGeometry, THREE.MeshStandardMaterial>
+  pulse: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
+  /** 로봇 몸통 재질. 비상정지 때 붉게 물들인다 */
+  bodyMat: { m: THREE.MeshStandardMaterial; base: THREE.Color } | null
   scan: THREE.Points
   particles: THREE.Points
   plan: Line2
@@ -162,6 +179,7 @@ export function HospitalMap3D({
   waypoints = [],
   onSelectWaypoint,
   estop = false,
+  selected = false,
   signs = SIGNS,
   editing = false,
   onSignMove,
@@ -245,27 +263,34 @@ export function HospitalMap3D({
     scene.environment = envTex
 
     // ---- 로봇 ----
-    // 핑키는 지름 20 cm 다. 그대로 그려야 통로에 들어가는지가 눈에 보인다.
+    // 핑키 실물 모형(public/pinky.glb)을 쓴다. 실측 11.6 x 13.6 x 11.0 cm 이라
+    // 그대로 놓으면 통로에 들어가는지가 눈에 보인다. 도형으로 대충 그리면
+    // 그 판단을 못 한다.
     const robot = new THREE.Group()
     robot.visible = false
-    const robotBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.1, 0.075, 28),
-      new THREE.MeshStandardMaterial({ color: COLOR.robot, roughness: 0.45, metalness: 0.05 }),
-    )
-    robotBody.position.y = 0.0375
-    robotBody.castShadow = true
-    robot.add(robotBody)
-
-    // 앞머리. 어느 쪽을 보고 있는지가 위치만큼 중요하다.
-    const robotArrow = new THREE.Mesh(
-      new THREE.ConeGeometry(0.045, 0.11, 20),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 }),
-    )
-    robotArrow.rotation.z = -Math.PI / 2
-    robotArrow.position.set(0.12, 0.0375, 0)
-    robotArrow.castShadow = true
-    robot.add(robotArrow)
     scene.add(robot)
+
+    /**
+     * 로봇 아래에서 번지는 원. 어제 2D 지도에서 쓰던 것과 같은 박동이다 —
+     * 1.5초에 한 번, 커지면서 옅어진다. 선택과 비상정지가 같은 움직임이고
+     * 색으로만 갈린다.
+     *
+     * 조명을 받지 않는 재질(Basic)을 쓴다. 그림자가 지면 표시가 아니라
+     * 바닥에 그린 무늬처럼 보인다.
+     */
+    const pulseMat = new THREE.MeshBasicMaterial({
+      color: COLOR.selected,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+    const pulse = new THREE.Mesh(new THREE.CircleGeometry(0.14, 48), pulseMat)
+    pulse.rotation.x = -Math.PI / 2
+    pulse.position.y = 0.004
+    pulse.renderOrder = 4
+    pulse.visible = false
+    scene.add(pulse)
 
     // ---- 진단 레이어 ----
     // 미리 자리를 잡아 두고 개수만 바꾼다. 매번 새로 만들면 초당 수십 번
@@ -414,7 +439,16 @@ export function HospitalMap3D({
     const tick = () => {
       raf = requestAnimationFrame(tick)
       const moved = controls.update()
-      if (!moved && !dirty) return
+      // 박동. 1.5초를 한 주기로 커지면서 옅어진다. 처음에 빠르고 끝에서
+      // 느려지는 곡선(ease-out)이라야 심장 박동처럼 읽힌다.
+      if (pulse.visible) {
+        const t = (performance.now() % PULSE_MS) / PULSE_MS
+        const e = 1 - (1 - t) ** 3
+        pulse.scale.setScalar(0.6 + e * 1.4)
+        pulseMat.opacity = 0.55 * (1 - e)
+      } else if (!moved && !dirty) {
+        return
+      }
       dirty = false
       renderer.render(scene, camera)
       syncLabels(size.w, size.h, showSigns)
@@ -473,6 +507,27 @@ export function HospitalMap3D({
     // ---- 모형 읽기 ----
     const loader = new GLTFLoader()
     loader.setMeshoptDecoder(MeshoptDecoder)
+
+    let bodyMat: Handles['bodyMat'] = null
+    loader.load('/pinky.glb', (gltf) => {
+      if (disposed) return
+      gltf.scene.traverse((o) => {
+        const m = o as THREE.Mesh
+        if (!m.isMesh) return
+        m.castShadow = true
+        const mat = m.material as THREE.MeshStandardMaterial
+        if (!mat) return
+        mat.envMapIntensity = LOOK.env
+        // 흰 몸통만 비상정지 때 물들인다. 바퀴·윗판까지 빨개지면 로봇이
+        // 아니라 붉은 덩어리로 보인다.
+        if (mat.name === 'BODY' && !bodyMat) bodyMat = { m: mat, base: mat.color.clone() }
+      })
+      // 모형 원점은 발밑 한가운데다(뽑을 때 그렇게 옮겼다). 그대로 얹으면 된다.
+      robot.add(gltf.scene)
+      if (handles.current) handles.current.bodyMat = bodyMat
+      invalidate()
+    })
+
     loader.load(
       '/hospital-3d.glb',
       (gltf) => {
@@ -517,8 +572,8 @@ export function HospitalMap3D({
       controls,
       renderer,
       robot,
-      robotBody,
-      robotArrow,
+      pulse,
+      bodyMat,
       scan: scanPts,
       particles: particlePts,
       plan: planLine,
@@ -640,15 +695,20 @@ export function HospitalMap3D({
     if (pose) {
       const m = mapToModel(pose.x, pose.y)
       h.robot.position.set(m.u, 0, -m.v)
-      h.robot.rotation.y = mapYawToModel(pose.yaw)
+      h.robot.rotation.y = mapYawToModel(pose.yaw) + FACING
       h.robot.visible = true
-    } else {
-      h.robot.visible = false
+      h.pulse.position.set(m.u, 0.004, -m.v)
     }
-    const color = estop ? COLOR.estop : COLOR.robot
-    h.robotBody.material.color.setHex(color)
+    h.robot.visible = !!pose
+    // 박동은 고른 로봇이거나 비상정지일 때만. 늘 뛰면 아무것도 알리지 못한다.
+    h.pulse.visible = !!pose && (selected || estop)
+    h.pulse.material.color.setHex(estop ? COLOR.estop : COLOR.selected)
+    if (h.bodyMat) {
+      if (estop) h.bodyMat.m.color.setHex(COLOR.estop)
+      else h.bodyMat.m.color.copy(h.bodyMat.base)
+    }
     h.invalidate()
-  }, [pose, estop])
+  }, [pose, estop, selected])
 
   useEffect(() => {
     const h = handles.current

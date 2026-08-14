@@ -247,6 +247,7 @@ export function MedicalDashboard() {
               plan={teleop.plan}
               onSetPose={teleop.setPose}
               estop={mode === 'estop'}
+              selected
             />
             <TeleopPad
               drive={teleop.drive}
