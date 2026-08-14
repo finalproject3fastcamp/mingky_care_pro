@@ -114,6 +114,7 @@ export function EngineerDashboard() {
   const forecast = usePolling(
     (signal) => (target ? getBatteryForecast(target, { signal }) : Promise.resolve(null)),
     FORECAST_POLL_MS,
+    target,
   )
   const focusedRobot = robotState.data?.find((r) => r.robot_id === target) ?? null
 
@@ -125,6 +126,7 @@ export function EngineerDashboard() {
       ? getSessionEndingContext(sessionId, { signal })
       : Promise.resolve(null)),
     ENDING_POLL_MS,
+    sessionId,
   )
 
   useEffect(() => {
