@@ -73,6 +73,37 @@ sudo ./install.sh pinky-01        # 2호기는 pinky-02
 | `fg-bridge` `fg-tunnel` | Foxglove 관측 (필요할 때만) |
 | `fg-teleop` | 주행 모드 관리·원격 조작 속도 상한 (상시) |
 
+### 개인 브랜치 실기 시험
+
+평상시 모든 유닛은 공용 운영 경로 `/home/pinky/mingky_care_pro`를 사용한다.
+개인 브랜치를 시험할 때 전체 유닛을 개인 경로로 바꾸지 않는다. 시험 대상
+유닛에만 systemd drop-in을 두고, 시험이 끝나면 반드시 제거한다.
+
+예를 들어 `fg-teleop`만 `/home/pinky/wmk/mingky_care_pro`에서 시험한다.
+
+```bash
+sudo systemctl edit fg-teleop.service
+# [Service]
+# ExecStart=
+# ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/wmk/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup teleop.launch.py robot_id:=${MINGKY_ROBOT_ID}'
+
+sudo systemctl daemon-reload
+sudo systemctl restart fg-teleop.service
+systemctl cat fg-teleop.service
+```
+
+시험 종료 후에는 drop-in을 되돌리고 공용 운영 경로가 다시 보이는지 확인한다.
+
+```bash
+sudo rm /etc/systemd/system/fg-teleop.service.d/override.conf
+sudo systemctl daemon-reload
+sudo systemctl restart fg-teleop.service
+systemctl cat fg-teleop.service
+```
+
+`mode_manager`와 `teleop_limiter`는 같은 `fg-teleop.service`에서 함께 실행되므로
+둘을 서로 다른 워크스페이스에서 따로 실행하지 않는다.
+
 **`mingky-battery-pub` 를 따로 둔 이유가 있다.** 배터리 퍼블리셔는 원래
 `bringup_robot.launch.xml` 안에 있어서 주행 스택을 띄워야만 돌았다. 그런데
 의료진이 대시보드에서 로봇을 고르려면 배터리가 40% 이상이어야 하고, 그건

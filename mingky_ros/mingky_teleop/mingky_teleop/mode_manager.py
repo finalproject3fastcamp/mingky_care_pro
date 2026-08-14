@@ -34,6 +34,7 @@ arming(`backend/app/arming.py`)은 백엔드가 소유하고 로봇이 폴링한
 어휘로 옮긴 표현이다.
 """
 
+import time
 import uuid
 
 import rclpy
@@ -44,11 +45,14 @@ from std_srvs.srv import Trigger
 
 from mingky_interfaces.msg import Event
 
+from .mode_sync import ModeAlignmentMonitor
+
 MODES = ("auto", "manual", "estop")
 DEFAULT_MODE = "auto"
 
 SET_TOPIC = "/mode/set"
 MODE_TOPIC = "/mode"
+APPLIED_MODE_TOPIC = "/teleop_limiter/applied_mode"
 EVENT_TOPIC = "/events"
 
 # mingky_battery_guard 의 emergency_stop 인터페이스.
@@ -79,8 +83,19 @@ class ModeManager(Node):
 
         self.declare_parameter("initial_mode", DEFAULT_MODE)
         self.declare_parameter("robot_id", "pinky-01")
+        self.declare_parameter("mode_publish_interval_sec", 1.0)
+        self.declare_parameter("mode_mismatch_grace_sec", 3.0)
+        self.declare_parameter("applied_mode_timeout_sec", 3.0)
 
         self.robot_id = self.get_parameter("robot_id").value
+        publish_interval = max(
+            0.1, float(self.get_parameter("mode_publish_interval_sec").value))
+        mismatch_grace = float(
+            self.get_parameter("mode_mismatch_grace_sec").value)
+        self._applied_mode_timeout = max(
+            publish_interval,
+            float(self.get_parameter("applied_mode_timeout_sec").value),
+        )
 
         requested = str(self.get_parameter("initial_mode").value).strip().lower()
         if requested not in MODES:
@@ -97,6 +112,11 @@ class ModeManager(Node):
         self.release_client = self.create_client(Trigger, ESTOP_RELEASE_SERVICE)
 
         self.create_subscription(String, SET_TOPIC, self.on_set, 10)
+        self.create_subscription(
+            String, APPLIED_MODE_TOPIC, self.on_applied_mode, _latched())
+        self._applied_mode = None
+        self._applied_mode_at = None
+        self._alignment = ModeAlignmentMonitor(mismatch_grace)
 
         # 게이트가 정지 상태의 정본이다. 다른 경로(저전압 복귀, 장애물)로
         # 걸렸을 때도 모드가 따라가야 화면이 진실을 보여준다.
@@ -108,6 +128,8 @@ class ModeManager(Node):
 
         self._apply_manual_lock()
         self._announce(previous=None, source="startup")
+        self.create_timer(publish_interval, self._publish_state)
+        self.create_timer(min(publish_interval, 0.5), self._check_alignment)
         self.get_logger().info(f"모드 관리 시작 (현재 {self.mode})")
 
     # ------------------------------------------------------------------ 전환
@@ -121,6 +143,8 @@ class ModeManager(Node):
             return
 
         if requested == self.mode:
+            # limiter 가 이전 메시지를 놓쳤다면 같은 요청이 복구 신호가 된다.
+            self._publish_state()
             return
 
         # estop 이 얽힌 전환은 **게이트가 실제로 움직인 뒤에** 확정한다.
@@ -139,6 +163,35 @@ class ModeManager(Node):
         self.get_logger().warn(f"모드 전환: {previous} → {self.mode}")
         self._apply_manual_lock()
         self._announce(previous=previous, source="remote")
+
+    def on_applied_mode(self, msg: String):
+        applied = msg.data.strip().lower()
+        self._applied_mode = applied if applied in MODES else None
+        self._applied_mode_at = time.monotonic()
+        self._check_alignment()
+
+    def _check_alignment(self):
+        now = time.monotonic()
+        fresh = (
+            self._applied_mode_at is not None
+            and now - self._applied_mode_at <= self._applied_mode_timeout
+        )
+        current_applied = self._applied_mode if fresh else None
+        transition = self._alignment.check(
+            self.mode, current_applied, now)
+        applied = current_applied or "unknown"
+        if transition == "mismatch":
+            self.get_logger().error(
+                f"모드 불일치: 요청={self.mode}, limiter 적용={applied}")
+            self._emit(
+                "robot.mode_mismatch", Event.LEVEL_ERROR,
+                f'{{"requested": "{self.mode}", "applied": "{applied}"}}')
+        elif transition == "recovered":
+            self.get_logger().info(
+                f"모드 일치 복구: 요청={self.mode}, limiter 적용={applied}")
+            self._emit(
+                "robot.mode_recovered", Event.LEVEL_INFO,
+                f'{{"requested": "{self.mode}", "applied": "{applied}"}}')
 
     def on_estop_state(self, msg: Bool):
         """게이트 상태가 정본이다. 여기서만 estop 모드를 확정한다.
@@ -196,8 +249,13 @@ class ModeManager(Node):
         """
         self.manual_lock_pub.publish(Bool(data=self.mode == "manual"))
 
-    def _announce(self, previous, source: str):
+    def _publish_state(self):
+        """상태만 반복한다. 전환 이벤트는 _announce 에서 한 번만 남긴다."""
         self.mode_pub.publish(String(data=self.mode))
+        self._apply_manual_lock()
+
+    def _announce(self, previous, source: str):
+        self._publish_state()
 
         prev = previous if previous is not None else self.mode
         self._emit("robot.mode_changed", Event.LEVEL_INFO,

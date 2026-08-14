@@ -70,6 +70,10 @@ export function messageFor(code: string, payload: Record<string, unknown>): stri
       return `일시정지: ${p.reason ?? ''}`
     case 'robot.resumed':
       return `운행 재개: ${p.reason ?? ''}`
+    case 'robot.mode_mismatch':
+      return `주행 모드 불일치: 요청 ${p.requested ?? '?'} / 적용 ${p.applied ?? '?'}`
+    case 'robot.mode_recovered':
+      return `주행 모드 일치 복구: ${p.applied ?? '?'}`
     case 'system.unknown_event_code':
       return `미등록 이벤트 코드: ${p.received_code ?? ''}`
     default:

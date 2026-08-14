@@ -33,9 +33,10 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.msg import ParticleCloud
 from nav_msgs.msg import Path
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from .scan_geometry import transform_polar_point
@@ -54,6 +55,7 @@ SCAN_TOPIC = "/scan"
 # 옛 이름 /particlecloud (geometry_msgs/PoseArray) 는 발행자가 없다.
 PARTICLE_TOPIC = "/particle_cloud"
 PLAN_TOPIC = "/plan"
+APPLIED_MODE_TOPIC = "/teleop_limiter/applied_mode"
 SCAN_BASE_FRAME = "base_footprint"
 
 # 무선 구간을 아끼려고 솎아 보낸다. 화면에서 "맵과 겹치나" 를 보는 데는
@@ -73,6 +75,8 @@ class TeleopBridge(Node):
         # 진단용 레이어는 더 느려도 된다. 라이다 윤곽과 파티클 퍼짐은
         # 1초에 한 번만 봐도 발산 여부를 판단할 수 있다.
         self.declare_parameter("diag_interval_sec", 1.0)
+        self.declare_parameter("mode_status_interval_sec", 1.0)
+        self.declare_parameter("mode_status_timeout_sec", 3.0)
         self.declare_parameter("reconnect_sec", 5.0)
 
         base = str(self.get_parameter("backend_url").value).rstrip("/")
@@ -82,6 +86,12 @@ class TeleopBridge(Node):
                     + f"/robots/{self.robot_id}/teleop/robot")
         self.pose_interval = float(self.get_parameter("pose_interval_sec").value)
         self.diag_interval = float(self.get_parameter("diag_interval_sec").value)
+        self.mode_status_interval = max(
+            0.1, float(self.get_parameter("mode_status_interval_sec").value))
+        self.mode_status_timeout = max(
+            self.mode_status_interval,
+            float(self.get_parameter("mode_status_timeout_sec").value),
+        )
         self.reconnect = float(self.get_parameter("reconnect_sec").value)
 
         self.cmd_pub = self.create_publisher(Twist, OUT_TOPIC, 10)
@@ -116,9 +126,21 @@ class TeleopBridge(Node):
             ParticleCloud, PARTICLE_TOPIC, self._on_particles,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(Path, PLAN_TOPIC, self._on_plan, 1)
+        self.create_subscription(
+            String,
+            APPLIED_MODE_TOPIC,
+            self._on_applied_mode,
+            QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                reliability=ReliabilityPolicy.RELIABLE,
+            ),
+        )
         self._scan = None
         self._particles = None
         self._plan = None
+        self._applied_mode = None
+        self._applied_mode_at = None
 
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -132,6 +154,22 @@ class TeleopBridge(Node):
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         self._pose = {"type": "pose", "x": p.x, "y": p.y, "yaw": yaw}
+
+    def _on_applied_mode(self, msg: String):
+        mode = msg.data.strip().lower()
+        self._applied_mode = mode if mode in ("auto", "manual", "estop") else None
+        self._applied_mode_at = time.monotonic()
+
+    def _mode_status(self, now: float) -> dict:
+        fresh = (
+            self._applied_mode_at is not None
+            and now - self._applied_mode_at <= self.mode_status_timeout
+        )
+        return {
+            "type": "mode_status",
+            "applied_mode": self._applied_mode if fresh else None,
+            "fresh": fresh,
+        }
 
     def _on_scan(self, msg: LaserScan):
         """센서 측정점을 TF로 로봇 기준 극좌표로 바꿔 보낸다.
@@ -229,6 +267,7 @@ class TeleopBridge(Node):
         """명령을 받아 발행하고, 주기적으로 pose 와 진단 레이어를 올린다."""
         last_pose = 0.0
         last_diag = 0.0
+        last_mode_status = 0.0
         while not self._stop.is_set():
             # pose 를 보내려면 수신에서 오래 막히면 안 되므로 짧게 끊어 받는다.
             socket.settimeout(0.1)
@@ -250,6 +289,10 @@ class TeleopBridge(Node):
                 for payload in (self._scan, self._particles, self._plan):
                     if payload is not None:
                         socket.send(json.dumps(payload))
+
+            if now - last_mode_status >= self.mode_status_interval:
+                last_mode_status = now
+                socket.send(json.dumps(self._mode_status(now)))
 
     def _handle(self, raw: str):
         try:

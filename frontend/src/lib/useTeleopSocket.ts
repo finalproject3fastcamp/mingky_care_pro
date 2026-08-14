@@ -13,6 +13,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { RobotMode } from './api'
+
+const MODE_STATUS_STALE_MS = 4000
+
 export interface RobotPose {
   x: number
   y: number
@@ -34,6 +38,10 @@ interface TeleopState extends DiagLayers {
   connected: boolean
   /** 서버가 그 로봇의 브리지를 잡고 있는지. 없으면 눌러도 아무 일이 없다. */
   robotConnected: boolean
+  /** teleop_limiter 가 실제로 적용했고 최근에도 재확인된 모드. */
+  appliedMode: RobotMode | null
+  /** 새 적용 상태 메시지를 받을 때마다 증가한다. 요청 이후 응답인지 구분한다. */
+  modeStatusRevision: number
   pose: RobotPose | null
 }
 
@@ -54,14 +62,27 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
   const [state, setState] = useState<TeleopState>({
     connected: false,
     robotConnected: false,
+    appliedMode: null,
+    modeStatusRevision: 0,
     pose: null,
     scan: null,
     particles: null,
     plan: null,
   })
   const socketRef = useRef<WebSocket | null>(null)
+  const modeStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    setState({
+      connected: false,
+      robotConnected: false,
+      appliedMode: null,
+      modeStatusRevision: 0,
+      pose: null,
+      scan: null,
+      particles: null,
+      plan: null,
+    })
     if (!robotId) return
 
     let closed = false
@@ -92,6 +113,26 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
           }))
         } else if (message.type === 'status') {
           setState((s) => ({ ...s, robotConnected: Boolean(message.robot_connected) }))
+        } else if (message.type === 'mode_status') {
+          const value = message.applied_mode
+          const appliedMode = message.fresh === true && (
+            value === 'auto' || value === 'manual' || value === 'estop'
+          ) ? value : null
+          setState((s) => ({
+            ...s,
+            // 이 메시지는 로봇 소켓에서만 올 수 있으므로 연결도 함께 확인된다.
+            robotConnected: true,
+            appliedMode,
+            modeStatusRevision: s.modeStatusRevision + 1,
+          }))
+          if (modeStatusTimerRef.current) clearTimeout(modeStatusTimerRef.current)
+          modeStatusTimerRef.current = setTimeout(() => {
+            setState((s) => ({
+              ...s,
+              appliedMode: null,
+              modeStatusRevision: s.modeStatusRevision + 1,
+            }))
+          }, MODE_STATUS_STALE_MS)
         } else if (
           message.type === 'scan' ||
           message.type === 'particles' ||
@@ -104,10 +145,14 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
       }
 
       socket.onclose = () => {
+        if (modeStatusTimerRef.current) clearTimeout(modeStatusTimerRef.current)
+        modeStatusTimerRef.current = null
         // 끊기면 화면에 남아 있는 레이어는 과거값이다. 지우지 않으면 낡은
         // 라이다가 지금 상태처럼 보인다.
         setState((s) => ({
           ...s, connected: false, robotConnected: false,
+          appliedMode: null,
+          modeStatusRevision: s.modeStatusRevision + 1,
           scan: null, particles: null, plan: null,
         }))
         // 회선이 흔들리는 환경이라 끊기는 것을 정상으로 보고 다시 건다.
@@ -119,6 +164,8 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
     return () => {
       closed = true
       if (retry) clearTimeout(retry)
+      if (modeStatusTimerRef.current) clearTimeout(modeStatusTimerRef.current)
+      modeStatusTimerRef.current = null
       socketRef.current?.close()
       socketRef.current = null
     }
