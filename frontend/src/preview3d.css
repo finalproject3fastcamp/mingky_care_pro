@@ -1,0 +1,163 @@
+/*
+ * 미리보기 화면의 배치.
+ *
+ * 값을 맞추는 화면은 **바꾸는 것과 바뀌는 것이 함께 보여야** 쓸모가 있다.
+ * 지도를 위에 두고 조절 바를 아래에 늘어놓으면, 바를 만지려고 내리는 순간
+ * 지도가 화면 밖으로 나가 무엇이 달라졌는지 볼 수가 없다.
+ *
+ * 그래서 넓은 화면에서는 지도를 왼쪽에 붙박아 두고(sticky) 조절 바를 오른쪽
+ * 기둥에 모은다. 좁은 화면에서는 어쩔 수 없이 위아래로 쌓는다.
+ */
+
+.pv {
+  /*
+   * #root 가 세로 flex 라, 여기에 margin: 0 auto 만 주면 칸이 늘어나지 않고
+   * 내용 크기만큼 줄어든다(가로 margin 이 auto 면 stretch 가 풀린다).
+   * width: 100% 를 함께 줘야 넓은 화면에서 넓게 쓴다.
+   */
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  /* 폭을 좁게 묶으면 넓은 화면에서도 휴대폰처럼 보인다. */
+  max-width: 1700px;
+  margin: 0 auto;
+  padding: 20px 20px 64px;
+  align-items: start;
+}
+
+@media (min-width: 1060px) {
+  .pv {
+    grid-template-columns: minmax(0, 1fr) 380px;
+  }
+
+  /* 오른쪽 바를 만지는 동안 지도가 따라와 붙어 있는다. */
+  .pv-stage {
+    position: sticky;
+    top: 20px;
+  }
+
+  /* 창이 낮으면 지도가 화면을 넘겨 아래 바를 가린다. 넘치지 않게 자른다. */
+  .pv-stage .map3d__stage {
+    max-height: calc(100vh - 210px);
+  }
+}
+
+.pv-stage h2 {
+  margin: 0 0 4px;
+}
+
+.pv-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.pv-warn {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b45309;
+}
+
+.pv-side {
+  display: grid;
+  gap: 14px;
+  /* 오른쪽 기둥이 길어지면 여기 안에서만 굴러가게 한다. */
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+@media (max-width: 1059px) {
+  .pv-side {
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+.pv-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 10px 14px 14px;
+  margin: 0;
+}
+
+.pv-group > legend {
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pv-rows {
+  display: grid;
+  gap: 9px;
+}
+
+.pv-row {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.pv-row > span {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+}
+
+.pv-row b {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.pv-row input[type='range'] {
+  width: 100%;
+  margin: 0;
+}
+
+.pv-field {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.pv-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.pv-btns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.pv-btns code {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pv-out {
+  width: 100%;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  resize: vertical;
+}

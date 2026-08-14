@@ -1,6 +1,13 @@
 /* 안내판 편집 화면 전용. */
 
 .ed {
+  /*
+   * #root 가 세로 flex 라, 여기에 margin: 0 auto 만 주면 칸이 늘어나지 않고
+   * 내용 크기만큼 줄어든다(가로 margin 이 auto 면 stretch 가 풀린다).
+   * width: 100% 를 함께 줘야 넓은 화면에서 넓게 쓴다.
+   */
+  width: 100%;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 24px;

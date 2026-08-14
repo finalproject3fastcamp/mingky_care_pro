@@ -8,6 +8,9 @@
  * 조명은 여기서 손으로 맞춘 뒤, 아래 상자의 값을 HospitalMap3D 의 LOOK 에
  * 넣으면 대시보드에 그대로 적용된다.
  *
+ * 지도는 왼쪽에 붙박여 있고 조절 바는 오른쪽에 모여 있다. 바를 만지는 동안
+ * 지도가 화면 밖으로 나가면 무엇이 달라졌는지 볼 수가 없기 때문이다.
+ *
  * `npm run dev` 후 /preview-3d.html 로 연다.
  */
 
@@ -19,6 +22,7 @@ import { WAYPOINTS } from './components/mapWaypoints'
 import { insideWall, simulateParticles, simulatePlan, simulateScan } from './previewSim'
 import './index.css'
 import './App.css'
+import './preview3d.css'
 
 function App() {
   // 건물 안에서 벽으로부터 가장 멀리 떨어진 자리. 벽에 붙여 두면 로봇이
@@ -114,16 +118,18 @@ function App() {
     min: number,
     max: number,
     set: (v: number) => void,
+    step = 0.01,
   ) => (
-    <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+    <label className="pv-row">
       <span>
-        {label} <b>{value.toFixed(2)}</b>
+        {label}
+        <b>{value.toFixed(2)}</b>
       </span>
       <input
         type="range"
         min={min}
         max={max}
-        step={0.01}
+        step={step}
         value={value}
         onChange={(e) => set(Number(e.target.value))}
       />
@@ -131,110 +137,123 @@ function App() {
   )
 
   return (
-    <div style={{ maxWidth: 980, margin: '0 auto', padding: 20, display: 'grid', gap: 16 }}>
-      <h2 style={{ margin: 0 }}>3D 지도 미리보기</h2>
-      <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-        끌어서 돌리고, 휠로 당기고, 오른쪽 버튼으로 옮깁니다. 슬라이더로 로봇을 옮겨
-        좌표가 맞는지 확인하세요.
-        {selected && ` — 고른 지점: ${selected}`}
-      </p>
-      {blocked && (
-        <p style={{ margin: 0, fontSize: 13, color: '#b45309', fontWeight: 600 }}>
-          로봇이 벽 안에 있습니다 — 라이다가 전부 거리 0 이라 아무것도 안 보입니다.
-          x·y 를 옮기세요.
+    <div className="pv">
+      <div className="pv-stage">
+        <h2>3D 지도 미리보기</h2>
+        <p className="pv-hint">
+          끌어서 돌리고, 휠로 당기고, 오른쪽 버튼으로 옮깁니다. 오른쪽 바를 만지면
+          지도가 바로 바뀝니다.
+          {selected && ` — 고른 지점: ${selected}`}
         </p>
-      )}
+        {blocked && (
+          <p className="pv-warn">
+            로봇이 벽 안에 있습니다 — 라이다가 전부 거리 0 이라 아무것도 안 보입니다.
+            x·y 를 옮기세요.
+          </p>
+        )}
 
-      <HospitalMap3D
-        pose={pose}
-        live={live}
-        scan={scan}
-        particles={particles}
-        plan={plan}
-        estop={estop}
-        selected={sel}
-        waypoints={waypoints}
-        look={look}
-        onSelectWaypoint={setSelected}
-        onSetPose={(nx, ny, nyaw) => {
-          setX(nx)
-          setY(ny)
-          setYaw(nyaw)
-        }}
-      />
-
-      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        {row('x (m)', x, -0.3, 3.2, setX)}
-        {row('y (m)', y, -0.4, 2.0, setY)}
-        {row('방향 (rad)', yaw, -Math.PI, Math.PI, setYaw)}
-        {row('파티클 퍼짐 (m)', spread, 0.01, 0.6, setSpread)}
+        <HospitalMap3D
+          pose={pose}
+          live={live}
+          scan={scan}
+          particles={particles}
+          plan={plan}
+          estop={estop}
+          selected={sel}
+          waypoints={waypoints}
+          look={look}
+          onSelectWaypoint={setSelected}
+          onSetPose={(nx, ny, nyaw) => {
+            setX(nx)
+            setY(ny)
+            setYaw(nyaw)
+          }}
+        />
       </div>
 
-      <label style={{ display: 'grid', gap: 4, fontSize: 13, maxWidth: 260 }}>
-        <span>경로 목표</span>
-        <select value={goal} onChange={(e) => setGoal(e.target.value)}>
-          {WAYPOINTS.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.label} ({w.id})
-            </option>
-          ))}
-        </select>
-      </label>
+      <aside className="pv-side">
+        <fieldset className="pv-group">
+          <legend>로봇</legend>
+          <div className="pv-rows">
+            {row('x (m)', x, -0.3, 3.2, setX)}
+            {row('y (m)', y, -0.4, 2.0, setY)}
+            {row('방향 (rad)', yaw, -Math.PI, Math.PI, setYaw)}
+            {row('파티클 퍼짐 (m)', spread, 0.01, 0.6, setSpread)}
+          </div>
 
-      <fieldset style={{ border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 14px 14px' }}>
-        <legend style={{ fontSize: 13, fontWeight: 600, padding: '0 6px' }}>조명</legend>
-        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          {row('주광 세기', sun, 0, 6, setSun)}
-          {row('주광 방위 (도)', az, 0, 360, setAz)}
-          {row('주광 고도 (도)', el, 5, 88, setEl)}
-          {row('받침 세기', fill, 0, 1.5, setFill)}
-          {row('주변 반사', env, 0, 1.5, setEnv)}
-          {row('노출', exposure, 0.3, 2.2, setExposure)}
-        </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 10, fontSize: 13 }}>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            배경색
-            <input type="color" value={bg} onChange={(e) => setBg(e.target.value)} />
-            <code>{bg}</code>
+          <label className="pv-field">
+            경로 목표
+            <select value={goal} onChange={(e) => setGoal(e.target.value)}>
+              {WAYPOINTS.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.label} ({w.id})
+                </option>
+              ))}
+            </select>
           </label>
-          <button type="button" onClick={() => navigator.clipboard?.writeText(lookCode)}>
-            값 복사
-          </button>
-          <button type="button" onClick={downloadLook}>
-            값 파일로 내려받기
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSun(LOOK.sun)
-              setAz(36)
-              setEl(48)
-              setFill(LOOK.fill)
-              setEnv(LOOK.env)
-              setExposure(LOOK.exposure)
-              setBg(LOOK.background)
-            }}
-          >
-            처음으로
-          </button>
-        </div>
-        <textarea readOnly value={lookCode} rows={8} style={{ width: '100%', marginTop: 10, fontSize: 12 }} />
-      </fieldset>
 
-      <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
-        <label>
-          <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} /> 로봇 연결
-        </label>
-        <label>
-          <input type="checkbox" checked={estop} onChange={(e) => setEstop(e.target.checked)} /> 비상정지
-        </label>
-        <label>
-          <input type="checkbox" checked={sel} onChange={(e) => setSel(e.target.checked)} /> 선택(박동)
-        </label>
-        <label>
-          <input type="checkbox" checked={showWp} onChange={(e) => setShowWp(e.target.checked)} /> 웨이포인트
-        </label>
-      </div>
+          <div className="pv-checks">
+            <label>
+              <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />{' '}
+              로봇 연결
+            </label>
+            <label>
+              <input type="checkbox" checked={estop} onChange={(e) => setEstop(e.target.checked)} />{' '}
+              비상정지
+            </label>
+            <label>
+              <input type="checkbox" checked={sel} onChange={(e) => setSel(e.target.checked)} />{' '}
+              선택(박동)
+            </label>
+            <label>
+              <input type="checkbox" checked={showWp} onChange={(e) => setShowWp(e.target.checked)} />{' '}
+              웨이포인트
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="pv-group">
+          <legend>조명</legend>
+          <div className="pv-rows">
+            {row('주광 세기', sun, 0, 6, setSun)}
+            {row('주광 방위 (도)', az, 0, 360, setAz, 1)}
+            {row('주광 고도 (도)', el, 5, 88, setEl, 1)}
+            {row('받침 세기', fill, 0, 1.5, setFill)}
+            {row('주변 반사', env, 0, 1.5, setEnv)}
+            {row('노출', exposure, 0.3, 2.2, setExposure)}
+          </div>
+
+          <div className="pv-btns">
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              배경색
+              <input type="color" value={bg} onChange={(e) => setBg(e.target.value)} />
+            </label>
+            <code>{bg}</code>
+            <button type="button" onClick={() => navigator.clipboard?.writeText(lookCode)}>
+              값 복사
+            </button>
+            <button type="button" onClick={downloadLook}>
+              파일로 내려받기
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSun(LOOK.sun)
+                setAz(36)
+                setEl(48)
+                setFill(LOOK.fill)
+                setEnv(LOOK.env)
+                setExposure(LOOK.exposure)
+                setBg(LOOK.background)
+              }}
+            >
+              처음으로
+            </button>
+          </div>
+
+          <textarea className="pv-out" readOnly value={lookCode} rows={8} />
+        </fieldset>
+      </aside>
     </div>
   )
 }
