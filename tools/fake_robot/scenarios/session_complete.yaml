@@ -1,0 +1,86 @@
+# 세션 완주 — 정상 경로 전체.
+#
+# p001(윤동수, 퇴행성 무릎 관절염)은 X-ray → 임상병리실 → 물리치료실 3단계다
+# (database/seeds/001_initial_data.sql).
+#
+# arming 전제조건이 체인이라 순서를 지켜야 한다 (backend/app/routers/robots.py):
+#   heartbeat 수신(하네스가 백그라운드로 계속 보낸다)
+#     → 5분 이내 배터리 표본 ≥ 40%
+#     → POST /robots/{id}/arm
+#     → POST /qr/scan  (여기서 session_id 가 나오고 이후 이벤트에 자동으로 붙는다)
+#
+# 단위 테스트는 전부 가짜 커넥션이라 이 순서를 한 번도 통과시켜본 적이 없다.
+# 이 시나리오가 검증하는 것이 정확히 그 배관이다.
+
+name: 세션 완주 (p001, 3단계)
+
+robots:
+  - id: pinky-01
+    type: mobile
+    battery_percent: 87
+    voltage: 11.9
+
+steps:
+  - { robot: pinky-01, action: battery }
+  - { robot: pinky-01, action: arm }
+  - { robot: pinky-01, action: qr_scan, patient_id: p001, marker_id: 20 }
+
+  - robot: pinky-01
+    action: event
+    code: session.started
+    payload: { patient_id: p001, marker_id: 20 }
+
+  - robot: pinky-01
+    action: event
+    code: qr.scan_ok
+    payload: { patient_id: p001 }
+
+  # --- 1단계 X-ray ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: X-ray }
+    wait: 0.5          # 즉시 끝나면 대시보드에서 '이동중'을 볼 수 없다
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 1, source: qr }
+
+  # --- 2단계 임상병리실 ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 임상병리실 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 임상병리실 }
+    wait: 0.5
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 2, source: qr }
+
+  # --- 3단계 물리치료실 ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 물리치료실 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 물리치료실 }
+    wait: 0.5
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 3, source: qr }
+
+  # --- 종료 후 충전소 복귀 ---
+  # dock.* 를 쓴다. nav.goal_succeeded 를 재사용하면 충전소 도착이 다음 진료실
+  # 도착으로 기록된다 (config/event_codes.yaml 충전소 절).
+  - robot: pinky-01
+    action: event
+    code: session.ended
+    payload: { end_reason: completed }
+  - { robot: pinky-01, action: event, code: dock.return_started, payload: { station_name: dock-1 } }
+  - robot: pinky-01
+    action: event
+    code: dock.return_succeeded
+    payload: { station_name: dock-1 }
+    wait: 0.5
