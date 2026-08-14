@@ -188,6 +188,25 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
 
 
+def test_retried_initial_session_is_idempotent(manager):
+    node, published = manager
+    message = SessionStart(
+        session_id=74,
+        patient_id='patient-retry',
+        current_step_order=1,
+        visit_names=['X-ray'],
+    )
+
+    node._on_session_start(message)
+    node._on_session_start(message)
+
+    assert node.session_id == 74
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert published == [
+        ('session.ready', {'current_visit': 'X-ray'}, 74),
+    ]
+
+
 def test_auto_localization_blocks_confirmed_session_departure(manager):
     node, published = manager
     node.session_id = 72
