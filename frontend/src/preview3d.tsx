@@ -48,6 +48,7 @@ function App() {
   const [env, setEnv] = useState(LOOK.env)
   const [exposure, setExposure] = useState(LOOK.exposure)
   const [bg, setBg] = useState(LOOK.background)
+  const [signSize, setSignSize] = useState(LOOK.signSize)
 
   const sunFrom = useMemo(() => {
     const r = 3.5
@@ -61,8 +62,8 @@ function App() {
   }, [az, el])
 
   const look = useMemo(
-    () => ({ sun, sunFrom, fill, env, exposure, background: bg }),
-    [sun, sunFrom, fill, env, exposure, bg],
+    () => ({ sun, sunFrom, fill, env, exposure, background: bg, signSize }),
+    [sun, sunFrom, fill, env, exposure, bg, signSize],
   )
 
   const lookCode =
@@ -73,7 +74,8 @@ function App() {
     `  sun: ${sun},\n` +
     `  sunFrom: [${sunFrom.map((v) => v.toFixed(3)).join(', ')}],\n` +
     `  env: ${env},\n` +
-    `  exposure: ${exposure},\n`
+    `  exposure: ${exposure},\n` +
+    `  signSize: ${signSize},\n`
 
   const downloadLook = () => {
     const url = URL.createObjectURL(new Blob([lookCode], { type: 'text/plain' }))
@@ -213,7 +215,7 @@ function App() {
         </fieldset>
 
         <fieldset className="pv-group">
-          <legend>조명</legend>
+          <legend>조명 · 글자</legend>
           <div className="pv-rows">
             {row('주광 세기', sun, 0, 6, setSun)}
             {row('주광 방위 (도)', az, 0, 360, setAz, 1)}
@@ -221,6 +223,7 @@ function App() {
             {row('받침 세기', fill, 0, 1.5, setFill)}
             {row('주변 반사', env, 0, 1.5, setEnv)}
             {row('노출', exposure, 0.3, 2.2, setExposure)}
+            {row('안내 글자 크기', signSize * 1000, 3, 25, (v) => setSignSize(v / 1000), 0.1)}
           </div>
 
           <div className="pv-btns">
@@ -245,13 +248,14 @@ function App() {
                 setEnv(LOOK.env)
                 setExposure(LOOK.exposure)
                 setBg(LOOK.background)
+                setSignSize(LOOK.signSize)
               }}
             >
               처음으로
             </button>
           </div>
 
-          <textarea className="pv-out" readOnly value={lookCode} rows={8} />
+          <textarea className="pv-out" readOnly value={lookCode} rows={10} />
         </fieldset>
       </aside>
     </div>

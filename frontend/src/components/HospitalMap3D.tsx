@@ -117,6 +117,8 @@ export interface Look {
   sunFrom: readonly [number, number, number]
   env: number
   exposure: number
+  /** 안내 글자 크기. 지도 가로폭에 대한 비율이라 지도를 키우면 같이 커진다 */
+  signSize: number
   viewFrom: readonly [number, number, number]
 }
 
@@ -139,6 +141,11 @@ export const LOOK: Look = {
   /** 주변 반사(있는 듯 없는 듯). 재질에 생기를 준다 */
   env: 0.3,
   exposure: 1.0,
+  /**
+   * 안내 글자 크기. 지도 가로폭의 몇 배인가 — 지도가 커지면 글자도 같이
+   * 커지므로, 지도를 넓게 쓰려면 이 값을 줄여야 글자가 커 보이지 않는다.
+   */
+  signSize: 0.0105,
   /**
    * 기본 시점 방향. 건물 중심에서 이쪽으로 물러나 바라본다.
    * 낮게 볼수록 입체감은 살지만 바닥이 벽에 가린다 — 바닥에 그리는 라이다를
@@ -203,6 +210,7 @@ interface Handles {
   plan: Line2
   waypoints: THREE.Group
   invalidate: () => void
+  setSignSize: (v: number) => void
   resetView: () => void
   pick: (clientX: number, clientY: number, atY?: number) => { u: number; v: number } | null
   pickWaypoint: (clientX: number, clientY: number) => string | null
@@ -474,6 +482,13 @@ export function HospitalMap3D({
       }
     }
 
+    let signSize = LOOK.signSize
+    const setSignSize = (v: number) => {
+      signSize = v
+      labelHost.style.fontSize = `${host.clientWidth * v}px`
+      invalidate()
+    }
+
     let showSigns = true
     const setShowSigns = (v: boolean) => {
       showSigns = v
@@ -511,8 +526,8 @@ export function HospitalMap3D({
       camera.updateProjectionMatrix()
       // 굵은 선은 화면 크기를 알아야 두께를 계산한다.
       planMat.resolution.set(w, h)
-      // 글자 크기는 화면 폭을 따라간다. 2D 지도에서 맞춰 둔 비율 그대로다.
-      labelHost.style.fontSize = `${w * 0.0145}px`
+      // 글자 크기는 화면 폭을 따라간다.
+      labelHost.style.fontSize = `${w * signSize}px`
       invalidate()
     }
     const ro = new ResizeObserver(resize)
@@ -541,8 +556,8 @@ export function HospitalMap3D({
           const p = c.clone().project(camera)
           m = Math.max(m, Math.abs(p.x), Math.abs(p.y))
         }
-        if (Math.abs(m - 0.88) < 0.005) break
-        d *= Math.max(0.6, Math.min(1.6, m / 0.88))
+        if (Math.abs(m - 0.94) < 0.005) break
+        d *= Math.max(0.6, Math.min(1.6, m / 0.94))
       }
       controls.target.copy(center)
       camera.position.copy(center).addScaledVector(dir, d)
@@ -633,6 +648,7 @@ export function HospitalMap3D({
       host,
       pulse,
       robotMats,
+      setSignSize,
       scan: scanPts,
       particles: particlePts,
       plan: planLine,
@@ -685,6 +701,7 @@ export function HospitalMap3D({
     h.hemi.groundColor.set(L.ground)
     h.renderer.toneMappingExposure = L.exposure
     h.host.style.background = L.background
+    h.setSignSize(L.signSize)
     for (const m of h.mats) m.envMapIntensity = L.env
     h.invalidate()
     // lookKey 로 값이 실제로 바뀐 때만 돈다(객체는 매번 새로 만들어진다).

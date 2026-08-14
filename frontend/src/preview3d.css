@@ -23,13 +23,20 @@
   /* 폭을 좁게 묶으면 넓은 화면에서도 휴대폰처럼 보인다. */
   max-width: 1700px;
   margin: 0 auto;
-  padding: 20px 20px 64px;
+  padding: 16px 18px 32px;
   align-items: start;
 }
 
-@media (min-width: 1060px) {
+/*
+ * 좌우로 가르는 문턱을 낮게 잡는다. 이 화면은 값을 맞추는 도구라, 지도가
+ * 조금 작아지더라도 바와 나란히 있는 편이 언제나 낫다.
+ *
+ * 곁칸은 고정 폭 대신 화면 폭을 따라가게 한다 — 문턱이 낮으면 좁은 화면에서
+ * 380px 이 지도를 다 잡아먹는다.
+ */
+@media (min-width: 520px) {
   .pv {
-    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-columns: minmax(0, 1fr) clamp(230px, 24vw, 380px);
   }
 
   /* 오른쪽 바를 만지는 동안 지도가 따라와 붙어 있는다. */
@@ -38,18 +45,25 @@
     top: 20px;
   }
 
-  /* 창이 낮으면 지도가 화면을 넘겨 아래 바를 가린다. 넘치지 않게 자른다. */
+  /*
+   * 지도를 창 높이에 꽉 채운다. 16:9 를 그대로 지키면 넓은 화면에서 위아래가
+   * 남아 지도가 작아진다 — 여기서는 비율보다 크기가 중요하다.
+   * (카메라는 실제 칸 크기를 보고 맞추므로 비율이 달라져도 괜찮다.)
+   */
   .pv-stage .map3d__stage {
-    max-height: calc(100vh - 210px);
+    aspect-ratio: auto;
+    height: calc(100vh - 200px);
+    min-height: 320px;
   }
 }
 
 .pv-stage h2 {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
+  font-size: 1.15rem;
 }
 
 .pv-hint {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   font-size: 13px;
   color: var(--text-muted);
   line-height: 1.5;
@@ -71,7 +85,7 @@
   padding-right: 4px;
 }
 
-@media (max-width: 1059px) {
+@media (max-width: 519px) {
   .pv-side {
     max-height: none;
     overflow-y: visible;

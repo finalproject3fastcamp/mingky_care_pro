@@ -9,14 +9,15 @@
   width: 100%;
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) clamp(230px, 22vw, 320px);
   gap: 24px;
   max-width: 1400px;
   margin: 0 auto;
   padding: 24px 20px 64px;
   align-items: start;
 }
-@media (max-width: 900px) {
+/* 미리보기 화면과 같은 이유로 문턱을 낮게 둔다(preview3d.css 참고). */
+@media (max-width: 519px) {
   .ed { grid-template-columns: minmax(0, 1fr); }
 }
 
