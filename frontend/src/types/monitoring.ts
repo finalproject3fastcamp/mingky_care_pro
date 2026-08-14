@@ -70,6 +70,7 @@ export interface Robot {
   system_state: 'active' | 'activating' | 'deactivating' | 'inactive' | 'failed' | 'unknown'
   localization_active: boolean
   fire_alarm_active: boolean | null
+  navigation_speed_mps: number | null
   runtime_reported_at: string | null
   /**
    * 로봇이 heartbeat 로 보고한 자원·큐 상태. 전부 백엔드 인메모리다.

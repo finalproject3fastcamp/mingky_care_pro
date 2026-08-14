@@ -1526,6 +1526,13 @@
 }
 .waypoint-localize-control { display: grid; gap: 10px; }
 .waypoint-system-control { display: grid; gap: 10px; }
+.waypoint-speed-control { display: grid; gap: 10px; }
+.waypoint-speed-control p { margin: 0; color: var(--text-muted); font-size: 0.85rem; line-height: 1.5; }
+.waypoint-speed-control small { color: var(--text-subtle); }
+.waypoint-speed-applied { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.waypoint-speed-applied strong { color: var(--accent-strong); }
+.waypoint-speed-stepper { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 10px; }
+.waypoint-speed-stepper output { text-align: center; font-size: 1.35rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .waypoint-system-status,
 .waypoint-system-actions { display: flex; align-items: center; gap: 8px; }
 .waypoint-system-status { justify-content: space-between; }

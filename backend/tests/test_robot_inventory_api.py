@@ -59,6 +59,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
 
     body = RobotHeartbeatIn(
         system_state="active", localization_active=True,
+        navigation_speed_mps=0.18,
         inventory_hash="a1b2c3d4", cpu_total_pct=23.4, queue_pending=1204,
         max_node_cpu_pct=99.9, max_node_cpu_name="event_gateway")
 
@@ -67,6 +68,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
     state = robot_runtime.snapshot()["pinky-01"]
     assert state.queue_pending == 1204
     assert state.max_node_cpu_name == "event_gateway"
+    assert state.navigation_speed_mps == 0.18
     # 3~5초마다 덮어쓰는 값은 DB 에 쌓지 않는다. 저장 쿼리가 없어야 한다.
     assert all("INSERT" not in query for query, _ in connection.calls)
 
@@ -122,6 +124,7 @@ def test_old_gateway_payload_still_works(monkeypatch):
 
     assert result.need_inventory is False
     assert robot_runtime.snapshot()["pinky-01"].cpu_total_pct is None
+    assert robot_runtime.snapshot()["pinky-01"].navigation_speed_mps is None
 
 
 def test_inventory_upsert_uses_server_time_and_strips_the_hash(monkeypatch):
