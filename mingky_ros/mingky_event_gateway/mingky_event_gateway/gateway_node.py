@@ -379,6 +379,7 @@ class EventGateway(Node):
         self._clinical_active = False
         self._guide_session_state = GuideState.SESSION_NONE
         self._guide_patient_id = ''
+        self._returning_to_dock = False
         self._localization_active = False
         self._fire_alarm_active = None
 
@@ -509,6 +510,7 @@ class EventGateway(Node):
     def _on_guide_state(self, msg: GuideState) -> None:
         self._guide_session_state = msg.session_state
         self._guide_patient_id = msg.patient_id
+        self._returning_to_dock = bool(msg.returning_to_dock)
         self._clinical_active = (
             msg.session_id > 0
             and msg.session_state in ACTIVE_GUIDE_SESSION_STATES
@@ -738,6 +740,7 @@ class EventGateway(Node):
                 "system_state": self._system_state(),
                 "localization_active": self._localization_active,
                 "fire_alarm_active": self._fire_alarm_active,
+                "returning_to_dock": self._returning_to_dock,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
                 "max_node_cpu_pct": self._max_node_cpu_pct,

@@ -149,6 +149,9 @@ class GuideManager(Node):
         self._battery_alarm = False
         self._emergency_engaged = False
         self._emergency_reason = 'emergency_stop'
+        # 저전압과 정상 안내 완료가 같은 충전소 복귀 경로를 공유한다.
+        # 사유를 보관해야 배터리 경보가 없어도 재시도와 안전 보류가 가능하다.
+        self._dock_reason = None
         self._dock_pending = False
         self._dock_attempt = 0
         self._dock_retry_timer = None
@@ -362,7 +365,12 @@ class GuideManager(Node):
         self._battery_alarm = msg.data
 
         if not msg.data:
-            self._cancel_dock_retry()
+            if self._dock_reason == 'battery':
+                retry_was_pending = self._dock_retry_timer is not None
+                self._cancel_dock_retry()
+                if retry_was_pending:
+                    self._dock_reason = None
+                    self._dock_pending = False
             self.events.publish(
                 'robot.battery_recovered', {'percent': max(self.percent, 0)})
             if self.robot_state == GuideState.ROBOT_BATTERY_LOW:
@@ -392,13 +400,7 @@ class GuideManager(Node):
         self.current_step_order = 0
         self.previous_visit = ''
         self.current_visit = ''
-        self._dock_attempt = 0
-        if self._emergency_engaged or self._fire_evacuating:
-            self._dock_pending = True
-            self.get_logger().warn(
-                '안전 우선 상태가 끝난 뒤 충전소 복귀를 시작합니다.')
-        else:
-            self._return_to_dock()
+        self._request_dock_return('battery')
 
     # --------------------------------------------------------------- 비상정지
 
@@ -474,7 +476,7 @@ class GuideManager(Node):
                 GuideState.ROBOT_PAUSED if self._emergency_engaged
                 else GuideState.ROBOT_BATTERY_LOW if self._battery_alarm
                 else GuideState.ROBOT_IDLE)
-            if self._battery_alarm and not self._emergency_engaged:
+            if self._dock_reason is not None and not self._emergency_engaged:
                 self._dock_pending = False
                 self._return_to_dock()
             self.get_logger().info('화재 대피 상태가 종료되었습니다.')
@@ -495,7 +497,7 @@ class GuideManager(Node):
             self._cancel_arrival_notice()
             self._cancel_adaptive_retry()
             self._cancel_dock_retry()
-            self._dock_pending = self._battery_alarm
+            self._dock_pending = self._dock_reason is not None
             self.robot_state = GuideState.ROBOT_PAUSED
             self.events.publish(
                 'robot.paused', {'reason': self._emergency_reason}, self.session_id)
@@ -503,8 +505,11 @@ class GuideManager(Node):
 
         self.events.publish(
             'robot.resumed', {'reason': self._emergency_reason}, self.session_id)
-        if self._battery_alarm:
-            self.robot_state = GuideState.ROBOT_BATTERY_LOW
+        if self._dock_reason is not None:
+            self.robot_state = (
+                GuideState.ROBOT_BATTERY_LOW
+                if self._dock_reason == 'battery'
+                else GuideState.ROBOT_MOVING)
             self._dock_pending = False
             self._return_to_dock()
         else:
@@ -648,6 +653,15 @@ class GuideManager(Node):
                 f'배터리 부족으로 새 세션 {msg.session_id} 을 즉시 종료합니다.')
             return
 
+        if self._dock_reason is not None:
+            # 백엔드가 복귀 상태를 확인해 세션 생성을 막지만 heartbeat 사이의
+            # 짧은 경합까지 로봇에서 한 번 더 방어한다.
+            self.events.publish(
+                'session.ended', {'end_reason': 'aborted'}, int(msg.session_id))
+            self.get_logger().warn(
+                f'충전소 복귀 중 생성된 세션 {msg.session_id} 을 종료합니다.')
+            return
+
         incoming_session_id = int(msg.session_id)
         incoming_patient_id = str(msg.patient_id)
         if incoming_session_id <= 0 or not incoming_patient_id:
@@ -732,13 +746,24 @@ class GuideManager(Node):
         )
 
         if completed_order >= len(self.session_visits):
+            active_session_id = self.session_id
             self.previous_visit = self.current_visit
             self.current_step_order = 0
             self.session_state = GuideState.SESSION_COMPLETED
             self.robot_state = GuideState.ROBOT_IDLE
             self.events.publish(
-                'session.ended', {'end_reason': 'completed'}, self.session_id)
-            self.get_logger().info(f'안내 세션 완료: session_id={self.session_id}')
+                'session.ended', {'end_reason': 'completed'}, active_session_id)
+            self.get_logger().info(f'안내 세션 완료: session_id={active_session_id}')
+
+            # 이후 충전소 이동 이벤트는 종료된 환자 세션과 분리한다.
+            self.session_id = 0
+            self.session_state = GuideState.SESSION_NONE
+            self.patient_id = ''
+            self.current_step_order = 0
+            self.previous_visit = ''
+            self.current_visit = ''
+            self.session_visits = []
+            self._request_dock_return('session_completed')
             return
 
         self.previous_visit = self.current_visit
@@ -901,17 +926,34 @@ class GuideManager(Node):
             self.destroy_timer(self._adaptive_retry_timer)
             self._adaptive_retry_timer = None
 
+    def _request_dock_return(self, reason: str) -> None:
+        """충전소 복귀 의도를 등록하고 안전한 시점에 첫 이동을 시작한다."""
+        self._cancel_dock_retry()
+        self._dock_reason = reason
+        self._dock_attempt = 0
+        if self._emergency_engaged or self._fire_evacuating:
+            self._dock_pending = True
+            self.get_logger().warn(
+                '안전 우선 상태가 끝난 뒤 충전소 복귀를 시작합니다.')
+            return
+        self._return_to_dock()
+
     def _return_to_dock(self) -> None:
         """현재 안내 목표를 선점하고 이 로봇에 배정된 충전소로 복귀한다."""
-        if not self._battery_alarm:
+        if self._dock_reason is None:
+            return
+        if self._dock_reason == 'battery' and not self._battery_alarm:
+            self._dock_reason = None
+            self._dock_pending = False
             return
         if self._emergency_engaged or self._fire_evacuating:
             self._dock_pending = True
             return
         self._dock_pending = False
         self._dock_attempt += 1
-        self.get_logger().warn(
-            f'충전소 복귀 시도 {self._dock_attempt}/{self.dock_max_attempts}')
+        self.get_logger().info(
+            f'충전소 복귀 시도 {self._dock_attempt}/{self.dock_max_attempts} '
+            f'(reason={self._dock_reason})')
         self._send_nav_goal(self.charging_waypoint, is_dock=True, session_id=0)
 
     def _cancel_dock_retry(self) -> None:
@@ -926,8 +968,15 @@ class GuideManager(Node):
 
     def _dock_failed(
             self, waypoint_name: str, error_code: int, *, retryable: bool) -> None:
-        self.robot_state = GuideState.ROBOT_BATTERY_LOW
-        if (retryable and self._battery_alarm and not self._emergency_engaged
+        dock_active = (
+            self._dock_reason == 'session_completed'
+            or (self._dock_reason == 'battery' and self._battery_alarm))
+        self.robot_state = (
+            GuideState.ROBOT_BATTERY_LOW
+            if self._dock_reason == 'battery'
+            else GuideState.ROBOT_MOVING)
+        if (retryable and dock_active and not self._emergency_engaged
+                and not self._fire_evacuating
                 and self._dock_attempt < self.dock_max_attempts):
             self.get_logger().warn(
                 f'{self.dock_retry_delay:.1f}초 뒤 충전소 복귀를 재시도합니다.')
@@ -937,6 +986,10 @@ class GuideManager(Node):
         self.events.publish(
             'dock.return_failed',
             {'station_name': waypoint_name, 'error_code': int(error_code)})
+        self._dock_reason = None
+        self._dock_pending = False
+        if not self._battery_alarm:
+            self.robot_state = GuideState.ROBOT_IDLE
 
     def _send_nav_goal(
             self, waypoint_name: str, *, is_dock: bool, session_id: int,
@@ -989,7 +1042,10 @@ class GuideManager(Node):
         generation = self._nav_generation
         if is_dock:
             self.current_visit = waypoint_name
-            self.robot_state = GuideState.ROBOT_BATTERY_LOW
+            self.robot_state = (
+                GuideState.ROBOT_BATTERY_LOW
+                if self._dock_reason == 'battery'
+                else GuideState.ROBOT_MOVING)
             self.events.publish(
                 'dock.return_started', {'station_name': waypoint_name})
         elif is_waiting:
@@ -1069,6 +1125,9 @@ class GuideManager(Node):
                 self.events.publish(
                     'dock.return_succeeded', {'station_name': waypoint_name})
                 self.get_logger().info(f'충전소 도착: {waypoint_name}')
+                self._dock_reason = None
+                self._dock_pending = False
+                self._dock_attempt = 0
             elif is_waiting:
                 self.robot_state = GuideState.ROBOT_WAITING
                 self.session_state = GuideState.SESSION_IN_ROOM
@@ -1087,10 +1146,12 @@ class GuideManager(Node):
                 self._play_arrival_chime()
                 self._schedule_waiting_move(visit_name, session_id)
         else:
-            if (not is_dock and not is_waiting and status == 6
+            adaptive_dock = is_dock and recovery_attempt == 0
+            if (not is_waiting and status == 6
+                    and (not is_dock or adaptive_dock)
                     and self._start_adaptive_recovery(
                         waypoint_name, session_id, recovery_attempt,
-                        dict(recovery_failures or {}))):
+                        dict(recovery_failures or {}), is_dock=is_dock)):
                 return
             if (not is_dock and not is_waiting and status == 6
                     and self.recovery_mode == 'adaptive'):
@@ -1104,11 +1165,11 @@ class GuideManager(Node):
 
     def _start_adaptive_recovery(
             self, waypoint_name: str, session_id: int, recovery_attempt: int,
-            failures: dict[str, int]) -> bool:
+            failures: dict[str, int], *, is_dock: bool = False) -> bool:
         """현재 위치에서 안전한 탈출 후보를 만들고 경로 검증을 시작한다."""
         if self.recovery_mode != 'adaptive':
             return False
-        if self._battery_alarm or self._emergency_engaged:
+        if (self._battery_alarm and not is_dock) or self._emergency_engaged:
             return False
         now_ns = self.get_clock().now().nanoseconds
         stale_ns = int(self.recovery_scan_stale_sec * 1_000_000_000)
@@ -1156,6 +1217,7 @@ class GuideManager(Node):
         context = {
             'waypoint_name': waypoint_name,
             'session_id': session_id,
+            'is_dock': is_dock,
             'recovery_attempt': recovery_attempt,
             'failures': failures,
             'candidates': candidates,
@@ -1195,6 +1257,10 @@ class GuideManager(Node):
         index = context['index']
         if index >= len(context['candidates']):
             self.get_logger().warn('검증 가능한 적응형 탈출 경로가 없습니다.')
+            if context['is_dock']:
+                self._dock_failed(
+                    context['waypoint_name'], 6, retryable=True)
+                return
             self._schedule_adaptive_retry(
                 context['waypoint_name'],
                 context['session_id'],
@@ -1302,10 +1368,12 @@ class GuideManager(Node):
         if status != 4:
             self._recovery_motion_failed(context)
             return
-        self.get_logger().info('임시 탈출 지점 도착; 원래 안내 목표를 다시 시도합니다.')
+        target_kind = '충전소' if context['is_dock'] else '안내'
+        self.get_logger().info(
+            f'임시 탈출 지점 도착; 원래 {target_kind} 목표를 다시 시도합니다.')
         self._send_nav_goal(
             context['waypoint_name'],
-            is_dock=False,
+            is_dock=context['is_dock'],
             session_id=context['session_id'],
             recovery_attempt=context['recovery_attempt'] + 1,
             recovery_failures=context['failures'],
@@ -1316,6 +1384,10 @@ class GuideManager(Node):
         candidate = context['active_candidate']
         failures = context['failures']
         failures[candidate.name] = failures.get(candidate.name, 0) + 1
+        if context['is_dock']:
+            self._dock_failed(
+                context['waypoint_name'], 6, retryable=True)
+            return
         next_attempt = context['recovery_attempt'] + 1
         if self._start_adaptive_recovery(
                 context['waypoint_name'], context['session_id'],
@@ -1393,6 +1465,7 @@ class GuideManager(Node):
         msg.previous_visit = self.previous_visit
         msg.current_visit = self.current_visit
         msg.battery_voltage = float(self.voltage)
+        msg.returning_to_dock = self._dock_reason is not None
         msg.battery_percent = self.percent
         self.state_pub.publish(msg)
 

@@ -44,4 +44,5 @@ string current_visit
 
 # 배터리. percentage 는 파생값이라 없을 수 있으므로 -1 을 '모름' 으로 쓴다.
 float32 battery_voltage
+bool returning_to_dock
 int16 battery_percent

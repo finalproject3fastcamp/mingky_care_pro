@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 import pytest
 
-from app import arming, heartbeat
+from app import arming, heartbeat, robot_runtime
 from app.routers import robots
 
 
@@ -74,6 +74,7 @@ def _row(**overrides):
 def _arm(monkeypatch, row, *, seen="online"):
     monkeypatch.setattr(robots, "get_pool", lambda: ArmPool(row))
     heartbeat.reset()
+    robot_runtime.reset()
     arming.reset() if hasattr(arming, "reset") else None
     if seen == "online":
         heartbeat.touch("pinky-01")
@@ -129,6 +130,21 @@ def test_busy_robot_reports_the_session_it_is_running(monkeypatch):
 
     assert error.detail["code"] == "robot_busy"
     assert error.detail["params"]["session_id"] == 42
+
+
+def test_returning_robot_cannot_be_armed(monkeypatch):
+    robot_runtime.reset()
+    robot_runtime.update(
+        'pinky-01', 'active', False, returning_to_dock=True)
+    monkeypatch.setattr(robots, "get_pool", lambda: ArmPool(_row()))
+    heartbeat.reset()
+    heartbeat.touch('pinky-01')
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(robots.arm_robot('pinky-01'))
+
+    assert exc_info.value.detail['code'] == 'returning_to_dock'
+    robot_runtime.reset()
 
 
 def test_offline_and_unknown_link_are_separate_codes(monkeypatch):

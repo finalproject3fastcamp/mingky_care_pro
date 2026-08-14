@@ -164,6 +164,7 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
         system_state=runtime.system_state if runtime else "unknown",
         localization_active=runtime.localization_active if runtime else False,
         fire_alarm_active=runtime.fire_alarm_active if runtime else None,
+        returning_to_dock=runtime.returning_to_dock if runtime else False,
         runtime_reported_at=runtime.reported_at if runtime else None,
         # 구버전 게이트웨이는 안 보낸다. None 이 정상이고, 화면은 값이 없는
         # 것과 0 인 것을 구분해서 그려야 한다.
@@ -215,6 +216,10 @@ async def arm_robot(robot_id: str) -> RobotOut:
                     "robot_busy",
                     f"robot busy with session {row['active_session_id']}",
                     session_id=row["active_session_id"])
+            runtime = robot_runtime.snapshot().get(robot_id)
+            if runtime is not None and runtime.returning_to_dock:
+                raise _reject(
+                    "returning_to_dock", "robot is returning to charging station")
             seen = heartbeat.snapshot().get(robot_id)
             if seen is None:
                 raise _reject("link_unknown", "robot connection is unknown")
@@ -330,12 +335,16 @@ async def post_heartbeat(
         body.system_state,
         body.localization_active,
         body.fire_alarm_active,
+        body.returning_to_dock,
         inventory_hash=body.inventory_hash,
         cpu_total_pct=body.cpu_total_pct,
         queue_pending=body.queue_pending,
         max_node_cpu_pct=body.max_node_cpu_pct,
         max_node_cpu_name=body.max_node_cpu_name,
     )
+    if body.returning_to_dock:
+        # 복귀 직전에 활성화된 경우에도 QR 스캔을 즉시 끈다.
+        arming.disarm(robot_id)
 
     return RobotHeartbeatOut(
         need_inventory=await _needs_inventory(robot_id, body.inventory_hash))
