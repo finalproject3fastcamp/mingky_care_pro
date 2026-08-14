@@ -220,6 +220,7 @@ export function EngineerDashboard() {
             percent={focusedRobot.battery_percent}
             recordedAt={focusedRobot.battery_recorded_at}
             audience="engineer"
+            charging={forecast.data?.direction === 'charging'}
           />
           <BatteryForecastLabel forecast={forecast.data ?? null} audience="engineer" />
         </div>

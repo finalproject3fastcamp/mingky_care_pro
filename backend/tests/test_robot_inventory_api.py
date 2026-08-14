@@ -166,8 +166,10 @@ def test_get_inventory_attaches_the_server_side_verdicts(monkeypatch):
         ],
         "processes": [{"pid": 1, "install_path": "/ws/install/a"}],
         "workspaces": [
-            {"path": "/home/pinky/mingky_care_pro", "process_count": 11},
-            {"path": "/home/pinky/wmk", "process_count": 1},
+            {"path": "/home/pinky/mingky_care_pro", "commit": "44ad0a2",
+             "process_count": 11},
+            {"path": "/home/pinky/wmk/mingky_care_pro", "commit": "15446f3",
+             "process_count": 1},
         ],
         "ros_domain_id": 0,
     }

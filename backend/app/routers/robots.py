@@ -41,6 +41,20 @@ router = APIRouter(prefix="/robots", tags=["robots"])
 MIN_BATTERY_PERCENT = 40
 MAX_BATTERY_AGE = timedelta(minutes=5)
 
+# 이 전압을 넘으면 퍼센트가 100 에 고정된다 (adc_reader 의 FULL_V).
+#
+# 충전 중에는 충전기가 단자 전압을 끌어올려, 잔량이 18% 여도 7.6V 를 넘겨
+# 100% 로 보인다. 실측: pinky-01 이 6.94V(18%) 에서 충전기를 꽂자 2분 만에
+# 7.64V(100%) 가 됐다. 2분에 82% 가 찰 수는 없다 — 잔량이 아니라 충전
+# 전압이다.
+#
+# 쉬고 있는 완충 로봇도 이 값을 넘으므로, 클램프 자체로는 거부하지 않는다.
+# 전압이 오르는 중(충전 중)일 때만 잔량을 믿을 수 없다고 본다.
+BATTERY_CLAMP_VOLTAGE = 7.6
+
+# 충전 여부 판정에 쓸 전압 추이 창.
+BATTERY_TREND_WINDOW_MIN = 30
+
 
 def _reject(code: str, message: str, **params) -> HTTPException:
     """arm 거부를 기계용 코드와 사람용 문구로 나눠 돌려준다.
@@ -217,6 +231,18 @@ async def arm_robot(robot_id: str) -> RobotOut:
                     "battery_low",
                     f"battery {percent}% below {MIN_BATTERY_PERCENT}%",
                     percent=percent, min_percent=MIN_BATTERY_PERCENT)
+            voltage = row["battery_voltage"]
+            if voltage is not None and voltage > BATTERY_CLAMP_VOLTAGE:
+                # 퍼센트가 100 에 고정된 구간이다. 충전 중이면 그 100 은
+                # 잔량이 아니라 충전 전압이라, 그대로 배정하면 거의 빈
+                # 로봇이 안내를 나갔다가 도중에 멈춘다.
+                if await _battery_is_charging(conn, robot_id):
+                    raise _reject(
+                        "battery_charging",
+                        "battery percent is unreliable while charging",
+                        voltage=round(float(voltage), 3),
+                        clamp_voltage=BATTERY_CLAMP_VOLTAGE)
+
             recorded_at = row["battery_recorded_at"]
             if (recorded_at is None
                     or datetime.now(timezone.utc) - recorded_at > MAX_BATTERY_AGE):
@@ -423,6 +449,32 @@ async def post_battery(robot_id: str, sample: BatterySampleIn) -> Response:
     if not inserted:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
     return Response(status_code=204)
+
+
+async def _battery_is_charging(conn, robot_id: str) -> bool:
+    """최근 전압 추이가 오르는 중인가.
+
+    충전 중이면 단자 전압이 잔량과 무관하게 올라간다. 반대로 쉬고 있는
+    완충 로봇은 평평하거나 아주 천천히 내려간다 — 그건 배정해도 된다.
+    클램프 구간이라는 사실만으로 거부하면 완충 로봇이 영영 못 나간다.
+
+    추정이 불안정하면(부하 변동) charging 으로 보지 않는다. 여기서
+    막아 세우는 쪽이 안전해 보이지만, 오탐이 잦으면 의료진이 이유를
+    모른 채 계속 거부당하고 결국 아무도 안 믿게 된다.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT recorded_at, voltage
+        FROM robot_battery_log
+        WHERE robot_id = $1
+          AND recorded_at >= now() - ($2 || ' minutes')::interval
+        ORDER BY recorded_at
+        """,
+        robot_id, str(BATTERY_TREND_WINDOW_MIN),
+    )
+    result = battery_forecast.forecast(
+        [(r["recorded_at"], r["voltage"]) for r in rows])
+    return result is not None and result.direction == "charging"
 
 
 @router.get("/{robot_id}/battery-forecast", response_model=BatteryForecastOut)

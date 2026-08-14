@@ -109,10 +109,24 @@ def duplicates(
 
 
 def has_mixed_workspaces(workspaces: list[WorkspaceInfo]) -> bool:
-    """정상 배치에서는 워크스페이스가 하나여야 한다.
+    """우리가 관리하는 코드가 두 벌 이상 돌고 있는가.
 
     둘 이상이면 서로 다른 코드가 한 로봇에서 같이 도는 것이고, 그 상태로는
-    무엇을 고쳐야 하는지 알 수 없다. 노드가 하나도 안 잡힌 워크스페이스는
-    세지 않는다.
+    무엇을 고쳐야 하는지 알 수 없다.
+
+    두 가지는 세지 않는다.
+
+    노드가 하나도 안 잡힌 워크스페이스 — 빌드만 해두고 안 쓰는 것이라
+    지금 도는 코드가 갈렸다는 뜻이 아니다.
+
+    git 저장소가 아닌 워크스페이스(commit 이 None) — 로봇 제조사가 준
+    플랫폼(~/pinky_pro 의 라이다 드라이버 등)이 여기 해당한다. 우리
+    저장소와 무관하고 버전 관리 대상도 아니라, 별도 경로에 있는 것이
+    정상이다. 이걸 세면 정상 배치에서도 경고가 항상 켜져 있게 되고,
+    그러면 진짜 혼재가 일어났을 때 아무도 안 본다.
     """
-    return len([w for w in workspaces if w.process_count > 0]) > 1
+    ours = [
+        w for w in workspaces
+        if w.process_count > 0 and w.commit is not None
+    ]
+    return len(ours) > 1

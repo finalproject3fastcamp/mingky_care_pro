@@ -62,15 +62,48 @@ def test_errors_are_listed_before_warnings():
 
 def test_a_single_workspace_is_the_normal_deployment():
     workspaces = [WorkspaceInfo(path="/home/pinky/mingky_care_pro",
-                                process_count=11)]
+                                commit="44ad0a2", process_count=11)]
 
     assert inventory_rules.has_mixed_workspaces(workspaces) is False
 
 
 def test_two_active_workspaces_mean_code_is_mixed():
+    # 둘 다 우리 저장소의 복제본이다. 실제로 pinky-01 이 이 상태였다.
     workspaces = [
-        WorkspaceInfo(path="/home/pinky/mingky_care_pro", process_count=11),
-        WorkspaceInfo(path="/home/pinky/wmk", process_count=1),
+        WorkspaceInfo(path="/home/pinky/mingky_care_pro", commit="44ad0a2",
+                      process_count=11),
+        WorkspaceInfo(path="/home/pinky/wmk/mingky_care_pro", commit="15446f3",
+                      process_count=1),
+    ]
+
+    assert inventory_rules.has_mixed_workspaces(workspaces) is True
+
+
+def test_vendor_platform_is_not_a_mixed_workspace():
+    """~/pinky_pro 는 제조사가 준 플랫폼이라 git 저장소가 아니다.
+
+    라이다 드라이버가 거기서 도는 것은 정상 배치다. 이걸 혼재로 세면
+    두 로봇을 완전히 통일한 뒤에도 경고가 계속 켜져 있고, 그러면 진짜
+    혼재가 났을 때 아무도 안 본다.
+    """
+    workspaces = [
+        WorkspaceInfo(path="/home/pinky/mingky_care_pro", commit="44ad0a2",
+                      process_count=16),
+        WorkspaceInfo(path="/home/pinky/pinky_pro", commit=None,
+                      process_count=1),
+    ]
+
+    assert inventory_rules.has_mixed_workspaces(workspaces) is False
+
+
+def test_two_git_workspaces_are_still_mixed_even_with_vendor_present():
+    workspaces = [
+        WorkspaceInfo(path="/home/pinky/mingky_care_pro", commit="44ad0a2",
+                      process_count=5),
+        WorkspaceInfo(path="/home/pinky/pinky_pro", commit=None,
+                      process_count=1),
+        WorkspaceInfo(path="/home/pinky/wmk/mingky_care_pro", commit="8091ee3",
+                      process_count=11),
     ]
 
     assert inventory_rules.has_mixed_workspaces(workspaces) is True
@@ -78,8 +111,10 @@ def test_two_active_workspaces_mean_code_is_mixed():
 
 def test_workspace_without_running_processes_does_not_count():
     workspaces = [
-        WorkspaceInfo(path="/home/pinky/mingky_care_pro", process_count=11),
-        WorkspaceInfo(path="/home/pinky/old", process_count=0),
+        WorkspaceInfo(path="/home/pinky/mingky_care_pro", commit="44ad0a2",
+                      process_count=11),
+        WorkspaceInfo(path="/home/pinky/old", commit="15446f3",
+                      process_count=0),
     ]
 
     assert inventory_rules.has_mixed_workspaces(workspaces) is False
