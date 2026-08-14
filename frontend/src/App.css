@@ -1265,30 +1265,85 @@
 }
 
 /* Control deck ------------------------------------------------------------
-   지도가 가장 크고, 모드와 조작이 옆에 붙는다. 의료진이 가장 먼저 보는 것은
-   "로봇이 지금 어디 있나" 이고, 조작은 그 다음이다. */
-.control-deck {
-  display: grid;
-  grid-template-columns: minmax(320px, 1fr) 280px;
-  grid-template-areas:
-    'offline offline'
-    'map mode'
-    'map pad';
-  gap: 14px;
-  align-items: start;
-  margin-top: 14px;
+   데스크톱에서는 지도를 작업 화면 자체로 쓰고 조작 카드를 그 위에 띄운다.
+   지도와 조작을 나란히 놓으면 지도가 좁아져 위치 판단이 어려워진다. */
+.dashboard--medical {
+  width: min(1440px, 100%);
+  max-width: none;
 }
 
-.control-deck > .robot-map { grid-area: map; }
-.control-deck > .mode-control { grid-area: mode; margin-top: 0; }
-.control-deck > .teleop-pad { grid-area: pad; }
+.control-deck {
+  position: relative;
+  min-height: clamp(620px, 72dvh, 860px);
+  margin-top: 14px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-sm);
+}
+
+.control-deck > .robot-map {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.control-deck > .robot-map .map3d__stage {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
+.control-deck > .mode-control,
+.control-deck > .teleop-pad {
+  position: absolute;
+  z-index: 2;
+  width: min(300px, calc(100% - 36px));
+  margin: 0;
+  border-color: color-mix(in srgb, var(--border-strong) 75%, transparent);
+  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
+}
+
+.control-deck > .mode-control {
+  top: 88px;
+  left: 18px;
+}
+
+.control-deck > .teleop-pad {
+  right: 18px;
+  bottom: 18px;
+}
 
 /* 좁은 화면에서는 한 줄로 쌓는다. 병실 태블릿을 가로로만 쓰지 않는다. */
 @media (max-width: 900px) {
   .control-deck {
+    display: grid;
     grid-template-columns: 1fr;
     grid-template-areas: 'offline' 'mode' 'map' 'pad';
+    gap: 14px;
+    min-height: 0;
+    overflow: visible;
+    background: transparent;
+    box-shadow: none;
   }
+
+  .control-deck > .robot-map,
+  .control-deck > .mode-control,
+  .control-deck > .teleop-pad {
+    position: static;
+    width: auto;
+    height: auto;
+    box-shadow: none;
+  }
+
+  .control-deck > .robot-map { grid-area: map; }
+  .control-deck > .mode-control { grid-area: mode; }
+  .control-deck > .teleop-pad { grid-area: pad; }
+  .control-deck > .robot-map .map3d__stage { aspect-ratio: 16 / 9; }
 }
 
 /* Map */
@@ -1410,7 +1465,12 @@
 /* 로봇 연결 끊김 — 조작과 비상정지가 안 닿는 상태다. 지도·모드·패드
    어디를 봐도 이유를 알 수 있게 데크 맨 위에 걸쳐 놓는다. */
 .control-deck__offline {
-  grid-area: offline;
+  position: absolute;
+  z-index: 3;
+  top: 74px;
+  left: 50%;
+  width: min(620px, calc(100% - 36px));
+  box-sizing: border-box;
   margin: 0;
   padding: 10px 14px;
   border-radius: var(--radius-sm);
@@ -1419,6 +1479,18 @@
   color: var(--danger);
   font-size: 0.86rem;
   font-weight: 600;
+  transform: translateX(-50%);
+  box-shadow: 0 10px 24px rgb(127 29 29 / 16%);
+}
+
+@media (max-width: 900px) {
+  .control-deck__offline {
+    position: static;
+    grid-area: offline;
+    width: auto;
+    transform: none;
+    box-shadow: none;
+  }
 }
 
 /* Engineer workspace */
@@ -1702,16 +1774,60 @@
 .waypoint-safety-banner { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
 .waypoint-notice { background: var(--accent-bg); color: var(--accent-strong); }
 .waypoint-workspace {
-  display: grid;
-  grid-template-columns: 230px minmax(420px, 1fr) minmax(280px, 340px);
-  gap: 16px;
-  align-items: start;
+  position: relative;
+  min-height: clamp(680px, 78dvh, 920px);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-sm);
 }
-.waypoint-control-column { display: grid; gap: 14px; }
+.waypoint-workspace > .robot-map {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+.waypoint-workspace > .robot-map .map3d__stage {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+.waypoint-control-column {
+  position: absolute;
+  z-index: 2;
+  top: 88px;
+  bottom: 18px;
+  left: 18px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  width: min(260px, calc(100% - 36px));
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
 .waypoint-control-column .mode-control,
-.waypoint-control-column .teleop-pad { min-width: 0; }
-.waypoint-workspace .robot-map { min-width: 0; }
-.waypoint-editor { display: grid; gap: 13px; }
+.waypoint-control-column .teleop-pad {
+  min-width: 0;
+  margin-top: 0;
+  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
+}
+.waypoint-editor {
+  position: absolute;
+  z-index: 2;
+  top: 88px;
+  right: 18px;
+  display: grid;
+  gap: 13px;
+  width: min(320px, calc(100% - 36px));
+  max-height: calc(100% - 106px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
+  scrollbar-width: thin;
+}
 .waypoint-editor .card-title { margin-bottom: 0; }
 .waypoint-add-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
 .waypoint-coordinate-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
@@ -1733,7 +1849,27 @@
 .waypoint-conflicts { display: grid; gap: 4px; color: var(--warning); font-size: 0.76rem; }
 
 @media (max-width: 1180px) {
-  .waypoint-workspace { grid-template-columns: 220px minmax(0, 1fr); }
+  .waypoint-workspace {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    min-height: 0;
+    overflow: visible;
+    background: transparent;
+    box-shadow: none;
+  }
+  .waypoint-workspace > .robot-map,
+  .waypoint-control-column,
+  .waypoint-editor {
+    position: static;
+    width: auto;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    box-shadow: none;
+  }
+  .waypoint-workspace > .robot-map .map3d__stage { aspect-ratio: 16 / 9; }
   .waypoint-editor { grid-column: 1 / -1; }
 }
 

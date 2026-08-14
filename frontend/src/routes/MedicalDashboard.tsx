@@ -221,7 +221,7 @@ export function MedicalDashboard() {
   }
 
   return (
-    <div className="dashboard">
+    <div className="dashboard dashboard--medical">
       {stale && <ErrorBanner />}
       {/* 활성화·안내를 유지한 채 선택 화면으로. 다른 로봇을 추가로 켜는 통로다. */}
       <button
