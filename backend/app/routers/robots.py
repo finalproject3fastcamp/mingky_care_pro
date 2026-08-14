@@ -27,6 +27,25 @@ router = APIRouter(prefix="/robots", tags=["robots"])
 MIN_BATTERY_PERCENT = 40
 MAX_BATTERY_AGE = timedelta(minutes=5)
 
+
+def _reject(code: str, message: str, **params) -> HTTPException:
+    """arm 거부를 기계용 코드와 사람용 문구로 나눠 돌려준다.
+
+    영어 문자열 하나만 내려주면 프론트가 그걸 파싱해 화면 문구를 만들게 된다.
+    그러면 백엔드가 문구를 못 고친다 — 오타 하나 고치는 데 프론트 배포가
+    필요해지고, 실제로는 아무도 안 고치고 영어가 그대로 의료진에게 보인다.
+
+    code 는 기계가 분기하고, params 로 숫자를 넘겨 프론트가 문장을 만든다.
+    "배터리 N%" 의 N 을 문자열에서 정규식으로 뽑는 상황을 만들지 않는다.
+
+    message 는 남겨 둔다. detail 을 dict 로 바꾸면 문자열을 기대하던 기존
+    클라이언트가 깨지므로, 프론트를 다 옮긴 뒤에 정리한다.
+    """
+    return HTTPException(
+        status_code=409,
+        detail={"code": code, "params": params, "message": message},
+    )
+
 # 배터리는 마지막으로 저장된 표본이다. 실시간 값이 아니다.
 # 화면에 띄우는 실시간 상태는 DB 에 저장하지 않기로 했다(3~5초마다 덮어쓰는
 # 값을 영속화할 이유가 없다). 여기서는 2분 주기로 쌓인 로그의 최신 행을 쓴다.
@@ -153,31 +172,43 @@ async def arm_robot(robot_id: str) -> RobotOut:
             if row is None:
                 raise HTTPException(status_code=404, detail="robot not found")
             if not row["is_active"]:
-                raise HTTPException(status_code=409, detail="robot is not active")
+                raise _reject("robot_inactive", "robot is not active")
             if row["robot_type"] != "mobile":
-                raise HTTPException(
-                    status_code=409, detail="only mobile robots can be armed")
+                raise _reject("not_mobile", "only mobile robots can be armed")
             if row["active_session_id"] is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"robot busy with session {row['active_session_id']}")
+                raise _reject(
+                    "robot_busy",
+                    f"robot busy with session {row['active_session_id']}",
+                    session_id=row["active_session_id"])
             seen = heartbeat.snapshot().get(robot_id)
             if seen is None:
-                raise HTTPException(
-                    status_code=409, detail="robot connection is unknown")
+                raise _reject("link_unknown", "robot connection is unknown")
             if seen[1]:
-                raise HTTPException(status_code=409, detail="robot is offline")
+                raise _reject(
+                    "robot_offline", "robot is offline",
+                    last_seen_sec=round(
+                        (datetime.now(timezone.utc) - seen[0]).total_seconds()))
             percent = row["battery_percent"]
-            if percent is None or percent < MIN_BATTERY_PERCENT:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(f"battery {percent if percent is not None else 'unknown'}%"
-                            f" below {MIN_BATTERY_PERCENT}%"))
+            if percent is None:
+                raise _reject("battery_unknown", "battery reading is missing")
+            if percent < MIN_BATTERY_PERCENT:
+                raise _reject(
+                    "battery_low",
+                    f"battery {percent}% below {MIN_BATTERY_PERCENT}%",
+                    percent=percent, min_percent=MIN_BATTERY_PERCENT)
             recorded_at = row["battery_recorded_at"]
             if (recorded_at is None
                     or datetime.now(timezone.utc) - recorded_at > MAX_BATTERY_AGE):
-                raise HTTPException(
-                    status_code=409, detail="battery reading is stale")
+                # 나이를 그대로 넘긴다. "오래됐다" 만으로는 5분인지 12분인지
+                # 모르고, 그 차이가 엔지니어를 부를지 말지를 가른다.
+                age_sec = (
+                    None if recorded_at is None
+                    else round((datetime.now(timezone.utc)
+                                - recorded_at).total_seconds()))
+                raise _reject(
+                    "battery_stale", "battery reading is stale",
+                    age_sec=age_sec,
+                    max_age_sec=round(MAX_BATTERY_AGE.total_seconds()))
 
             already = arming.is_armed(robot_id)
             arming.arm(robot_id)

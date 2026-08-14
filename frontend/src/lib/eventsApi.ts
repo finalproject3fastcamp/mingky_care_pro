@@ -6,7 +6,7 @@
  */
 
 import { api } from './api'
-import type { EventPage, EventQuery } from '../types/events'
+import type { EventPage, EventQuery, UnknownCode } from '../types/events'
 
 /**
  * <input type="datetime-local"> 값을 오프셋이 붙은 ISO 문자열로 바꾼다.
@@ -62,6 +62,21 @@ export async function listEvents(
 ): Promise<EventPage> {
   const response = await api.get<EventPage>('/events', {
     params: pruneEmpty(query),
+    signal: options.signal,
+  })
+  return response.data
+}
+
+/**
+ * 서버가 해석하지 못한 event_code 목록.
+ *
+ * 적재는 되지만 등록되지 않은 코드는 상태 갱신을 타지 않아 대시보드 판정에서
+ * 빠진다. 비상정지처럼 중요한 이력이 조용히 화면에서 사라지는 경로다.
+ */
+export async function listUnknownCodes(
+  options: ListEventsOptions = {},
+): Promise<UnknownCode[]> {
+  const response = await api.get<UnknownCode[]>('/events/unknown-codes', {
     signal: options.signal,
   })
   return response.data

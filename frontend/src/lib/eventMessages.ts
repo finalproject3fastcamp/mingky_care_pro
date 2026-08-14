@@ -3,7 +3,7 @@ import type { NotificationEvent } from '../types/monitoring'
 
 // event_code → 사람이 읽는 메시지. 정본은 config/event_codes.yaml 이다.
 // 여기 없는 코드는 event_code 문자열을 그대로 보여준다 (미등록도 눈에 띈다).
-function messageFor(code: string, payload: Record<string, unknown>): string {
+export function messageFor(code: string, payload: Record<string, unknown>): string {
   const p = payload
   switch (code) {
     case 'qr.scan_ok':

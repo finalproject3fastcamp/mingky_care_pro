@@ -1801,3 +1801,101 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ── 미등록 event_code ──────────────────────────────────────────────── */
+
+.unknown-code-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unknown-code-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+}
+
+.unknown-code-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+
+.unknown-code-robot {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.unknown-code-count {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ── 세션 종료 인과 ─────────────────────────────────────────────────── */
+
+.ending-summary {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ending-summary-reason {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ending-summary-lead {
+  color: var(--text-muted);
+}
+
+.ending-timeline {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ending-timeline-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+
+.ending-timeline-row.warning {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.ending-timeline-row.error {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.ending-timeline-offset {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ending-timeline-code {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

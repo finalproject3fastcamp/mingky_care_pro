@@ -163,6 +163,50 @@ class EventPage(BaseModel):
     items: list[EventOut]
 
 
+class SessionEndingContextOut(BaseModel):
+    """세션이 왜 그렇게 끝났는지 — 종료 직전 창의 이벤트.
+
+    `end_reason` 만으로는 "배터리 부족으로 끝났다" 까지만 알 수 있고, 그게
+    갑자기 벌어진 일인지 40초 전부터 예고돼 있었는지는 알 수 없다. 둘은
+    대응이 다르다 — 후자면 임계값이 늦은 것이다.
+
+    문구는 만들지 않고 사실만 돌려준다. 의료진 화면은 한 줄 요약으로,
+    엔지니어 화면은 타임라인 전체로 같은 데이터를 다르게 그린다.
+    화면마다 어휘가 다르므로 문장은 각 화면이 만든다.
+    """
+
+    session_id: int
+    ended_at: datetime | None = None
+    end_reason: str | None = None
+    # 창 안에서 가장 이른 경고/오류. 인과의 시작점이다.
+    lead_event_code: str | None = None
+    lead_event_at: datetime | None = None
+    # 그 경고가 종료보다 몇 초 앞섰는가.
+    lead_sec: int | None = None
+    # 엔지니어 타임라인용. 발생 순(ASC)이다 — 인과는 시간 순으로 읽는다.
+    events: list[EventOut] = Field(default_factory=list)
+
+
+class UnknownCodeOut(BaseModel):
+    """config/event_codes.yaml 에 없는 코드가 얼마나 들어왔는가.
+
+    ingest 는 모르는 코드도 버리지 않고 원본을 그대로 적재한 뒤
+    system.unknown_event_code 마커를 함께 남긴다(규칙 4). 그래서 별도
+    수집 테이블 없이 마커를 집계하면 된다.
+
+    이 목록이 비어 있지 않다는 것은 로봇이 보내는 이벤트를 서버가
+    해석하지 못하고 있다는 뜻이다. 적재는 됐지만 상태 갱신은 일어나지
+    않았으므로(ingest 는 known 인 것만 _apply_state 한다) 화면·판정에서
+    통째로 빠져 있다.
+    """
+
+    event_code: str
+    robot_id: str | None = None
+    count: int
+    first_seen: datetime
+    last_seen: datetime
+
+
 class RobotOut(BaseModel):
     robot_id: str
     robot_type: str
