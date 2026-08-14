@@ -31,6 +31,8 @@ from pathlib import Path
 import rclpy
 import requests
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
@@ -76,6 +78,27 @@ MAX_CONSECUTIVE_REJECTS = 5
 # 발행 주기는 5초다. 세 번 연속 놓칠 때까지는 정상으로 보고, 그 뒤로는
 # 보내지 않는다. heartbeat 의 두절 판정(15초)과 같은 계산이다.
 BATTERY_STALE_AFTER_SEC = 20.0
+DEFAULT_NAVIGATION_SPEED_MPS = 0.20
+MIN_NAVIGATION_SPEED_MPS = 0.05
+MAX_NAVIGATION_SPEED_MPS = 0.25
+NAVIGATION_SPEED_STEP_MPS = 0.01
+
+
+def parse_navigation_speed(argument: str) -> float | None:
+    """관제 속도 문자열을 검증한다. UI 값을 신뢰하지 않고 로봇에서 다시 막는다."""
+    try:
+        speed = float(argument)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(speed):
+        return None
+    ticks = round(speed / NAVIGATION_SPEED_STEP_MPS)
+    normalized = round(ticks * NAVIGATION_SPEED_STEP_MPS, 2)
+    if abs(speed - normalized) > 1e-9:
+        return None
+    if not MIN_NAVIGATION_SPEED_MPS <= normalized <= MAX_NAVIGATION_SPEED_MPS:
+        return None
+    return normalized
 
 
 def matches_guided_patient(
@@ -363,6 +386,7 @@ class EventGateway(Node):
             Bool, "/auto_localize/active", self._on_localization_active, state_qos)
         self.create_subscription(
             Bool, "/fire_evac/alarm_active", self._on_fire_alarm_active, state_qos)
+        self.create_subscription(String, "/mode", self._on_mode, state_qos)
 
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
@@ -381,6 +405,10 @@ class EventGateway(Node):
         self._guide_patient_id = ''
         self._localization_active = False
         self._fire_alarm_active = None
+        self._mode = None
+        # Nav2 설정의 기본 목표속도다. 통합 시스템이 재시작되면 동적 설정도
+        # 이 값으로 돌아가므로 게이트웨이 상태 역시 함께 초기화한다.
+        self._navigation_speed_mps = DEFAULT_NAVIGATION_SPEED_MPS
 
         # 인벤토리 수집 상태.
         #
@@ -419,6 +447,8 @@ class EventGateway(Node):
             Trigger, "/auto_localize/trigger")
         self._fire_alarm_reset_client = self.create_client(
             Trigger, "/fire_evac/reset_alarm")
+        self._controller_parameters = AsyncParameterClient(
+            self, "controller_server")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -516,6 +546,9 @@ class EventGateway(Node):
 
     def _on_localization_active(self, msg: Bool) -> None:
         self._localization_active = bool(msg.data)
+
+    def _on_mode(self, msg: String) -> None:
+        self._mode = msg.data.strip().lower()
 
     def _on_fire_alarm_active(self, msg: Bool) -> None:
         self._fire_alarm_active = bool(msg.data)
@@ -738,6 +771,7 @@ class EventGateway(Node):
                 "system_state": self._system_state(),
                 "localization_active": self._localization_active,
                 "fire_alarm_active": self._fire_alarm_active,
+                "navigation_speed_mps": self._navigation_speed_mps,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
                 "max_node_cpu_pct": self._max_node_cpu_pct,
@@ -1148,6 +1182,36 @@ class EventGateway(Node):
             self.get_logger().info("명령 실행: fire_alarm_reset(run)")
             return True
 
+        if command == "set_navigation_speed":
+            speed = parse_navigation_speed(argument)
+            if speed is None:
+                self.get_logger().error(
+                    f"잘못된 주행 속도: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if self._system_state() != "active":
+                self.get_logger().error(
+                    "통합 시스템이 가동 중이 아니라 속도 변경을 거부했습니다.")
+                return True
+            if (self._clinical_active or self._localization_active
+                    or self._fire_alarm_active is True or self._mode != "auto"):
+                self.get_logger().error(
+                    "안내·안전 동작 중이거나 자동 모드가 아니라 속도 변경을 거부했습니다.")
+                return True
+            if not self._controller_parameters.services_are_ready():
+                self.get_logger().warn(
+                    "Nav2 controller_server 파라미터 서비스가 아직 준비되지 "
+                    "않았습니다. 명령을 유지합니다.")
+                return False
+            future = self._controller_parameters.set_parameters([
+                Parameter("FollowPath.desired_linear_vel", value=speed),
+            ])
+            future.add_done_callback(
+                lambda result, requested=speed: self._on_navigation_speed_response(
+                    result, requested))
+            self.get_logger().info(f"주행 속도 변경 요청: {speed:.2f} m/s")
+            return True
+
         publisher = self._order_pubs.get(command)
         if publisher is None:
             self.get_logger().error(
@@ -1173,6 +1237,8 @@ class EventGateway(Node):
             self.get_logger().error(f"통합 시스템 {action} 거부: {detail}")
             return False
         self.get_logger().info(f"통합 시스템 제어 완료: {action}")
+        if action in ("start", "stop", "restart"):
+            self._navigation_speed_mps = DEFAULT_NAVIGATION_SPEED_MPS
         return True
 
     def _on_localize_response(self, future) -> None:
@@ -1196,6 +1262,22 @@ class EventGateway(Node):
             self.get_logger().info(f"화재 경보 해제 완료: {response.message}")
         else:
             self.get_logger().warn(f"화재 경보 해제 거부: {response.message}")
+
+    def _on_navigation_speed_response(self, future, requested: float) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"주행 속도 변경 실패: {exc}")
+            return
+        results = response.results if response is not None else []
+        if not results or not all(result.successful for result in results):
+            reasons = ", ".join(
+                result.reason for result in (results or []) if result.reason)
+            self.get_logger().error(
+                f"주행 속도 변경 거부: {reasons or '원인 확인 불가'}")
+            return
+        self._navigation_speed_mps = requested
+        self.get_logger().info(f"주행 속도 적용 완료: {requested:.2f} m/s")
 
     # ------------------------------------------------------------------ 종료
 

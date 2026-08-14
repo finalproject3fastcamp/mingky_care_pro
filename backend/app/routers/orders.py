@@ -5,6 +5,8 @@
 동작한다. 설계 근거는 app/orders.py 주석 참고.
 """
 
+from decimal import Decimal, InvalidOperation
+
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from .. import orders, robot_runtime
@@ -12,6 +14,24 @@ from ..db import get_pool
 from ..schemas import OrderAck, OrderIn, OrderOut
 
 router = APIRouter(prefix="/robots", tags=["orders"])
+
+MIN_NAVIGATION_SPEED = Decimal("0.05")
+MAX_NAVIGATION_SPEED = Decimal("0.25")
+NAVIGATION_SPEED_STEP = Decimal("0.01")
+
+
+def _validate_navigation_speed(argument: str) -> None:
+    try:
+        speed = Decimal(argument)
+        valid_step = speed.is_finite() and speed % NAVIGATION_SPEED_STEP == 0
+    except (InvalidOperation, ValueError):
+        valid_step = False
+        speed = Decimal("0")
+    if not valid_step or not MIN_NAVIGATION_SPEED <= speed <= MAX_NAVIGATION_SPEED:
+        raise HTTPException(
+            status_code=422,
+            detail="navigation speed must be 0.05..0.25 m/s in 0.01 steps",
+        )
 
 
 async def _require_robot(robot_id: str) -> None:
@@ -74,6 +94,34 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
         if runtime is not None and runtime.fire_alarm_active is False:
             raise HTTPException(
                 status_code=409, detail="fire alarm is not active")
+    if body.command == "set_navigation_speed":
+        _validate_navigation_speed(body.argument)
+        runtime = robot_runtime.snapshot().get(robot_id)
+        if runtime is not None:
+            if runtime.system_state != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"robot system is {runtime.system_state}",
+                )
+            if runtime.localization_active or runtime.fire_alarm_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="robot safety operation is active",
+                )
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            active_session = await conn.fetchval(
+                """
+                SELECT session_id FROM guidance_sessions
+                WHERE robot_id = $1 AND ended_at IS NULL
+                """,
+                robot_id,
+            )
+        if active_session is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"robot busy with session {active_session}",
+            )
     if body.command.startswith("system_"):
         if body.argument != "run":
             raise HTTPException(

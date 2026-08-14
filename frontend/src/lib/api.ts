@@ -64,6 +64,7 @@ export type RobotCommand =
   | 'system_stop'
   | 'system_restart'
   | 'fire_alarm_reset'
+  | 'set_navigation_speed'
 
 /** mode_manager 가 인정하는 값. 그 외는 로봇이 무시한다. */
 export type RobotMode = 'auto' | 'manual' | 'estop'

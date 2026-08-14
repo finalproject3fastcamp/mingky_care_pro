@@ -6,6 +6,17 @@ import { usePolling } from '../lib/usePolling'
 import { useRobotMode } from '../lib/useRobotMode'
 
 const POLL_MS = 3000
+const MIN_NAVIGATION_SPEED = 0.05
+const MAX_NAVIGATION_SPEED = 0.25
+const DEFAULT_NAVIGATION_SPEED = 0.20
+const NAVIGATION_SPEED_STEP = 0.01
+
+function clampNavigationSpeed(value: number) {
+  return Math.min(
+    MAX_NAVIGATION_SPEED,
+    Math.max(MIN_NAVIGATION_SPEED, Math.round(value * 100) / 100),
+  )
+}
 
 function systemStateLabel(state: string) {
   if (state === 'active') return '가동 중'
@@ -21,6 +32,7 @@ export function SystemDashboard() {
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [speedDraft, setSpeedDraft] = useState(DEFAULT_NAVIGATION_SPEED)
 
   const robotList = useMemo(
     () => (robots.data ?? []).filter((robot) => robot.robot_type === 'mobile'),
@@ -36,6 +48,14 @@ export function SystemDashboard() {
   const mode = useRobotMode(selectedRobotId, POLL_MS)
   const activeSession = selectedRobot?.active_session_id != null
   const online = selectedRobot?.link_state === 'online'
+  const appliedSpeed = selectedRobot?.navigation_speed_mps ?? null
+  const speedBlocked = busy || activeSession || !online || mode !== 'auto'
+    || selectedRobot?.system_state !== 'active' || selectedRobot?.localization_active
+    || selectedRobot?.fire_alarm_active === true || appliedSpeed == null
+
+  useEffect(() => {
+    setSpeedDraft(appliedSpeed ?? DEFAULT_NAVIGATION_SPEED)
+  }, [selectedRobotId, appliedSpeed])
 
   async function issue(command: RobotCommand, label: string, confirmMessage: string) {
     if (!selectedRobotId || !window.confirm(confirmMessage)) return
@@ -46,6 +66,23 @@ export function SystemDashboard() {
       setNotice(`${label} 명령을 보냈습니다. 상태 반영에는 수 초 걸릴 수 있습니다.`)
     } catch {
       setNotice(`${label} 명령을 보내지 못했습니다.`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function applyNavigationSpeed() {
+    if (!selectedRobotId || speedBlocked) return
+    if (!window.confirm(
+      `${selectedRobotId}의 최대 주행 속도를 ${speedDraft.toFixed(2)} m/s로 변경할까요?`,
+    )) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      await sendOrder(selectedRobotId, 'set_navigation_speed', speedDraft.toFixed(2))
+      setNotice('주행 속도 변경 명령을 보냈습니다. 실제 적용값을 확인하고 있습니다.')
+    } catch {
+      setNotice('주행 속도 변경 명령을 보내지 못했습니다.')
     } finally {
       setBusy(false)
     }
@@ -112,6 +149,29 @@ export function SystemDashboard() {
               disabled={busy || activeSession || !online || selectedRobot?.system_state === 'inactive' || selectedRobot?.localization_active}
               onClick={() => issue('system_stop', '시스템 중지', `${selectedRobotId} 통합 시스템을 중지할까요?`)}>중지</button>
           </div>
+        </section>
+
+        <section className="card waypoint-speed-control">
+          <div className="card-title">주행 속도 설정</div>
+          <p>Nav2 자동주행의 직진 목표속도를 조절합니다. 기존 안전 상한을 넘을 수 없습니다.</p>
+          <div className="waypoint-speed-applied">
+            <span>현재 적용값</span>
+            <strong>{appliedSpeed == null ? '확인 중' : `${appliedSpeed.toFixed(2)} m/s`}</strong>
+          </div>
+          <div className="waypoint-speed-stepper" aria-label="주행 속도 조절">
+            <button type="button" className="btn" aria-label="주행 속도 낮추기"
+              disabled={speedBlocked || speedDraft <= MIN_NAVIGATION_SPEED}
+              onClick={() => setSpeedDraft((value) => clampNavigationSpeed(value - NAVIGATION_SPEED_STEP))}>−</button>
+            <output aria-live="polite">{speedDraft.toFixed(2)} m/s</output>
+            <button type="button" className="btn" aria-label="주행 속도 높이기"
+              disabled={speedBlocked || speedDraft >= MAX_NAVIGATION_SPEED}
+              onClick={() => setSpeedDraft((value) => clampNavigationSpeed(value + NAVIGATION_SPEED_STEP))}>＋</button>
+          </div>
+          <small>조절 범위 {MIN_NAVIGATION_SPEED.toFixed(2)}–{MAX_NAVIGATION_SPEED.toFixed(2)} m/s · 0.01 m/s 단위</small>
+          {mode !== 'auto' && <p>자동 주행 모드에서만 변경할 수 있습니다.</p>}
+          <button type="button" className="btn primary"
+            disabled={speedBlocked || Math.abs(speedDraft - (appliedSpeed ?? speedDraft)) < 0.001}
+            onClick={applyNavigationSpeed}>적용</button>
         </section>
 
         <section className="card waypoint-localize-control">
