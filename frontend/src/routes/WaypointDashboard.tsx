@@ -101,7 +101,14 @@ export function WaypointDashboard() {
     selectedRobotId && teleop.robotConnected && !activeSession
       && mode === 'auto' && teleop.appliedMode === 'auto'
       && selectedRobot?.system_state === 'active'
+      && !selectedRobot.localization_active
       && selectedCheck && !['blocked', 'outside'].includes(selectedCheck.status),
+  )
+  const localizationEnabled = Boolean(
+    selectedRobotId && teleop.robotConnected && !activeSession
+      && mode === 'auto' && teleop.appliedMode === 'auto'
+      && selectedRobot?.system_state === 'active'
+      && !selectedRobot.localization_active,
   )
 
   function updateSelected(field: keyof WaypointValue, value: number) {
@@ -161,6 +168,23 @@ export function WaypointDashboard() {
       setNotice('시험 주행 명령을 보냈습니다. 지도 경로와 비상정지를 확인하세요.')
     } catch {
       setNotice('시험 주행 명령을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function findRobotLocation() {
+    if (!localizationEnabled || !selectedRobotId) return
+    if (!window.confirm(
+      `${selectedRobotId}의 위치를 다시 찾을까요?\n로봇이 제자리에서 돌거나 앞뒤로 움직일 수 있으니 주변을 비워주세요.`,
+    )) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      await sendOrder(selectedRobotId, 'localize', 'run')
+      setNotice('위치 다시 찾기 명령을 보냈습니다. 로봇 주변을 비워두고 완료될 때까지 기다리세요.')
+    } catch {
+      setNotice('위치 다시 찾기 명령을 보내지 못했습니다.')
     } finally {
       setBusy(false)
     }
@@ -260,6 +284,26 @@ export function WaypointDashboard() {
               robotConnected={teleop.robotConnected}
             />
           )}
+          <section className="card waypoint-localize-control">
+            <div className="card-title">로봇 위치 다시 찾기</div>
+            <strong className={selectedRobot?.localization_active ? 'waypoint-localize-running' : ''}>
+              {selectedRobot?.localization_active
+                ? '위치를 찾는 중입니다'
+                : '지도와 실제 위치가 다를 때 실행하세요'}
+            </strong>
+            <p>로봇이 주변을 확인하며 제자리에서 돌거나 앞뒤로 잠시 움직일 수 있습니다.</p>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || !localizationEnabled}
+              onClick={findRobotLocation}
+            >
+              위치 다시 찾기
+            </button>
+            {activeSession && (
+              <p className="waypoint-localize-disabled">환자 안내 중에는 위치를 다시 찾을 수 없습니다.</p>
+            )}
+          </section>
           <TeleopPad
             drive={drive}
             enabled={teleopEnabled}

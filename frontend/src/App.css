@@ -1594,6 +1594,11 @@
   line-height: 1.5;
 }
 .waypoint-localize-running { color: var(--accent-strong); font-size: 0.85rem; }
+.waypoint-localize-disabled {
+  color: var(--warning) !important;
+  font-size: 0.8rem !important;
+  font-weight: 600;
+}
 .waypoint-page-header {
   display: flex;
   justify-content: space-between;
