@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { PinkyModel } from '../components/PinkyModelCard'
 import { getRobots, sendOrder, type RobotCommand } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
-import { useRobotMode } from '../lib/useRobotMode'
 
 const POLL_MS = 3000
 
@@ -33,7 +32,6 @@ export function SystemDashboard() {
   }, [robotList, selectedRobotId])
 
   const selectedRobot = robotList.find((robot) => robot.robot_id === selectedRobotId) ?? null
-  const mode = useRobotMode(selectedRobotId, POLL_MS)
   const activeSession = selectedRobot?.active_session_id != null
   const online = selectedRobot?.link_state === 'online'
 
@@ -56,7 +54,7 @@ export function SystemDashboard() {
       <header className="waypoint-page-header">
         <span className="waypoint-page-header__eyebrow">ENGINEER TOOL</span>
         <h1>로봇 시스템 관리</h1>
-        <p>통합 시스템과 AMCL 위치 추정 상태를 확인하고 제어합니다.</p>
+        <p>로봇 통합 시스템의 가동 상태를 확인하고 제어합니다.</p>
       </header>
 
       <section className="waypoint-robot-picker" aria-label="관리할 로봇 선택">
@@ -89,7 +87,7 @@ export function SystemDashboard() {
       </section>
 
       {notice && <div className="waypoint-notice" role="status">{notice}</div>}
-      {activeSession && <div className="waypoint-safety-banner" role="alert">환자 안내 중에는 시스템 중지·재시작과 위치 재탐색이 차단됩니다.</div>}
+      {activeSession && <div className="waypoint-safety-banner" role="alert">환자 안내 중에는 시스템 중지·재시작이 차단됩니다.</div>}
 
       <div className="system-control-grid">
         <section className="card waypoint-system-control">
@@ -112,21 +110,6 @@ export function SystemDashboard() {
               disabled={busy || activeSession || !online || selectedRobot?.system_state === 'inactive' || selectedRobot?.localization_active}
               onClick={() => issue('system_stop', '시스템 중지', `${selectedRobotId} 통합 시스템을 중지할까요?`)}>중지</button>
           </div>
-        </section>
-
-        <section className="card waypoint-localize-control">
-          <div className="card-title">AMCL 위치 재탐색</div>
-          <p>위치가 크게 어긋났을 때 실행합니다. 로봇이 주변을 확인하며 회전·왕복 이동할 수 있습니다.</p>
-          <strong className={selectedRobot?.localization_active ? 'waypoint-localize-running' : ''}>
-            {selectedRobot?.localization_active ? '재탐색 실행 중' : '대기 중'}
-          </strong>
-          {mode !== 'auto' && <p>자동 주행 모드에서만 실행할 수 있습니다.</p>}
-          <button type="button" className="btn"
-            disabled={busy || activeSession || !online || mode !== 'auto'
-              || selectedRobot?.system_state !== 'active' || selectedRobot?.localization_active}
-            onClick={() => issue('localize', 'AMCL 위치 재탐색', `${selectedRobotId}의 AMCL 위치 재탐색을 실행할까요?\n로봇 주변을 비워주세요.`)}>
-            자동 재탐색 실행
-          </button>
         </section>
 
         <section className="card waypoint-localize-control">

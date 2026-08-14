@@ -11,7 +11,7 @@ export function EngineerLayout() {
           </NavLink>
           <NavLink to="system" className={({ isActive }) => `engineer-nav__link${isActive ? ' active' : ''}`}>
             <span>시스템 관리</span>
-            <small>가동 · 재시작 · 위치 추정</small>
+            <small>가동 · 재시작 · 화재 경보</small>
           </NavLink>
           <NavLink to="waypoints" className={({ isActive }) => `engineer-nav__link${isActive ? ' active' : ''}`}>
             <span>Waypoint 관리</span>
