@@ -1,13 +1,13 @@
 import asyncpg
 
-from .config import DATABASE_URL
+from .config import database_url
 
 _pool: asyncpg.Pool | None = None
 
 
 async def connect() -> None:
     global _pool
-    _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+    _pool = await asyncpg.create_pool(database_url(), min_size=1, max_size=5)
 
 
 async def disconnect() -> None:

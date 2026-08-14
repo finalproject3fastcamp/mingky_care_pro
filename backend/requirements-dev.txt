@@ -1,0 +1,10 @@
+# 개발·CI 전용. 런타임 이미지에는 넣지 않는다 (backend/Dockerfile 은
+# requirements.txt 만 설치한다).
+#
+# 지금까지 pytest 가 어디에도 선언돼 있지 않았다. 각자 venv 에 우연히 깔려
+# 있어서 돌았을 뿐이라, 새로 클론한 사람과 CI 러너는 테스트를 실행할 방법이
+# 없었다.
+
+-r requirements.txt
+
+pytest>=8.0
