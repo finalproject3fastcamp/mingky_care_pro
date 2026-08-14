@@ -1,0 +1,114 @@
+/*
+ * 3D 지도 화면. 머리말·범례는 기존 지도(.robot-map)의 것을 그대로 쓰고,
+ * 여기서는 3D 가 놓이는 자리와 그 위에 뜨는 안내 글자만 정한다.
+ */
+
+.map3d__stage {
+  position: relative;
+  width: 100%;
+  /*
+   * 건물은 가로 3.4 m · 세로 1.9 m 로 옆으로 길다. 기존 지도(576×441)의
+   * 비율을 쓰면 위아래가 크게 비어 건물이 작아 보인다.
+   */
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #b9bcbf;
+  /* 3D 안을 끌어 돌리는 동안 브라우저가 화면을 스크롤하면 안 된다. */
+  touch-action: none;
+}
+
+/* 위치 지정 모드. 십자 커서로 "지금 찍는 중" 을 알린다. */
+.map3d__stage--placing {
+  cursor: crosshair;
+  box-shadow: inset 0 0 0 2px #2563eb;
+}
+
+.map3d__canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.map3d__canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/*
+ * 안내 글자. 3D 위에 얹히지만 마우스는 통과시킨다 — 글자에 손짓이 걸리면
+ * 그 자리에서는 화면을 돌릴 수 없게 된다.
+ */
+.map3d__signs {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.map3d__sign {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  font-family: 'Pretendard Variable', Pretendard, -apple-system, 'Noto Sans KR', sans-serif;
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: #1f4f7a;
+  text-align: center;
+  text-shadow: 0 1px 2px rgb(20 40 60 / 18%);
+  background: rgb(255 255 255 / 68%);
+  padding: 0.18em 0.62em;
+  border-radius: 0.18em;
+  box-shadow: 0 2px 6px rgb(20 40 60 / 10%);
+}
+
+/* 화장실·비상구처럼 부차적인 안내는 한 단계 작게 — 시각 위계. */
+.map3d__sign--minor {
+  font-size: 0.78em;
+}
+
+/* 편집 화면에서만. 평소에는 글자가 손짓을 통과시킨다. */
+.map3d__sign--editing {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.map3d__sign--editing:active {
+  cursor: grabbing;
+}
+
+.map3d__sign--editing.is-picked {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.map3d__loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  background: #b9bcbf;
+}
+
+.map3d__reset {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+}
+
+.map3d__reset:hover {
+  background: #f1f5f9;
+}
