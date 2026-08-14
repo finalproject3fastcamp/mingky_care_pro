@@ -58,6 +58,7 @@ export function RobotStatusBadge({
             percent={batteryPercent}
             recordedAt={batteryRecordedAt}
             audience="staff"
+            charging={forecast?.direction === 'charging'}
           />
           <BatteryForecastLabel forecast={forecast} audience="staff" />
         </dd>

@@ -137,3 +137,86 @@ def test_offline_and_unknown_link_are_separate_codes(monkeypatch):
 
     unknown = _arm(monkeypatch, _row(), seen="unknown")
     assert unknown.detail["code"] == "link_unknown"
+
+
+class TrendConnection(ArmConnection):
+    """arm 검증 + 전압 추이 조회를 함께 처리한다."""
+
+    def __init__(self, row, samples=()):
+        super().__init__(row)
+        self.samples = list(samples)
+
+    async def fetch(self, query, *args):
+        return self.samples
+
+    async def execute(self, query, *args):
+        # arm 이 통과하면 activation.armed 이벤트를 적재한다.
+        return None
+
+
+class TrendPool:
+    def __init__(self, row, samples=()):
+        self.connection = TrendConnection(row, samples)
+
+    def acquire(self):
+        return AcquireContext(self.connection)
+
+
+def _ramp(start_v, per_hour, count=13, step_min=5):
+    """일정 기울기로 오르내리는 전압 표본."""
+    base = datetime(2026, 8, 14, 3, 0, tzinfo=timezone.utc)
+    return [
+        {"recorded_at": base + timedelta(minutes=i * step_min),
+         "voltage": start_v + per_hour * (i * step_min / 60.0)}
+        for i in range(count)
+    ]
+
+
+def _arm_with_trend(monkeypatch, row, samples):
+    monkeypatch.setattr(robots, "get_pool", lambda: TrendPool(row, samples))
+    heartbeat.reset()
+    heartbeat.touch("pinky-01")
+    try:
+        asyncio.run(robots.arm_robot("pinky-01"))
+    except HTTPException as exc:
+        return exc
+    return None
+
+
+def test_charging_robot_is_rejected_even_though_it_reads_full(monkeypatch):
+    """실측 재현 — 6.94V(18%) 로봇이 충전기를 꽂자 7.64V(100%) 가 됐다.
+
+    2분에 82% 가 찰 수는 없다. 그 100% 는 잔량이 아니라 충전 전압이고,
+    그대로 배정하면 거의 빈 로봇이 안내를 나갔다가 도중에 멈춘다.
+    """
+    row = _row(battery_voltage=7.64, battery_percent=100)
+    error = _arm_with_trend(monkeypatch, row, _ramp(6.94, 2.0))
+
+    assert error is not None
+    assert error.detail["code"] == "battery_charging"
+    assert error.detail["params"]["voltage"] == 7.64
+
+
+def test_resting_full_robot_is_still_armable(monkeypatch):
+    """완충 로봇도 7.6V 를 넘는다. 클램프만으로 막으면 아무도 못 나간다."""
+    row = _row(battery_voltage=8.05, battery_percent=100)
+    error = _arm_with_trend(monkeypatch, row, _ramp(8.10, -0.05))
+
+    assert error is None
+
+
+def test_below_clamp_voltage_skips_the_charging_check(monkeypatch):
+    # 7.6V 아래면 퍼센트가 클램프되지 않으므로 그대로 믿는다.
+    row = _row(battery_voltage=7.21, battery_percent=51)
+    error = _arm_with_trend(monkeypatch, row, _ramp(7.0, 1.0))
+
+    assert error is None
+
+
+def test_unstable_trend_does_not_block_arming(monkeypatch):
+    # 표본이 모자라면 charging 으로 단정하지 않는다. 오탐이 잦으면
+    # 의료진이 이유를 모른 채 거부당하고 결국 아무도 안 믿는다.
+    row = _row(battery_voltage=7.9, battery_percent=100)
+    error = _arm_with_trend(monkeypatch, row, _ramp(7.5, 2.0, count=3))
+
+    assert error is None

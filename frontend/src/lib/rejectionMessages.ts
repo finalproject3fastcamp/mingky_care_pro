@@ -79,6 +79,14 @@ export function rejectionMessage(detail: RejectionDetail): RejectionMessage {
     case 'battery_unknown':
       return { text: '배터리 정보를 받지 못했습니다', action: '엔지니어 호출' }
 
+    case 'battery_charging':
+      // 충전 중에는 단자 전압이 올라가 잔량이 실제보다 높게 보인다.
+      // 100% 로 보이는 로봇이 실제로는 거의 비어 있을 수 있다.
+      return {
+        text: '충전 중이라 잔량을 확인할 수 없습니다',
+        action: '충전을 마친 뒤 다시 선택',
+      }
+
     case 'battery_stale':
       return {
         text: `배터리 정보가 ${minutes(num(params, 'age_sec'))}째 갱신되지 않습니다`,
