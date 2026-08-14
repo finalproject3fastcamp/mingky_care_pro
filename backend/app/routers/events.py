@@ -69,7 +69,9 @@ _LEVEL_RANKS = {"info": 0, "warning": 1, "error": 2}
 # 다 있다. 테이블을 하나 더 만들면 같은 사실이 두 곳에 기록되고 둘이
 # 어긋나는 순간 어느 쪽이 맞는지 아무도 답할 수 없게 된다.
 #
-# 미등록 코드는 정의상 드문 사건이라 이 집계가 무거워질 일은 없다.
+# event_code 에는 인덱스가 없으므로 이 조건만으로는 events 전체를 훑는다.
+# 008 이 이 상수값에 대한 부분 인덱스를 건다 — UNKNOWN_CODE 를 바꾸면
+# 마이그레이션도 같이 바꿔야 인덱스가 죽지 않는다.
 _UNKNOWN_CODES_SQL = f"""
     SELECT
         payload->>'received_code' AS event_code,
