@@ -47,12 +47,19 @@ export function MedicalDashboard() {
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
   // 배터리 로그가 2분 주기라 그보다 자주 추정해도 같은 답이 나온다.
+  // 주기가 긴 만큼 key 가 없으면 로봇을 바꾼 뒤 2분 동안 이전 로봇의
+  // 충전 예상이 남는다 — 의료진이 그 숫자로 일정을 잡는다.
   const forecast = usePolling(
     (signal) => (selectedRobotId
       ? getBatteryForecast(selectedRobotId, { signal })
       : Promise.resolve(null)),
     FORECAST_POLL_MS,
+    selectedRobotId,
   )
+
+  // 로봇을 바꾸면 이벤트도 즉시 갈아끼운다. 안 그러면 다음 tick 까지 이전
+  // 로봇의 이벤트로 상태를 파생해(deriveRobotState) 엉뚱한 로봇의 '통신
+  // 두절' 이 표시된다.
   const events = usePolling(
     async (signal) => (
       await listEvents(
@@ -61,6 +68,7 @@ export function MedicalDashboard() {
       )
     ).items,
     POLL_MS,
+    selectedRobotId,
   )
 
   // 조작과 위치는 폴링이 아니라 소켓이다. 방향키를 누른 뒤 3초 뒤에 움직이면

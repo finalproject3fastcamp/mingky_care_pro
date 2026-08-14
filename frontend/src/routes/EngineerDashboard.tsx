@@ -103,9 +103,13 @@ export function EngineerDashboard() {
   const robotState = usePolling((signal) => getRobots({ signal }), ROBOT_POLL_MS)
 
   const target = focused ?? robots[0]?.robot_id ?? null
+  // key 가 없으면 로봇을 바꿔도 최대 30초간 이전 로봇의 인벤토리가 남는다.
+  // 그 사이에 "이 로봇은 중복 노드 없음" 으로 읽히면 이 화면의 존재 이유가
+  // 사라진다.
   const inventory = usePolling(
     (signal) => (target ? getRobotInventory(target, { signal }) : Promise.resolve(null)),
     INVENTORY_POLL_MS,
+    target,
   )
   const forecast = usePolling(
     (signal) => (target ? getBatteryForecast(target, { signal }) : Promise.resolve(null)),
