@@ -1,7 +1,12 @@
 import axios from 'axios'
 
 import type { EventOut } from '../types/events'
-import type { ActiveSession, QrObservation, Robot } from '../types/monitoring'
+import type {
+  ActiveSession,
+  QrObservation,
+  Robot,
+  RobotInventory,
+} from '../types/monitoring'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -138,6 +143,58 @@ export async function getSessionEndingContext(
 ): Promise<SessionEndingContext> {
   const { data } = await api.get<SessionEndingContext>(
     `/sessions/${sessionId}/ending-context`,
+    { signal: options.signal },
+  )
+  return data
+}
+
+/**
+ * 로봇에서 실제로 돌고 있는 것 — 실행 코드 버전과 노드 목록.
+ *
+ * 한 번도 보고하지 않은 로봇은 404 다. 호출부가 "아직 없음" 과 "실패" 를
+ * 구분해야 한다 — 전자는 게이트웨이가 구버전이거나 인벤토리를 끈 것이다.
+ */
+export async function getRobotInventory(
+  robotId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<RobotInventory | null> {
+  try {
+    const { data } = await api.get<RobotInventory>(
+      `/robots/${encodeURIComponent(robotId)}/inventory`,
+      { signal: options.signal },
+    )
+    return data
+  } catch (error) {
+    if ((error as { response?: { status?: number } })?.response?.status === 404) {
+      return null
+    }
+    throw error
+  }
+}
+
+/**
+ * 충전/방전 예상. schemas.py 의 BatteryForecastOut 과 1:1.
+ *
+ * **seconds 가 null 인 경우가 정상적으로 흔하다.** 부하가 출렁이거나
+ * 표본이 모자라면 서버가 시간을 내지 않는다 — 틀린 시간은 없는 시간보다
+ * 나쁘기 때문이다. 그때는 direction 만 써서 "충전 중" 을 표시한다.
+ */
+export interface BatteryForecast {
+  robot_id: string
+  direction: 'charging' | 'discharging' | 'idle' | 'unknown'
+  seconds: number | null
+  slope_v_per_hour: number | null
+  r_squared: number | null
+  sample_count: number
+  reason: string | null
+}
+
+export async function getBatteryForecast(
+  robotId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<BatteryForecast> {
+  const { data } = await api.get<BatteryForecast>(
+    `/robots/${encodeURIComponent(robotId)}/battery-forecast`,
     { signal: options.signal },
   )
   return data

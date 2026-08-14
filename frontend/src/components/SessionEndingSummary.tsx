@@ -20,12 +20,12 @@ import { messageFor } from '../lib/eventMessages'
  * 늘어나는 것도 눈에 띈다.
  */
 const END_REASON_LABEL: Record<string, string> = {
-  completed: '안내 완료',
-  staff: '의료진이 종료',
-  robot_offline: '로봇 통신 두절로 중단됨',
-  system_failure: '로봇 시스템 장애로 중단됨',
-  battery_low: '배터리 부족으로 중단됨',
-  patient_lost: '환자를 놓쳐 중단됨',
+  completed: '안내를 마쳤습니다.',
+  staff: '의료진이 종료했습니다.',
+  robot_offline: '로봇과 통신이 끊겨 중단됐습니다.',
+  system_failure: '로봇 시스템에 장애가 생겨 중단됐습니다.',
+  battery_low: '배터리가 부족해 중단됐습니다.',
+  patient_lost: '환자를 놓쳐 중단됐습니다.',
 }
 
 interface Props {
@@ -36,7 +36,7 @@ interface Props {
 function leadClause(context: SessionEndingContext): string | null {
   if (!context.lead_event_code || context.lead_sec == null) return null
   const label = messageFor(context.lead_event_code, {})
-  return `중단 ${context.lead_sec}초 전부터 ${label}`
+  return `중단 ${context.lead_sec}초 전부터 ${label} 상태였습니다.`
 }
 
 export function SessionEndingSummary({ context, audience }: Props) {
@@ -45,14 +45,14 @@ export function SessionEndingSummary({ context, audience }: Props) {
 
   const reason = context.end_reason
     ? (END_REASON_LABEL[context.end_reason] ?? context.end_reason)
-    : '종료 사유 없음'
+    : '종료 사유가 기록되지 않았습니다.'
   const lead = leadClause(context)
 
   if (audience === 'staff') {
     return (
       <div className="ending-summary">
         <span className="ending-summary-reason">{reason}</span>
-        {lead && <span className="ending-summary-lead"> — {lead}</span>}
+        {lead && <span className="ending-summary-lead"> {lead}</span>}
       </div>
     )
   }
@@ -62,10 +62,10 @@ export function SessionEndingSummary({ context, audience }: Props) {
       <div className="card-title">종료 직전 60초</div>
       <div className="ending-summary">
         <span className="ending-summary-reason">{reason}</span>
-        {lead && <span className="ending-summary-lead"> — {lead}</span>}
+        {lead && <span className="ending-summary-lead"> {lead}</span>}
       </div>
       {context.events.length === 0 ? (
-        <p className="empty">이 창에 남은 이벤트가 없습니다.</p>
+        <p className="empty">이 구간에 남은 이벤트가 없습니다.</p>
       ) : (
         <ol className="ending-timeline">
           {context.events.map((event) => {
