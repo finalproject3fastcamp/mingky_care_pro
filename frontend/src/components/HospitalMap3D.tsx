@@ -119,6 +119,14 @@ export interface Look {
   exposure: number
   /** 안내 글자 크기. 지도 가로폭에 대한 비율이라 지도를 키우면 같이 커진다 */
   signSize: number
+  /** 라이다 점 지름(화면 픽셀). 화면 기준이라 당겨도 또렷하다 */
+  scanSize: number
+  scanOpacity: number
+  scanColor: string
+  /** 경로 선 굵기(화면 픽셀) */
+  planWidth: number
+  planOpacity: number
+  planColor: string
   viewFrom: readonly [number, number, number]
 }
 
@@ -130,22 +138,32 @@ export const LOOK: Look = {
    * 3D 안이 아니라 캔버스 뒤에 깐다. 3D 안에 넣으면 톤매핑을 타서 지정한
    * 값과 다른 색으로 나온다(밝은 회색을 넣었더니 더 밝게 나왔다).
    */
-  background: '#b9bcbf',
+  background: '#d5d8dc',
   /** 하늘빛·바닥반사 받침 */
   sky: 0x9fb4c6,
   ground: 0xc8ccd0,
-  fill: 0.55,
+  fill: 0,
   /** 주광. 그림자를 만든다 */
-  sun: 2.6,
-  sunFrom: [1.4, 2.6, 1.9],
+  sun: 6,
+  sunFrom: [-1.009, 3.172, 1.082],
   /** 주변 반사(있는 듯 없는 듯). 재질에 생기를 준다 */
-  env: 0.3,
-  exposure: 1.0,
+  env: 0.4,
+  exposure: 0.65,
   /**
    * 안내 글자 크기. 지도 가로폭의 몇 배인가 — 지도가 커지면 글자도 같이
    * 커지므로, 지도를 넓게 쓰려면 이 값을 줄여야 글자가 커 보이지 않는다.
    */
-  signSize: 0.0105,
+  signSize: 0.0147,
+  /**
+   * 라이다·경로의 모양. 둘 다 화면 픽셀 기준이라 얼마나 당기든 굵기가 같다 —
+   * 실제 치수로 잡으면 멀리서 볼 때 사라져 판단을 못 한다.
+   */
+  scanSize: 3.5,
+  scanOpacity: 0.9,
+  scanColor: '#ef4444',
+  planWidth: 3.5,
+  planOpacity: 0.95,
+  planColor: '#2563eb',
   /**
    * 기본 시점 방향. 건물 중심에서 이쪽으로 물러나 바라본다.
    * 낮게 볼수록 입체감은 살지만 바닥이 벽에 가린다 — 바닥에 그리는 라이다를
@@ -154,10 +172,9 @@ export const LOOK: Look = {
   viewFrom: [0.08, 1.0, 0.62],
 }
 
+// 라이다·경로의 색은 LOOK 에 있다(화면에서 맞출 수 있게).
 const COLOR = {
-  scan: 0xef4444,
   particles: 0x10b981,
-  plan: 0x2563eb,
   /** 박동 색. 선택은 초록, 비상정지는 빨강 — 움직임은 같고 색만 다르다 */
   selected: 0x22c55e,
   estop: 0xef4444,
@@ -351,7 +368,7 @@ export function HospitalMap3D({
     // 버퍼를 새로 올리게 돼 화면이 끊긴다.
     const makePoints = (
       max: number,
-      color: number,
+      color: number | string,
       size: number,
       y: number,
       order: number,
@@ -383,7 +400,7 @@ export function HospitalMap3D({
       return p
     }
     // 라이다는 화면 기준 크기다. 얼마나 당기든 벽선이 또렷해야 한다.
-    const scanPts = makePoints(MAX_SCAN, COLOR.scan, 3.5, 0.05, 2, false)
+    const scanPts = makePoints(MAX_SCAN, LOOK.scanColor, LOOK.scanSize, 0.05, 2, false)
     // 파티클은 실제 크기(1.4 cm)다. 수백 개가 한자리에 모였을 때 화면 기준
     // 크기면 초록 덩어리가 되어 로봇을 덮어 버리는데, 실제 크기면 멀리서
     // 저절로 작아져 모였을 때는 옅은 무리로, 퍼졌을 때는 넓은 안개로 읽힌다.
@@ -396,10 +413,10 @@ export function HospitalMap3D({
     // 경로도 가리지 않는다. 로봇이 어디로 가려는지는 계획이지 측정이 아니라,
     // 20 cm 짜리 벽에 가려 안 보이면 레이어 자체가 쓸모없어진다.
     const planMat = new LineMaterial({
-      color: COLOR.plan,
-      linewidth: 3.5,
+      color: LOOK.planColor,
+      linewidth: LOOK.planWidth,
       transparent: true,
-      opacity: 0.95,
+      opacity: LOOK.planOpacity,
       depthWrite: false,
       depthTest: false,
       dashed: false,
@@ -702,6 +719,14 @@ export function HospitalMap3D({
     h.renderer.toneMappingExposure = L.exposure
     h.host.style.background = L.background
     h.setSignSize(L.signSize)
+    const sm = h.scan.material as THREE.PointsMaterial
+    sm.size = L.scanSize
+    sm.opacity = L.scanOpacity
+    sm.color.set(L.scanColor)
+    const pm = h.plan.material as LineMaterial
+    pm.linewidth = L.planWidth
+    pm.opacity = L.planOpacity
+    pm.color.set(L.planColor)
     for (const m of h.mats) m.envMapIntensity = L.env
     h.invalidate()
     // lookKey 로 값이 실제로 바뀐 때만 돈다(객체는 매번 새로 만들어진다).

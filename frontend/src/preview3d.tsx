@@ -25,10 +25,11 @@ import './App.css'
 import './preview3d.css'
 
 function App() {
-  // 건물 안에서 벽으로부터 가장 멀리 떨어진 자리. 벽에 붙여 두면 로봇이
-  // 벽에 가려 보이지 않고, 벽 속이면 라이다가 전부 0 이 되어 화면이 빈다.
-  const [x, setX] = useState(2.601)
-  const [y, setY] = useState(0.314)
+  // 사방이 벽으로 둘러싸인 자리(1.4 m 안에서 36방향 모두 벽에 닿는다).
+  // 탁 트인 곳에 두면 라이다가 거의 안 잡혀 그리기가 맞는지 판단할 수 없고,
+  // 벽에 붙여 두면 로봇이 벽에 가려 보이지 않는다.
+  const [x, setX] = useState(0.15)
+  const [y, setY] = useState(-0.135)
   const [yaw, setYaw] = useState(0.6)
   const [spread, setSpread] = useState(0.05)
   const [goal, setGoal] = useState('ct_room_goal')
@@ -49,6 +50,12 @@ function App() {
   const [exposure, setExposure] = useState(LOOK.exposure)
   const [bg, setBg] = useState(LOOK.background)
   const [signSize, setSignSize] = useState(LOOK.signSize)
+  const [scanSize, setScanSize] = useState(LOOK.scanSize)
+  const [scanOpacity, setScanOpacity] = useState(LOOK.scanOpacity)
+  const [scanColor, setScanColor] = useState(LOOK.scanColor)
+  const [planWidth, setPlanWidth] = useState(LOOK.planWidth)
+  const [planOpacity, setPlanOpacity] = useState(LOOK.planOpacity)
+  const [planColor, setPlanColor] = useState(LOOK.planColor)
 
   const sunFrom = useMemo(() => {
     const r = 3.5
@@ -62,8 +69,25 @@ function App() {
   }, [az, el])
 
   const look = useMemo(
-    () => ({ sun, sunFrom, fill, env, exposure, background: bg, signSize }),
-    [sun, sunFrom, fill, env, exposure, bg, signSize],
+    () => ({
+      sun,
+      sunFrom,
+      fill,
+      env,
+      exposure,
+      background: bg,
+      signSize,
+      scanSize,
+      scanOpacity,
+      scanColor,
+      planWidth,
+      planOpacity,
+      planColor,
+    }),
+    [
+      sun, sunFrom, fill, env, exposure, bg, signSize,
+      scanSize, scanOpacity, scanColor, planWidth, planOpacity, planColor,
+    ],
   )
 
   const lookCode =
@@ -75,7 +99,13 @@ function App() {
     `  sunFrom: [${sunFrom.map((v) => v.toFixed(3)).join(', ')}],\n` +
     `  env: ${env},\n` +
     `  exposure: ${exposure},\n` +
-    `  signSize: ${signSize},\n`
+    `  signSize: ${signSize},\n` +
+    `  scanSize: ${scanSize},\n` +
+    `  scanOpacity: ${scanOpacity},\n` +
+    `  scanColor: '${scanColor}',\n` +
+    `  planWidth: ${planWidth},\n` +
+    `  planOpacity: ${planOpacity},\n` +
+    `  planColor: '${planColor}',\n`
 
   const downloadLook = () => {
     const url = URL.createObjectURL(new Blob([lookCode], { type: 'text/plain' }))
@@ -215,6 +245,34 @@ function App() {
         </fieldset>
 
         <fieldset className="pv-group">
+          <legend>라이다 · 경로</legend>
+          <div className="pv-rows">
+            {row('라이다 점 굵기 (px)', scanSize, 1, 12, setScanSize, 0.1)}
+            {row('라이다 진하기', scanOpacity, 0.05, 1, setScanOpacity)}
+            {row('경로 선 굵기 (px)', planWidth, 1, 14, setPlanWidth, 0.1)}
+            {row('경로 진하기', planOpacity, 0.05, 1, setPlanOpacity)}
+          </div>
+          <div className="pv-btns">
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              라이다 색
+              <input
+                type="color"
+                value={scanColor}
+                onChange={(e) => setScanColor(e.target.value)}
+              />
+            </label>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              경로 색
+              <input
+                type="color"
+                value={planColor}
+                onChange={(e) => setPlanColor(e.target.value)}
+              />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="pv-group">
           <legend>조명 · 글자</legend>
           <div className="pv-rows">
             {row('주광 세기', sun, 0, 6, setSun)}
@@ -249,13 +307,19 @@ function App() {
                 setExposure(LOOK.exposure)
                 setBg(LOOK.background)
                 setSignSize(LOOK.signSize)
+                setScanSize(LOOK.scanSize)
+                setScanOpacity(LOOK.scanOpacity)
+                setScanColor(LOOK.scanColor)
+                setPlanWidth(LOOK.planWidth)
+                setPlanOpacity(LOOK.planOpacity)
+                setPlanColor(LOOK.planColor)
               }}
             >
               처음으로
             </button>
           </div>
 
-          <textarea className="pv-out" readOnly value={lookCode} rows={10} />
+          <textarea className="pv-out" readOnly value={lookCode} rows={16} />
         </fieldset>
       </aside>
     </div>
