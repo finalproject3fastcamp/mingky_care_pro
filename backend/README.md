@@ -160,7 +160,7 @@ app/
 
 ```json
 { "received": 1, "inserted": 1, "duplicates": 0, "state_updates": 1,
-  "unknown_codes": [], "rejected_updates": [] }
+  "unknown_codes": [], "type_mismatches": [], "rejected_updates": [] }
 ```
 
 ### 적재 규칙
@@ -184,6 +184,19 @@ app/
    그대로 적재한 뒤 `system.unknown_event_code` 를 추가로 남기고, 응답의
    `unknown_codes` 로 알립니다. HTTP 는 200 입니다 — 거부하면 게이트웨이가
    같은 배치를 무한히 재전송하게 됩니다.
+
+5. **로봇 타입에 맞지 않는 코드는 상태를 갱신하지 않습니다.**
+   `config/event_codes.yaml` 의 `robot_types` 와 `robots.robot_type` 을
+   대조합니다. 어긋나면 이벤트는 그대로 적재하되(4번과 같은 원칙)
+   `system.robot_type_mismatch` 를 남기고 응답의 `type_mismatches` 로
+   알립니다.
+
+   기록만 남기고 **판정은 거부합니다.** `nav.goal_succeeded` 는
+   `session_steps.arrived_at` 을 찍으므로, 조제 스테이션에서 온 것을 그대로
+   적용하면 팔 하나가 환자의 안내 단계를 진행시킵니다.
+
+   `robots` 에 없는 로봇은 타입을 모르므로 판정하지 않습니다. 그건 오배선이
+   아니라 등록 누락입니다.
 
 `nav.goal_succeeded` 는 `payload.visit_name` 으로 단계를 찾지 않습니다.
 한 세션에서 같은 장소를 두 번 방문할 수 있어(진료실 초진·판독) 이름만으로는

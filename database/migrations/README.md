@@ -11,3 +11,4 @@ PostgreSQL 스키마 변경 파일을 실행 순서대로 관리합니다.
 - `007_fire_session_end_reason.sql`: 화재 대피 안내 종료 사유
 - `008_events_unknown_code_index.sql`: 미등록 event_code 집계용 부분 인덱스
 - `009_robot_inventory.sql`: 로봇에서 실제 실행 중인 코드 버전·노드 목록 (최신 1행)
+- `010_robot_type_manipulator.sql` — 조제 로봇(arm) 명칭을 manipulator로 마이그레이션.
