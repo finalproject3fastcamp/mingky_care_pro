@@ -1244,7 +1244,6 @@ class EventGateway(Node):
             self.get_logger().info(
                 f"명령 실행: cancel_guidance(session_id={session_id})")
             return True
-
         publisher = self._order_pubs.get(command)
         if publisher is None:
             self.get_logger().error(
