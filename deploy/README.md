@@ -69,6 +69,7 @@ cp deploy/.env.example deploy/.env
 ./deploy/deploy.sh status
 ./deploy/deploy.sh logs
 ./deploy/deploy.sh restart
+./deploy/deploy.sh migrate
 ./deploy/deploy.sh down
 ```
 
@@ -76,9 +77,25 @@ cp deploy/.env.example deploy/.env
 
 ## DB 초기화 범위
 
-빈 PostgreSQL Volume을 처음 생성할 때만 `database/migrations/001~006`과
+빈 PostgreSQL Volume을 처음 생성할 때 `database/migrations/`의 모든 파일과
 초기 환자·약품·로봇 데이터를 적용합니다. 환자 프로필 사진은 `up` 실행 시
 멱등하게 적재합니다.
 
-이미 데이터가 있는 운영 DB에 새 마이그레이션을 자동 적용하는 기능은 아직
-포함하지 않습니다. 현재 구성은 새 PC에 현재 시스템을 처음 배포하는 용도입니다.
+## 운영 DB에 마이그레이션 적용
+
+이미 데이터가 있는 DB는 볼륨 생성 시점이 지났으므로 위 경로를 타지 않습니다.
+새 마이그레이션은 명시적으로 적용합니다.
+
+```bash
+./deploy/deploy.sh migrate
+```
+
+적용 이력은 `schema_migrations` 테이블이 들고 있어 미적용 파일만 실행됩니다.
+여러 번 실행해도 안전합니다.
+
+시드는 건너뜁니다. `001_initial_data.sql`이 환자·약품을 `DO UPDATE`로 덮어쓰기
+때문에, 운영자가 화면에서 고쳐 둔 값이 배포 때마다 되돌아갑니다.
+
+이 테이블을 도입하기 전부터 돌던 DB는 `robot_inventory` 테이블의 존재를 근거로
+`001~009`가 적용된 것으로 표시됩니다(`000_schema_migrations.sql`). 따로 손댈
+것은 없고, 첫 `migrate`에서 `010`부터 실행됩니다.
