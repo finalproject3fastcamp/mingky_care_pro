@@ -12,6 +12,7 @@ usage() {
   ./deploy/deploy.sh up       이미지 빌드 후 전체 서비스 실행
   ./deploy/deploy.sh down     서비스 종료 (DB 데이터 유지)
   ./deploy/deploy.sh restart  서비스 재시작
+  ./deploy/deploy.sh migrate  운영 DB에 미적용 마이그레이션만 적용 (시드 제외)
   ./deploy/deploy.sh status   컨테이너 상태 확인
   ./deploy/deploy.sh logs     전체 로그 확인
 EOF
@@ -120,6 +121,13 @@ case "${command_name}" in
     wait_for_backend
     wait_for_frontend
     print_urls
+    ;;
+  migrate)
+    # 빈 볼륨 최초 생성 때만 도는 initdb.d 를 손으로 한 번 더 부른다.
+    # schema_migrations 가 적용 이력을 들고 있으므로 몇 번 돌려도 안전하다.
+    prepare_env
+    compose exec -T -e MINGKY_MIGRATIONS_ONLY=1 postgres \
+      sh /docker-entrypoint-initdb.d/10-mingky-init.sh
     ;;
   status)
     prepare_env
