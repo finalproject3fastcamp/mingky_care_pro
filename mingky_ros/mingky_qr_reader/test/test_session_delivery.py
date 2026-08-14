@@ -59,7 +59,9 @@ def _node(**overrides):
         'get_logger': lambda: FakeLogger(),
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    node = SimpleNamespace(**values)
+    node._disarm = lambda: QrReaderNode._disarm(node)
+    return node
 
 
 def _session(session_id=18):
@@ -156,3 +158,22 @@ def test_guide_restart_requests_one_backend_recovery():
     ))
 
     assert node._session_recovery_requested is True
+
+
+def test_returning_to_dock_stops_scanning_and_pending_delivery():
+    node = _node(
+        _armed=True,
+        _pending_session=_session(),
+        _session_publish_attempts=2,
+    )
+
+    QrReaderNode._on_guide_state(node, GuideState(
+        robot_id='pinky-01',
+        session_id=0,
+        session_state=GuideState.SESSION_NONE,
+        returning_to_dock=True,
+    ))
+
+    assert node._armed is False
+    assert node._pending_session is None
+    assert node._session_publish_attempts == 0

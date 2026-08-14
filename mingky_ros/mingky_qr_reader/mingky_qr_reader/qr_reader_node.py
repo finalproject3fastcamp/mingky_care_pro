@@ -339,6 +339,13 @@ class QrReaderNode(Node):
         previous_session_id = self._guide_session_id
         self._guide_state_seen = True
         self._guide_session_id = int(msg.session_id)
+        if msg.returning_to_dock:
+            # guide_manager 상태는 같은 기체 안에서 즉시 도착한다. 백엔드의
+            # 다음 heartbeat를 기다리지 않고 카메라와 전달 재시도를 닫아
+            # 복귀 중 새 세션이 생기는 짧은 경합도 막는다.
+            self._pending_session = None
+            self._session_publish_attempts = 0
+            self._disarm()
         if (self._pending_session is not None
                 and self._guide_session_id == int(self._pending_session.session_id)
                 and msg.session_state != GuideState.SESSION_NONE):

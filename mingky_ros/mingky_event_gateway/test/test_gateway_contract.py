@@ -17,6 +17,7 @@ from mingky_event_gateway.gateway_node import (
     battery_is_stale,
     isolate_rejected,
     matches_guided_patient,
+    parse_navigation_speed,
     send_outcome,
 )
 from mingky_interfaces.msg import GuideState, QrObservation
@@ -28,6 +29,57 @@ def test_system_commands_only_target_fixed_systemd_actions():
         'system_stop': 'stop',
         'system_restart': 'restart',
     }
+
+
+def test_navigation_speed_accepts_configured_safe_range():
+    assert parse_navigation_speed('0.05') == 0.05
+    assert parse_navigation_speed('0.20') == 0.20
+    assert parse_navigation_speed('0.25') == 0.25
+
+
+def test_navigation_speed_rejects_out_of_range_or_off_step_values():
+    assert parse_navigation_speed('0.04') is None
+    assert parse_navigation_speed('0.251') is None
+    assert parse_navigation_speed('0.26') is None
+    assert parse_navigation_speed('nan') is None
+    assert parse_navigation_speed('fast') is None
+
+
+class _Logger:
+    def info(self, message):
+        pass
+
+    def error(self, message):
+        pass
+
+
+class _Future:
+    def __init__(self, successful):
+        result = type('Result', (), {'successful': successful, 'reason': ''})()
+        self.response = type('Response', (), {'results': [result]})()
+
+    def result(self):
+        return self.response
+
+
+def test_navigation_speed_updates_reported_value_after_parameter_success():
+    gateway = object.__new__(EventGateway)
+    gateway._navigation_speed_mps = 0.20
+    gateway.get_logger = lambda: _Logger()
+
+    gateway._on_navigation_speed_response(_Future(True), 0.24)
+
+    assert gateway._navigation_speed_mps == 0.24
+
+
+def test_navigation_speed_keeps_previous_value_after_parameter_rejection():
+    gateway = object.__new__(EventGateway)
+    gateway._navigation_speed_mps = 0.20
+    gateway.get_logger = lambda: _Logger()
+
+    gateway._on_navigation_speed_response(_Future(False), 0.24)
+
+    assert gateway._navigation_speed_mps == 0.20
 
 
 def test_active_guidance_states_cover_confirmation_through_room_waiting():

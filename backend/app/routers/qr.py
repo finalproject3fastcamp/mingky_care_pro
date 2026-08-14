@@ -122,6 +122,11 @@ async def scan(payload: QrScanRequest) -> TodaySchedule:
                         detail="robot unavailable while returning to dock")
                 # 새 세션은 armed 상태에서만 만든다. 의료진이 미리 로봇을
                 # 활성화해야 안내가 시작되는 시나리오를 강제한다.
+                runtime = robot_runtime.snapshot().get(payload.robot_id)
+                if runtime is not None and runtime.returning_to_dock:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="robot returning to charging station")
                 if not arming_ok:
                     raise HTTPException(
                         status_code=409, detail="robot not armed")

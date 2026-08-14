@@ -616,13 +616,56 @@ def test_waiting_qr_completes_final_step_and_session(manager):
     ))
 
     assert node.current_step_order == 0
-    assert node.previous_visit == 'CT'
-    assert node.session_state == GuideState.SESSION_COMPLETED
-    assert node.robot_state == GuideState.ROBOT_IDLE
-    assert node.nav.sent == []
+    assert node.previous_visit == ''
+    assert node.current_visit == 'charging_station_1'
+    assert node.session_id == 0
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node._dock_reason == 'session_completed'
+    assert len(node.nav.sent) == 1
     assert published == [
         ('session.step_completed', {'step_order': 2, 'source': 'qr'}, 82),
         ('session.ended', {'end_reason': 'completed'}, 82),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
+
+
+def test_completed_session_dock_waits_for_emergency_release(manager):
+    node, published = manager
+    node._emergency_engaged = True
+
+    node._request_dock_return('session_completed')
+
+    assert node._dock_pending is True
+    assert node.nav.sent == []
+
+    node._on_emergency_state(Bool(data=False))
+
+    assert node._dock_pending is False
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert len(node.nav.sent) == 1
+    assert published == [
+        ('robot.resumed', {'reason': 'emergency_stop'}, 0),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
+
+
+def test_session_created_during_dock_is_closed_as_race_fallback(manager):
+    node, published = manager
+    node._dock_reason = 'session_completed'
+
+    node._on_session_start(SessionStart(
+        session_id=86,
+        patient_id='patient-race',
+        current_step_order=1,
+        visit_names=['CT'],
+    ))
+
+    assert node.session_id == 0
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 86),
     ]
 
 
@@ -708,6 +751,77 @@ def test_dock_failure_retries_before_final_event(manager):
     assert published == [
         ('dock.return_failed', {
             'station_name': 'charging_station_1', 'error_code': 6}, 0)]
+
+
+def test_completed_session_dock_failure_uses_same_retry_policy(manager):
+    node, published = manager
+    node._dock_reason = 'session_completed'
+    node._dock_attempt = 1
+
+    node._dock_failed('charging_station_1', 6, retryable=True)
+
+    assert published == []
+    assert node._dock_retry_timer is not None
+    node._cancel_dock_retry()
+
+    node._dock_attempt = node.dock_max_attempts
+    node._dock_failed('charging_station_1', 6, retryable=True)
+
+    assert node._dock_reason is None
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert published == [
+        ('dock.return_failed', {
+            'station_name': 'charging_station_1', 'error_code': 6}, 0)]
+
+
+@pytest.mark.parametrize(
+    ('reason', 'battery_alarm'),
+    [('battery', True), ('session_completed', False)],
+)
+def test_dock_abort_uses_adaptive_recovery_for_every_reason(
+        manager, reason, battery_alarm):
+    node, published = manager
+    node.recovery_mode = 'adaptive'
+    node._dock_reason = reason
+    node._battery_alarm = battery_alarm
+    node._nav_generation = 4
+    calls = []
+    node._start_adaptive_recovery = (
+        lambda waypoint_name, session_id, recovery_attempt, failures,
+        *, is_dock=False: calls.append((
+            waypoint_name, session_id, recovery_attempt, failures, is_dock)) or True)
+
+    aborted = SimpleNamespace(result=lambda: SimpleNamespace(status=6))
+    node._on_goal_result(
+        aborted, 4, 'charging_station_1', True, 0)
+
+    assert calls == [('charging_station_1', 0, 0, {}, True)]
+    assert node._dock_retry_timer is None
+    assert published == []
+
+
+def test_successful_escape_retries_original_goal_as_dock(manager):
+    node, published = manager
+    node._dock_reason = 'battery'
+    node._battery_alarm = True
+    node._nav_generation = 9
+    context = {
+        'generation': 9,
+        'waypoint_name': 'charging_station_1',
+        'session_id': 0,
+        'is_dock': True,
+        'recovery_attempt': 0,
+        'failures': {'forward': 1},
+    }
+
+    succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+    node._on_recovery_goal_result(succeeded, context)
+
+    assert len(node.nav.sent) == 1
+    assert node.robot_state == GuideState.ROBOT_BATTERY_LOW
+    assert published == [
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
 
 
 def test_default_navigation_keeps_nav2_default_behavior_tree(manager):

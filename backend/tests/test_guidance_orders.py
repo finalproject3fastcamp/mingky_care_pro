@@ -214,6 +214,48 @@ def test_fire_alarm_reset_does_not_overwrite_safety_or_motion_command():
     assert orders._slot('fire_alarm_reset') is not orders._slot('goto')
 
 
+def test_navigation_speed_command_is_part_of_the_contract():
+    command = OrderIn(command='set_navigation_speed', argument='0.20')
+
+    assert command.command == 'set_navigation_speed'
+    assert command.argument == '0.20'
+
+
+def test_navigation_speed_uses_a_separate_order_slot():
+    assert orders._slot('set_navigation_speed') is not orders._slot('goto')
+    assert orders._slot('set_navigation_speed') is not orders._slot('set_mode')
+
+
+@pytest.mark.parametrize('argument', ['0.04', '0.251', '0.26', 'nan', 'fast'])
+def test_navigation_speed_rejects_values_outside_safe_steps(argument):
+    with pytest.raises(HTTPException) as raised:
+        orders_router._validate_navigation_speed(argument)
+
+    assert raised.value.status_code == 422
+
+
+@pytest.mark.parametrize('argument', ['0.05', '0.1', '0.20', '0.25'])
+def test_navigation_speed_accepts_safe_steps(argument):
+    orders_router._validate_navigation_speed(argument)
+
+
+def test_navigation_speed_rejects_active_session(monkeypatch):
+    async def require_robot(robot_id):
+        return None
+
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+    monkeypatch.setattr(
+        orders_router, 'get_pool', lambda: SessionPool(matches=77))
+    monkeypatch.setattr(orders_router.robot_runtime, 'snapshot', lambda: {})
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(orders_router.create_order(
+            'pinky-01', OrderIn(
+                command='set_navigation_speed', argument='0.15')))
+
+    assert raised.value.status_code == 409
+
+
 def test_fire_alarm_reset_rejects_unknown_argument(monkeypatch):
     async def require_robot(robot_id):
         return None

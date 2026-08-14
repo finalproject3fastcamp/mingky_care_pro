@@ -62,7 +62,7 @@ function categorize(robot: Robot): Candidate {
         : '안내 시스템 중지',
     }
   }
-  if (robot.active_session_id == null && robot.guide_robot_state === 'returning_to_dock') {
+  if (robot.returning_to_dock) {
     return { robot, eligible: false, reason: '충전소 복귀 중' }
   }
   if (robot.active_session_id == null && robot.guide_robot_state === 'paused') {
