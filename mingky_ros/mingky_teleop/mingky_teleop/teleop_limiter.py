@@ -37,7 +37,9 @@ from std_msgs.msg import String
 IN_TOPIC = "cmd_vel_teleop_raw"
 OUT_TOPIC = "cmd_vel_teleop"
 MODE_TOPIC = "/mode"
+APPLIED_MODE_TOPIC = "/teleop_limiter/applied_mode"
 PASS_MODE = "manual"
+MODES = ("auto", "manual", "estop")
 
 
 def _clamp(value: float, limit: float) -> float:
@@ -56,20 +58,32 @@ class TeleopLimiter(Node):
         # 기본값은 보수적으로 잡았다. 실측 지연과 현장 통로 폭을 보고 조정한다.
         self.declare_parameter("max_linear", 0.15)
         self.declare_parameter("max_angular", 0.6)
+        self.declare_parameter("state_publish_interval_sec", 1.0)
 
         self.max_linear = self.get_parameter("max_linear").value
         self.max_angular = self.get_parameter("max_angular").value
 
         self.pub = self.create_publisher(Twist, OUT_TOPIC, 10)
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.state_pub = self.create_publisher(
+            String, APPLIED_MODE_TOPIC, state_qos)
         self.sub = self.create_subscription(Twist, IN_TOPIC, self.on_twist, 10)
 
         # mode_manager 가 늦게 떠도 마지막 값을 받아야 한다.
         self.create_subscription(
             String, MODE_TOPIC, self.on_mode,
-            QoSProfile(depth=1,
-                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                       reliability=ReliabilityPolicy.RELIABLE))
+            state_qos)
         self.mode = None
+        state_interval = max(
+            0.1,
+            float(self.get_parameter("state_publish_interval_sec").value),
+        )
+        self.create_timer(state_interval, self._publish_state)
+        self._publish_state()
 
         # 매번 찍으면 로그가 덮인다. 상태가 바뀔 때만 알린다.
         self.warned = False
@@ -82,10 +96,20 @@ class TeleopLimiter(Node):
 
     def on_mode(self, msg: String):
         new = msg.data.strip().lower()
+        if new not in MODES:
+            self.get_logger().error(f"모르는 모드 '{msg.data}' — 텔레옵을 막는다")
+            self.mode = None
+            self._publish_state()
+            return
         if new != self.mode:
             self.get_logger().info(f"모드 수신: {self.mode} → {new}")
             self.mode = new
             self.blocked_logged = False
+        self._publish_state()
+
+    def _publish_state(self):
+        # unknown 은 실제로 모든 텔레옵을 차단하는 fail-closed 상태다.
+        self.state_pub.publish(String(data=self.mode or "unknown"))
 
     def on_twist(self, msg: Twist):
         if self.mode != PASS_MODE:

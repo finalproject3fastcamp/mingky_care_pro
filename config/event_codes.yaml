@@ -292,6 +292,16 @@ robot.mode_changed:
   level: info
   payload: { mode: [auto, manual, estop], previous: [auto, manual, estop], source: string }
 
+# mode_manager 의 요청과 teleop_limiter 가 실제 적용한 값이 유예 시간 뒤에도
+# 다를 때만 한 번 남긴다. applied=unknown 은 limiter 상태를 받지 못했다는 뜻이다.
+robot.mode_mismatch:
+  level: error
+  payload: { requested: [auto, manual, estop], applied: [auto, manual, estop, unknown] }
+
+robot.mode_recovered:
+  level: info
+  payload: { requested: [auto, manual, estop], applied: [auto, manual, estop] }
+
 # estop 은 걸어 잠긴다. 스스로 풀리지 않으며 명시적으로 해제해야 한다.
 #
 # 이 두 코드가 없는 동안 비상정지 이력이 통째로 화면에서 빠져 있었다.

@@ -43,6 +43,15 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             "initial_mode", default_value="auto",
             description="기동 시 모드. 사람이 켜지 않는 한 auto 로 시작한다"),
+        DeclareLaunchArgument(
+            "mode_publish_interval_sec", default_value="1.0",
+            description="현재 모드를 반복 발행하는 주기 [초]"),
+        DeclareLaunchArgument(
+            "mode_mismatch_grace_sec", default_value="3.0",
+            description="limiter 적용 불일치를 장애로 판단하기 전 유예 [초]"),
+        DeclareLaunchArgument(
+            "applied_mode_timeout_sec", default_value="3.0",
+            description="limiter 상태를 최신으로 인정하는 시간 [초]"),
 
         # 제어권의 정본. 서버가 아니라 로봇이 들고 있어야 통신이 끊겨도
         # 안전한 상태가 유지된다.
@@ -54,6 +63,12 @@ def generate_launch_description() -> LaunchDescription:
             parameters=[{
                 "robot_id": LaunchConfiguration("robot_id"),
                 "initial_mode": LaunchConfiguration("initial_mode"),
+                "mode_publish_interval_sec": LaunchConfiguration(
+                    "mode_publish_interval_sec"),
+                "mode_mismatch_grace_sec": LaunchConfiguration(
+                    "mode_mismatch_grace_sec"),
+                "applied_mode_timeout_sec": LaunchConfiguration(
+                    "applied_mode_timeout_sec"),
             }],
         ),
 
@@ -65,6 +80,8 @@ def generate_launch_description() -> LaunchDescription:
             parameters=[{
                 "max_linear": max_linear,
                 "max_angular": max_angular,
+                "state_publish_interval_sec": LaunchConfiguration(
+                    "mode_publish_interval_sec"),
             }],
         ),
     ])

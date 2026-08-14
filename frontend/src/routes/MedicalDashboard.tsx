@@ -248,6 +248,8 @@ export function MedicalDashboard() {
             <RobotModeControl
               robotId={selectedRobotId}
               mode={mode}
+              appliedMode={teleop.appliedMode}
+              modeStatusRevision={teleop.modeStatusRevision}
               robotConnected={teleop.robotConnected}
             />
             <RobotMap
@@ -260,11 +262,16 @@ export function MedicalDashboard() {
             />
             <TeleopPad
               drive={teleop.drive}
-              enabled={mode === 'manual' && teleop.robotConnected}
+              enabled={mode === 'manual' && teleop.appliedMode === 'manual'
+                && teleop.robotConnected}
               disabledReason={
                 !teleop.robotConnected
                   ? '로봇이 관제에 연결되어 있지 않습니다.'
-                  : mode === 'estop'
+                  : teleop.appliedMode === null
+                    ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
+                  : mode !== teleop.appliedMode
+                    ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
+                  : teleop.appliedMode === 'estop'
                     ? '비상정지가 걸려 있습니다. 해제해야 움직입니다.'
                     : '수동 조작 모드로 전환해야 움직입니다.'
               }

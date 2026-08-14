@@ -93,11 +93,13 @@ export function WaypointDashboard() {
     if (settleTimer.current) clearTimeout(settleTimer.current)
   }, [])
 
-  const teleopEnabled = mode === 'manual' && teleop.robotConnected && !activeSession
+  const teleopEnabled = mode === 'manual' && teleop.appliedMode === 'manual'
+    && teleop.robotConnected && !activeSession
   const captureEnabled = teleopEnabled && settled && teleop.pose !== null
   const selectedCheck = checkResult?.items.find((item) => item.name === selectedName) ?? null
   const testEnabled = Boolean(
-    selectedRobotId && teleop.robotConnected && !activeSession && mode === 'auto'
+    selectedRobotId && teleop.robotConnected && !activeSession
+      && mode === 'auto' && teleop.appliedMode === 'auto'
       && selectedRobot?.system_state === 'active'
       && selectedCheck && !['blocked', 'outside'].includes(selectedCheck.status),
   )
@@ -250,7 +252,13 @@ export function WaypointDashboard() {
       <div className="waypoint-workspace">
         <section className="waypoint-control-column">
           {selectedRobotId && (
-            <RobotModeControl robotId={selectedRobotId} mode={mode} robotConnected={teleop.robotConnected} />
+            <RobotModeControl
+              robotId={selectedRobotId}
+              mode={mode}
+              appliedMode={teleop.appliedMode}
+              modeStatusRevision={teleop.modeStatusRevision}
+              robotConnected={teleop.robotConnected}
+            />
           )}
           <TeleopPad
             drive={drive}
@@ -259,7 +267,11 @@ export function WaypointDashboard() {
               ? '환자 안내 중에는 수동 조작할 수 없습니다.'
               : !teleop.robotConnected
                 ? '로봇이 관제에 연결되어 있지 않습니다.'
-                : mode === 'estop'
+                : teleop.appliedMode === null
+                  ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
+                : mode !== teleop.appliedMode
+                  ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
+                : teleop.appliedMode === 'estop'
                   ? '비상정지가 걸려 있습니다.'
                   : '수동 조작 모드로 전환하세요.'}
               />
