@@ -23,6 +23,7 @@ class RuntimeState:
     reported_at: datetime
     state_since: datetime
     returning_to_dock: bool = False
+    navigation_speed_mps: float | None = None
 
     # heartbeat 층 1 — 작고 자주 바뀌는 값들.
     #
@@ -49,6 +50,7 @@ def update(
     localization_active: bool,
     fire_alarm_active: bool | None = None,
     returning_to_dock: bool | None = None,
+    navigation_speed_mps: float | None = None,
     *,
     inventory_hash: str | None = None,
     cpu_total_pct: float | None = None,
@@ -63,6 +65,7 @@ def update(
         localization_active=localization_active,
         fire_alarm_active=fire_alarm_active,
         returning_to_dock=bool(returning_to_dock),
+        navigation_speed_mps=navigation_speed_mps,
         reported_at=now,
         state_since=(
             previous.state_since

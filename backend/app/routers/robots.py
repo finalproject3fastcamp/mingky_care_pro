@@ -165,6 +165,7 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
         localization_active=runtime.localization_active if runtime else False,
         fire_alarm_active=runtime.fire_alarm_active if runtime else None,
         returning_to_dock=runtime.returning_to_dock if runtime else False,
+        navigation_speed_mps=runtime.navigation_speed_mps if runtime else None,
         runtime_reported_at=runtime.reported_at if runtime else None,
         # 구버전 게이트웨이는 안 보낸다. None 이 정상이고, 화면은 값이 없는
         # 것과 0 인 것을 구분해서 그려야 한다.
@@ -336,6 +337,7 @@ async def post_heartbeat(
         body.localization_active,
         body.fire_alarm_active,
         body.returning_to_dock,
+        body.navigation_speed_mps,
         inventory_hash=body.inventory_hash,
         cpu_total_pct=body.cpu_total_pct,
         queue_pending=body.queue_pending,
