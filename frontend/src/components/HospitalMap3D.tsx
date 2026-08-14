@@ -145,10 +145,10 @@ export const LOOK: Look = {
   fill: 0,
   /** 주광. 그림자를 만든다 */
   sun: 6,
-  sunFrom: [-1.009, 3.172, 1.082],
+  sunFrom: [0.463, 3.309, 1.041],
   /** 주변 반사(있는 듯 없는 듯). 재질에 생기를 준다 */
   env: 0.4,
-  exposure: 0.65,
+  exposure: 0.71,
   /**
    * 안내 글자 크기. 지도 가로폭의 몇 배인가 — 지도가 커지면 글자도 같이
    * 커지므로, 지도를 넓게 쓰려면 이 값을 줄여야 글자가 커 보이지 않는다.
@@ -158,11 +158,11 @@ export const LOOK: Look = {
    * 라이다·경로의 모양. 둘 다 화면 픽셀 기준이라 얼마나 당기든 굵기가 같다 —
    * 실제 치수로 잡으면 멀리서 볼 때 사라져 판단을 못 한다.
    */
-  scanSize: 3.5,
-  scanOpacity: 0.9,
-  scanColor: '#ef4444',
-  planWidth: 3.5,
-  planOpacity: 0.95,
+  scanSize: 1,
+  scanOpacity: 0.27,
+  scanColor: '#f94848',
+  planWidth: 2.6,
+  planOpacity: 0.71,
   planColor: '#2563eb',
   /**
    * 기본 시점 방향. 건물 중심에서 이쪽으로 물러나 바라본다.
