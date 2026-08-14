@@ -61,7 +61,7 @@ export function rejectionMessage(detail: RejectionDetail): RejectionMessage {
 
     case 'robot_offline':
       return {
-        text: `로봇과 연결이 끊겼습니다 (${minutes(num(params, 'last_seen_sec'))}째)`,
+        text: `로봇과 연결이 끊긴 지 ${minutes(num(params, 'last_seen_sec'))} 됐습니다`,
         action: '엔지니어 호출',
       }
 
@@ -71,7 +71,7 @@ export function rejectionMessage(detail: RejectionDetail): RejectionMessage {
     case 'battery_low': {
       const percent = num(params, 'percent')
       return {
-        text: `배터리 ${percent ?? '?'}% — 충전이 필요합니다`,
+        text: `배터리가 ${percent ?? '?'}% 라 충전이 필요합니다`,
         action: '다른 로봇 선택',
       }
     }

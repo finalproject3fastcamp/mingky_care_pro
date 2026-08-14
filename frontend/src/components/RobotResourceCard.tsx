@@ -74,8 +74,8 @@ export function RobotResourceCard({ robot }: Props) {
             {queue_pending != null && queue_pending >= QUEUE_WARN && (
               <span className="metric-note">
                 {' '}
-                상한({QUEUE_LIMIT.toLocaleString('ko-KR')}) 근처 — 오래된 것부터
-                버려지는 중
+                상한({QUEUE_LIMIT.toLocaleString('ko-KR')}) 에 가까워 오래된
+                것부터 버려지고 있습니다
               </span>
             )}
           </dd>

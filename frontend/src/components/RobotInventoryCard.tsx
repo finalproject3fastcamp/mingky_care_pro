@@ -77,8 +77,8 @@ export function RobotInventoryCard({ inventory, loading, error }: Props) {
 
       {inventory.mixed_workspaces && (
         <div className="inventory-alert error">
-          워크스페이스가 둘 이상입니다 — 서로 다른 코드가 같이 돌고 있어
-          무엇을 고쳐야 할지 알 수 없습니다.
+          워크스페이스가 둘 이상입니다. 서로 다른 코드가 함께 돌고 있어
+          어디를 고쳐야 할지 알기 어렵습니다.
         </div>
       )}
 
