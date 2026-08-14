@@ -9,7 +9,7 @@ import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotPicker } from '../components/RobotPicker'
 import { HospitalMapPhoto } from '../components/HospitalMapPhoto'
-import { RobotMap } from '../components/RobotMap'
+import { HospitalMap3D } from '../components/HospitalMap3D'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
@@ -239,13 +239,14 @@ export function MedicalDashboard() {
               selected
               estop={mode === 'estop'}
             />
-            <RobotMap
+            <HospitalMap3D
               pose={teleop.pose}
               live={teleop.robotConnected}
               scan={teleop.scan}
               particles={teleop.particles}
               plan={teleop.plan}
               onSetPose={teleop.setPose}
+              estop={mode === 'estop'}
             />
             <TeleopPad
               drive={teleop.drive}

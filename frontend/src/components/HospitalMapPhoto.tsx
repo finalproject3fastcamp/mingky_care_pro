@@ -11,8 +11,8 @@
  * 옮기는 변환(호모그래피) 하나면 원근이 있어도 정확히 맞출 수 있다.
  *
  * 그 변환은 바닥의 ㄷ자 표식으로 구했다. 표식의 실측 좌표는 3D 모델에서,
- * 사진 속 위치는 렌더 이미지에서 뽑아 7쌍을 맞췄다. **남는 오차는 평균 0.3
- * 픽셀**이다(이미지 1734x990 기준).
+ * 사진 속 위치는 좌표 맞추기 화면(/calibrate.html)에서 표식을 직접 찍어 얻는다.
+ * 렌더를 다른 시점으로 다시 뽑으면 그 화면에서 다시 찍어 이 값을 갱신한다.
  *
  * ## 렌더를 다시 뽑을 때
  *
@@ -23,24 +23,22 @@
 
 import { useMemo } from 'react'
 
+import { FIT, mapToModel } from './mapFrame'
 import { SIGNS } from './mapWaypoints'
 import './HospitalMapPhoto.css'
 
 /** 렌더 이미지의 원래 크기(px). 이 값 기준으로 좌표를 잡고 화면에서는 비율로 쓴다. */
-export const IMG = { w: 1734, h: 990 }
+export const IMG = { w: 3200, h: 2400 }
 
 /**
- * 실측 모델 바닥(u, v) → 렌더 이미지 픽셀. 표식 7쌍으로 맞춘 값이다.
+ * 실측 모델 바닥(u, v) → 렌더 이미지 픽셀. 표식을 화면에서 직접 찍어 맞춘 값이다(/calibrate.html).
  * 렌더를 다른 시점으로 다시 뽑으면 이 값도 다시 구해야 한다.
  */
 const H = [
-  [486.44381, 111.306962, 93.23002],
-  [0.350299, -313.904769, 869.645351],
-  [0.000293, 0.128002, 1.0],
+  [475.778323, 285.669046, 475.862339],
+  [-23.68164, -430.183561, 1498.532217],
+  [-0.148829, 0.242015, 1.0],
 ]
-
-/** 지도(로봇) 좌표 → 실측 모델 좌표. HospitalMap3D 의 것과 같은 값이다. */
-const FIT = { rotationDeg: 12.7, x: -0.094, y: -0.368, scale: 0.965 }
 
 /**
  * 여기 값만 바꾸면 글자 모양이 바뀐다. 저장하면 브라우저가 바로 다시 그린다.
@@ -101,17 +99,6 @@ interface Props {
   pose: Pose | null
   selected?: boolean
   estop?: boolean
-}
-
-/** 지도 좌표를 실측 모델 좌표로. 모델을 찌그러뜨리는 대신 좌표를 옮긴다. */
-function mapToModel(mx: number, my: number) {
-  const a = (FIT.rotationDeg * Math.PI) / 180
-  const px = (mx - FIT.x) / FIT.scale
-  const py = (my - FIT.y) / FIT.scale
-  return {
-    u: px * Math.cos(a) + py * Math.sin(a),
-    v: -px * Math.sin(a) + py * Math.cos(a),
-  }
 }
 
 /** 모델 바닥 좌표를 이미지 안 백분율 위치로. */
