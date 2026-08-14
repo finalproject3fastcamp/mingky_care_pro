@@ -25,6 +25,22 @@ uvicorn app.main:app --reload
 
 기본 접속: <http://localhost:8000>
 
+> **인스턴스는 1개다.** `heartbeat` · `arming` · `orders` 가 인메모리라 둘 이상
+> 뜨면 판정이 갈린다 — `comm_lost` 가 멀쩡한 로봇에 찍히고 arming 이 간헐적으로
+> 안 보인다.
+>
+> 기동 시 PostgreSQL advisory lock 으로 강제한다(`_claim_single_instance`).
+> 워커 수를 세지 않으므로 `--workers 2` `--workers=2` `WEB_CONCURRENCY=2` 가 전부
+> 걸리고, 컨테이너 레플리카나 다른 호스트의 두 번째 배포도 같이 걸린다.
+> 못 잡으면 종료 코드 3.
+>
+> 락이 DB 세션에 붙어 있어서 DB 재시작이나 네트워크 블립으로 세션이 끊기면 락만
+> 사라진다. `_hold_single_instance()` 가 10초마다 보유를 확인하고 다시 잡는다.
+> 그 사이 다른 인스턴스가 들어왔으면 이쪽이 SIGTERM 으로 물러난다.
+>
+> **같은 DB 를 보는 백엔드를 둘 띄울 수는 없다.** 개발용을 따로 돌리려면 DB 를
+> 나눠라.
+
 - `GET /health` — 헬스체크. 로드된 이벤트 코드 수도 함께 반환
 - `POST /qr/scan` — QR 스캔 → 안내 세션 시작 + 오늘 진료 일정 조회
 - `POST /events` — 로봇 이벤트 배치 적재
@@ -144,7 +160,7 @@ app/
 
 ```json
 { "received": 1, "inserted": 1, "duplicates": 0, "state_updates": 1,
-  "unknown_codes": [], "rejected_updates": [] }
+  "unknown_codes": [], "type_mismatches": [], "rejected_updates": [] }
 ```
 
 ### 적재 규칙
@@ -168,6 +184,19 @@ app/
    그대로 적재한 뒤 `system.unknown_event_code` 를 추가로 남기고, 응답의
    `unknown_codes` 로 알립니다. HTTP 는 200 입니다 — 거부하면 게이트웨이가
    같은 배치를 무한히 재전송하게 됩니다.
+
+5. **로봇 타입에 맞지 않는 코드는 상태를 갱신하지 않습니다.**
+   `config/event_codes.yaml` 의 `robot_types` 와 `robots.robot_type` 을
+   대조합니다. 어긋나면 이벤트는 그대로 적재하되(4번과 같은 원칙)
+   `system.robot_type_mismatch` 를 남기고 응답의 `type_mismatches` 로
+   알립니다.
+
+   기록만 남기고 **판정은 거부합니다.** `nav.goal_succeeded` 는
+   `session_steps.arrived_at` 을 찍으므로, 조제 스테이션에서 온 것을 그대로
+   적용하면 팔 하나가 환자의 안내 단계를 진행시킵니다.
+
+   `robots` 에 없는 로봇은 타입을 모르므로 판정하지 않습니다. 그건 오배선이
+   아니라 등록 누락입니다.
 
 `nav.goal_succeeded` 는 `payload.visit_name` 으로 단계를 찾지 않습니다.
 한 세션에서 같은 장소를 두 번 방문할 수 있어(진료실 초진·판독) 이름만으로는

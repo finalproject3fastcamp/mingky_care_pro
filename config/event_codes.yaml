@@ -49,14 +49,17 @@
 # === QR · 환자 인식 ==========================================================
 
 qr.scan_ok:
+  robot_types: [mobile]
   level: info
   payload: { patient_id: string }
 
 qr.scan_failed:
+  robot_types: [mobile]
   level: warning
   payload: { reason: string }
 
 patient.lost:
+  robot_types: [mobile]
   level: warning
   payload: { marker_id: int, last_seen_sec: float }
   # 안내 중(이동)일 때만 발행한다.
@@ -65,6 +68,7 @@ patient.lost:
   # 검출 노드가 아니라 상태를 소유한 노드가 판정한다.
 
 patient.regained:
+  robot_types: [mobile]
   level: info
   payload: { marker_id: int }
 
@@ -72,67 +76,82 @@ patient.regained:
 # === 주행 ===================================================================
 
 fire.detected:
+  robot_types: [mobile]
   level: error
   payload: { detections: int, window_size: int, source: [camera, manual_test] }
 
 fire.evacuation_started:
+  robot_types: [mobile]
   level: error
   payload: { shelter_x: float, shelter_y: float }
 
 fire.evacuation_succeeded:
+  robot_types: [mobile]
   level: info
   payload: {}
 
 fire.evacuation_failed:
+  robot_types: [mobile]
   level: error
   payload: { reason: string, status: int }
 
 fire.inference_unavailable:
+  robot_types: [mobile]
   level: error
   payload: { reason: string }
 
 fire.inference_restored:
+  robot_types: [mobile]
   level: info
   payload: {}
 
 fire.alarm_reset:
+  robot_types: [mobile]
   level: info
   payload: {}
 
 nav.goal_sent:
+  robot_types: [mobile]
   level: info
   payload: { visit_name: string }
 
 nav.goal_succeeded:
+  robot_types: [mobile]
   level: info
   payload: { visit_name: string }
   applies_to: session_steps.arrived_at
 
 nav.goal_aborted:
+  robot_types: [mobile]
   level: error
   payload: { visit_name: string, error_code: int }
   # error_code 는 Nav2 NavigateToPose 결과 코드를 그대로 넣는다.
 
 nav.waiting_spot_failed:
+  robot_types: [mobile]
   level: warning
   payload: { visit_name: string, waypoint_name: string, error_code: int }
   # 검사실 도착 기록은 유지하지만 로봇을 paused 로 전환한다. 설정 누락이나
   # 주행 실패를 정상 대기로 숨기지 않으며, 운영자 확인 전에는 QR 진행을 막는다.
 
 nav.stuck:
+  robot_types: [mobile]
   level: warning
   payload: { x: float, y: float }
   # progress checker 발동.
 
 waypoint.test_started:
+  robot_types: [mobile]
   level: info
   payload: { waypoint_name: string, x: float, y: float, yaw: float }
 
 waypoint.test_succeeded:
+  robot_types: [mobile]
   level: info
   payload: { waypoint_name: string }
 
 waypoint.test_failed:
+  robot_types: [mobile]
   level: error
   payload: { waypoint_name: string, error_code: int }
 
@@ -143,15 +162,18 @@ waypoint.test_failed:
 # RViz 2D Pose Estimate 손조작을 대신한다.
 
 localize.started:
+  robot_types: [mobile]
   level: info
   payload: { source: string }
   # source 는 startup(부팅 시 자동) 또는 manual(대시보드 재요청).
 
 localize.converged:
+  robot_types: [mobile]
   level: info
   payload: { spread_m: float, yaw_spread_deg: float, attempt: int }
 
 localize.failed:
+  robot_types: [mobile]
   level: error
   payload: { reason: string, attempts: int }
   # reason: not_converged | no_service | mode_changed | nav2_not_active
@@ -174,14 +196,17 @@ localize.failed:
 # 충전소 도착이 다음 진료실 도착으로 잘못 처리될 수 있다.
 
 dock.return_started:
+  robot_types: [mobile]
   level: warning
   payload: { station_name: string }
 
 dock.return_succeeded:
+  robot_types: [mobile]
   level: info
   payload: { station_name: string }
 
 dock.return_failed:
+  robot_types: [mobile]
   level: error
   payload: { station_name: string, error_code: int }
 
@@ -189,22 +214,26 @@ dock.return_failed:
 # === 세션 ===================================================================
 
 session.ready:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { current_visit: string }
   # QR 응답이 로봇의 guide_manager까지 전달되어 첫 출발 명령을 받을 준비가 됨.
 
 session.start_rejected:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { reason: string }
   # 관제에서 보낸 출발 요청을 로봇 상태머신이 거부한 이유.
 
 session.started:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { patient_id: string, marker_id: int }
   applies_to: guidance_sessions
   # 세션 행 생성 + examination_steps 를 session_steps 로 스냅샷 복사.
 
 session.step_completed:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { step_order: int, source: [qr, manual] }
   applies_to: session_steps.completed_at
@@ -215,6 +244,7 @@ session.step_completed:
   # 003 의 completed_source CHECK 도 함께 넓혀야 한다.
 
 session.ended:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { end_reason: [completed, aborted, battery, patient_lost, robot_offline, system_failure, fire] }
   applies_to: guidance_sessions.ended_at
@@ -227,16 +257,19 @@ session.ended:
 # events 는 감사·타임라인용 히스토리만 남긴다. 화면 판정에 이 이벤트를 쓰지 않는다.
 
 activation.armed:
+  robot_types: [mobile]
   level: info
   payload: {}
   # 의료진이 로봇을 활성화. 발행 주체는 백엔드 (POST /robots/{id}/arm).
 
 activation.canceled:
+  robot_types: [mobile]
   level: info
   payload: { reason: string }
   # armed 해제. reason 은 'staff' (사용자 취소) 또는 'failsafe' (로봇 폴링 두절).
 
 activation.consumed:
+  robot_types: [mobile]
   level: info
   payload: {}
   # QR 스캔이 성공해 arming 이 실제 세션으로 이어짐. session_id 는 필드에 담긴다.
@@ -245,6 +278,7 @@ activation.consumed:
 # === 로봇 상태 ==============================================================
 
 robot.battery_low:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { percent: int }
   # 임계값을 넘은 순간만 남긴다.
@@ -252,11 +286,13 @@ robot.battery_low:
   # 정기 샘플이 이벤트에 섞이면 타임라인 필터가 쓸모없어진다.
 
 robot.battery_recovered:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { percent: int }
   # battery_low 의 짝. 재충전되어 저전압 상태를 벗어난 순간만 남긴다.
 
 robot.comm_lost:
+  robot_types: [mobile, manipulator]
   level: error
   payload: { last_seen_sec: float }
   # 로봇이 아니라 수집 서버가 발행한다. 끊긴 쪽은 자기가 끊겼다고 알릴 수 없다.
@@ -268,6 +304,7 @@ robot.comm_lost:
   # 두절이 언제 시작됐는지는 last_seen_sec 으로 역산한다.
 
 robot.comm_restored:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { offline_sec: float }
   # comm_lost 의 짝. 이것이 없으면 타임라인에 끊긴 기록만 남고 언제
@@ -280,6 +317,7 @@ robot.comm_restored:
   # 이 이벤트가 타임라인에서 그 배치의 경계 표시 역할을 한다.
 
 robot.paused:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { reason: string }
 
@@ -289,16 +327,19 @@ robot.paused:
 # estop 은 mingky_battery_guard 의 안전 게이트가 실제 주체다. 이 이벤트는
 # 게이트 상태를 모드 어휘로 옮겨 타임라인에 남기는 것이다.
 robot.mode_changed:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { mode: [auto, manual, estop], previous: [auto, manual, estop], source: string }
 
 # mode_manager 의 요청과 teleop_limiter 가 실제 적용한 값이 유예 시간 뒤에도
 # 다를 때만 한 번 남긴다. applied=unknown 은 limiter 상태를 받지 못했다는 뜻이다.
 robot.mode_mismatch:
+  robot_types: [mobile, manipulator]
   level: error
   payload: { requested: [auto, manual, estop], applied: [auto, manual, estop, unknown] }
 
 robot.mode_recovered:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { requested: [auto, manual, estop], applied: [auto, manual, estop] }
 
@@ -309,14 +350,17 @@ robot.mode_recovered:
 # 아무 흔적이 없었다. 관제 서버에는 손으로 추가돼 있었으나 저장소에는
 # 반영되지 않아 재배포하면 다시 사라지는 상태였다.
 robot.estop_engaged:
+  robot_types: [mobile, manipulator]
   level: error
   payload: { source: string }
 
 robot.estop_released:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { source: string }
 
 robot.resumed:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { reason: string }
   # paused 의 짝. 안전 정지 원인이 해소되고 명시적으로 재개된 뒤 발행한다.
@@ -325,6 +369,7 @@ robot.resumed:
 # === 시스템 =================================================================
 
 system.unknown_event_code:
+  robot_types: [mobile, manipulator]
   level: error
   payload: { received_code: string }
   # 수집 서버가 미등록 코드를 받았을 때 발행한다.
@@ -337,3 +382,8 @@ system.unknown_event_code:
 # 현재 주행 로봇과 로봇팔은 분리되어 있으므로 정의하지 않는다.
 # 추가 시 session_id 를 채울지가 관건이다 —
 # 조제가 특정 환자의 안내에 속하면 채우고, 독립적으로 돌면 0 이다.
+
+system.robot_type_mismatch:
+  robot_types: [mobile, manipulator]
+  level: warning
+  payload: { received_code: string, actual_type: string, allowed_types: [string] }

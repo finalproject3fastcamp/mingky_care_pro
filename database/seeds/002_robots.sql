@@ -17,8 +17,8 @@ INSERT INTO robots (robot_id, robot_type, display_name, domain_id, is_active)
 VALUES
     ('pinky-01', 'mobile', '핑키 1호',        21,   TRUE),
     ('pinky-02', 'mobile', '핑키 2호',        20,   TRUE),
-    ('omx-01',   'arm',    '조제 스테이션 1', NULL, TRUE),
-    ('omx-02',   'arm',    '조제 스테이션 2', NULL, TRUE)
+    ('omx-01',   'manipulator',    '조제 스테이션 1', NULL, TRUE),
+    ('omx-02',   'manipulator',    '조제 스테이션 2', NULL, TRUE)
 ON CONFLICT (robot_id) DO UPDATE SET
     robot_type   = EXCLUDED.robot_type,
     display_name = EXCLUDED.display_name,

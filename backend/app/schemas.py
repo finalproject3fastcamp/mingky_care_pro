@@ -65,6 +65,8 @@ class IngestResult(BaseModel):
     # 미등록 코드는 거부하지 않고 적재한 뒤 여기 담아 돌려준다.
     # 게이트웨이가 같은 배치를 무한 재전송하지 않도록 HTTP 는 200 이다.
     unknown_codes: list[str] = Field(default_factory=list)
+    # 타입 오배선 (robot_type_mismatch) 발생 코드.
+    type_mismatches: list[str] = Field(default_factory=list)
     # 이벤트는 적재됐으나 DB 제약에 걸려 상태 갱신을 못 한 코드.
     # 시계가 어긋난 로봇이 보내면 여기에 쌓인다.
     rejected_updates: list[str] = Field(default_factory=list)
