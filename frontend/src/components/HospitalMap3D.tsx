@@ -35,9 +35,12 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
+import { Line2 } from 'three/examples/jsm/lines/Line2.js'
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
-import { SIGNS } from './mapWaypoints'
+import { SIGNS, type Sign } from './mapWaypoints'
 import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
@@ -59,6 +62,24 @@ interface Props extends DiagLayers {
   onSelectWaypoint?: (name: string) => void
   /** 비상정지 중이면 로봇을 붉게 칠한다. */
   estop?: boolean
+  /** 안내판 목록. 기본은 mapWaypoints 의 SIGNS 다. 편집 화면만 이걸 바꿔 넘긴다. */
+  signs?: Sign[]
+  /** 켜면 글자를 끌어 옮길 수 있다. 편집 화면 전용이다. */
+  editing?: boolean
+  /** 글자를 끌었을 때. 실측 모델 좌표(u, v)로 알려 준다. */
+  onSignMove?: (index: number, u: number, v: number) => void
+  /** 편집 화면에서 고른 글자들. 테두리로 표시한다. */
+  picked?: readonly number[]
+  /** 글자를 눌렀을 때. shift 를 누른 채면 add 가 true 다. */
+  onSignPick?: (index: number, add: boolean) => void
+}
+
+interface LabelHandle {
+  el: HTMLDivElement
+  /** 3D 안의 자리. x=u, y=높이, z=-v */
+  x: number
+  y: number
+  z: number
 }
 
 const LAYER_LABEL = {
@@ -89,8 +110,12 @@ export const LOOK = {
   /** 주변 반사(있는 듯 없는 듯). 재질에 생기를 준다 */
   env: 0.3,
   exposure: 1.0,
-  /** 기본 시점 방향. 건물 중심에서 이쪽으로 물러나 바라본다 */
-  viewFrom: [0.1, 1.0, 0.8] as const,
+  /**
+   * 기본 시점 방향. 건물 중심에서 이쪽으로 물러나 바라본다.
+   * 낮게 볼수록 입체감은 살지만 바닥이 벽에 가린다 — 바닥에 그리는 라이다를
+   * 보려면 어느 정도 높이가 필요하다.
+   */
+  viewFrom: [0.08, 1.0, 0.62] as const,
 } as const
 
 const COLOR = {
@@ -119,12 +144,11 @@ interface Handles {
   robotArrow: THREE.Mesh<THREE.ConeGeometry, THREE.MeshStandardMaterial>
   scan: THREE.Points
   particles: THREE.Points
-  plan: THREE.Line
+  plan: Line2
   waypoints: THREE.Group
-  labels: { el: HTMLDivElement; x: number; y: number; z: number }[]
   invalidate: () => void
   resetView: () => void
-  pick: (clientX: number, clientY: number) => { u: number; v: number } | null
+  pick: (clientX: number, clientY: number, atY?: number) => { u: number; v: number } | null
   pickWaypoint: (clientX: number, clientY: number) => string | null
 }
 
@@ -138,10 +162,16 @@ export function HospitalMap3D({
   waypoints = [],
   onSelectWaypoint,
   estop = false,
+  signs = SIGNS,
+  editing = false,
+  onSignMove,
+  picked,
+  onSignPick,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
   const handles = useRef<Handles | null>(null)
+  const labelsRef = useRef<LabelHandle[]>([])
 
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -240,7 +270,15 @@ export function HospitalMap3D({
     // ---- 진단 레이어 ----
     // 미리 자리를 잡아 두고 개수만 바꾼다. 매번 새로 만들면 초당 수십 번
     // 버퍼를 새로 올리게 돼 화면이 끊긴다.
-    const makePoints = (max: number, color: number, size: number, y: number) => {
+    const makePoints = (
+      max: number,
+      color: number,
+      size: number,
+      y: number,
+      order: number,
+      /** 크기를 실제 치수(m)로 볼지, 화면 픽셀로 볼지 */
+      worldScale: boolean,
+    ) => {
       const g = new THREE.BufferGeometry()
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 3), 3))
       g.setDrawRange(0, 0)
@@ -248,24 +286,49 @@ export function HospitalMap3D({
       g.boundingSphere = new THREE.Sphere(new THREE.Vector3(1.7, y, -0.95), 40)
       const p = new THREE.Points(
         g,
-        new THREE.PointsMaterial({ color, size, sizeAttenuation: false, transparent: true, opacity: 0.85 }),
+        // depthWrite 는 끈다. 켜 두면 앞뒤로 겹친 점끼리 서로를 지워 성글어 보인다.
+        // depthTest 는 켠다 — 벽 뒤의 점이 가려져야 "라이다가 벽을 넘었다" 가 보이고,
+        // 로봇 표시가 파티클에 덮이지 않는다.
+        new THREE.PointsMaterial({
+          color,
+          size,
+          sizeAttenuation: worldScale,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+        }),
       )
       p.frustumCulled = false
+      p.renderOrder = order
       scene.add(p)
       return p
     }
-    const scanPts = makePoints(MAX_SCAN, COLOR.scan, 3, 0.05)
-    const particlePts = makePoints(MAX_PARTICLES, COLOR.particles, 4, 0.02)
+    // 라이다는 화면 기준 크기다. 얼마나 당기든 벽선이 또렷해야 한다.
+    const scanPts = makePoints(MAX_SCAN, COLOR.scan, 3.5, 0.05, 2, false)
+    // 파티클은 실제 크기(1.4 cm)다. 수백 개가 한자리에 모였을 때 화면 기준
+    // 크기면 초록 덩어리가 되어 로봇을 덮어 버리는데, 실제 크기면 멀리서
+    // 저절로 작아져 모였을 때는 옅은 무리로, 퍼졌을 때는 넓은 안개로 읽힌다.
+    const particlePts = makePoints(MAX_PARTICLES, COLOR.particles, 0.014, 0.02, 1, true)
 
-    const planGeom = new THREE.BufferGeometry()
-    planGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_PLAN * 3), 3))
-    planGeom.setDrawRange(0, 0)
-    planGeom.boundingSphere = new THREE.Sphere(new THREE.Vector3(1.7, 0.06, -0.95), 40)
-    const planLine = new THREE.Line(
-      planGeom,
-      new THREE.LineBasicMaterial({ color: COLOR.plan, transparent: true, opacity: 0.9 }),
-    )
+    // 경로는 굵은 선이라야 읽힌다.
+    // three.js 의 기본 선(THREE.Line)은 굵기 지정이 대부분의 브라우저에서
+    // 무시돼 언제나 1픽셀로 나온다. 비스듬히 본 3D 화면에서 1픽셀 선은
+    // 계단처럼 끊겨 보여서, 화면 공간에서 두께를 만드는 Line2 를 쓴다.
+    // 경로도 가리지 않는다. 로봇이 어디로 가려는지는 계획이지 측정이 아니라,
+    // 20 cm 짜리 벽에 가려 안 보이면 레이어 자체가 쓸모없어진다.
+    const planMat = new LineMaterial({
+      color: COLOR.plan,
+      linewidth: 3.5,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      depthTest: false,
+      dashed: false,
+    })
+    const planLine = new Line2(new LineGeometry(), planMat)
     planLine.frustumCulled = false
+    planLine.renderOrder = 5
+    planLine.visible = false
     scene.add(planLine)
 
     const wpGroup = new THREE.Group()
@@ -274,18 +337,6 @@ export function HospitalMap3D({
     // ---- 안내 글자 ----
     // 3D 안에 글자를 넣는 대신 HTML 을 위에 띄운다. 그래야 항상 화면을
     // 정면으로 보고, 글꼴·굵기·색을 CSS 로 그대로 쓸 수 있다.
-    const labels = SIGNS.map((s) => {
-      const el = document.createElement('div')
-      el.className = 'map3d__sign' + (s.rank === 1 ? '' : ' map3d__sign--minor')
-      el.textContent = s.label
-      if (s.sub) {
-        const br = document.createElement('br')
-        el.appendChild(br)
-        el.appendChild(document.createTextNode(s.sub))
-      }
-      labelHost.appendChild(el)
-      return { el, x: s.u, y: s.y ?? 0.22, z: -s.v }
-    })
 
     // ---- 바닥(찍기용) ----
     // 눈에 보이지는 않지만 광선이 부딪힐 면이 있어야 클릭 지점을 알 수 있다.
@@ -301,10 +352,18 @@ export function HospitalMap3D({
       return r
     }
 
-    const pick = (clientX: number, clientY: number) => {
+    /**
+     * 화면의 한 점이 가리키는 바닥 좌표. `atY` 를 주면 그 높이의 수평면에서
+     * 찾는다 — 안내 글자를 끌 때 글자가 떠 있는 높이 그대로 움직여야 하기
+     * 때문이다.
+     */
+    const pick = (clientX: number, clientY: number, atY = 0) => {
       toNdc(clientX, clientY)
       raycaster.setFromCamera(ndc, camera)
-      if (!raycaster.ray.intersectPlane(floorPlane, hit)) return null
+      floorPlane.constant = -atY
+      const ok = raycaster.ray.intersectPlane(floorPlane, hit)
+      floorPlane.constant = 0
+      if (!ok) return null
       return { u: hit.x, v: -hit.z }
     }
 
@@ -327,7 +386,7 @@ export function HospitalMap3D({
 
     const projected = new THREE.Vector3()
     const syncLabels = (w: number, h: number, show: boolean) => {
-      for (const l of labels) {
+      for (const l of labelsRef.current) {
         if (!show) {
           l.el.style.display = 'none'
           continue
@@ -370,6 +429,8 @@ export function HospitalMap3D({
       renderer.setSize(w, h, false)
       camera.aspect = w / h
       camera.updateProjectionMatrix()
+      // 굵은 선은 화면 크기를 알아야 두께를 계산한다.
+      planMat.resolution.set(w, h)
       // 글자 크기는 화면 폭을 따라간다. 2D 지도에서 맞춰 둔 비율 그대로다.
       labelHost.style.fontSize = `${w * 0.0145}px`
       invalidate()
@@ -462,7 +523,6 @@ export function HospitalMap3D({
       particles: particlePts,
       plan: planLine,
       waypoints: wpGroup,
-      labels,
       invalidate,
       resetView,
       pick,
@@ -480,7 +540,8 @@ export function HospitalMap3D({
       ro.disconnect()
       controls.removeEventListener('change', invalidate)
       controls.dispose()
-      for (const l of labels) l.el.remove()
+      for (const l of labelsRef.current) l.el.remove()
+      labelsRef.current = []
       scene.traverse((o) => {
         const m = o as THREE.Mesh
         if (m.geometry) m.geometry.dispose()
@@ -495,6 +556,82 @@ export function HospitalMap3D({
       handles.current = null
     }
   }, [])
+
+  // ---------------------------------------------------------------- 안내 글자
+  // 콜백은 렌더마다 새 함수가 되므로 상자에 담아 둔다. 이렇게 해야 글자
+  // DOM 을 다시 만들지 않아도 최신 콜백이 불린다 — 끄는 도중에 DOM 이
+  // 새로 만들어지면 손을 놓친다.
+  const cbMove = useRef(onSignMove)
+  const cbPick = useRef(onSignPick)
+  cbMove.current = onSignMove
+  cbPick.current = onSignPick
+
+  // 글자 목록이 바뀔 때만 DOM 을 다시 만든다.
+  const signKey = signs.map((s) => `${s.label}${s.sub ?? ''}${s.rank}`).join('')
+  useEffect(() => {
+    const labelHost = labelHostRef.current
+    if (!labelHost) return
+    for (const l of labelsRef.current) l.el.remove()
+
+    labelsRef.current = signs.map((s, i) => {
+      const el = document.createElement('div')
+      el.className = 'map3d__sign' + (s.rank === 1 ? '' : ' map3d__sign--minor')
+      el.textContent = s.label
+      if (s.sub) {
+        el.appendChild(document.createElement('br'))
+        el.appendChild(document.createTextNode(s.sub))
+      }
+      if (editing) {
+        el.classList.add('map3d__sign--editing')
+        el.addEventListener('pointerdown', (e) => {
+          // 글자를 끄는 동안 화면이 같이 돌면 안 된다.
+          e.stopPropagation()
+          e.preventDefault()
+          cbPick.current?.(i, e.shiftKey)
+          const h = handles.current
+          const cur = labelsRef.current[i]
+          if (!h || !cur || !cbMove.current) return
+          const start = h.pick(e.clientX, e.clientY, cur.y)
+          if (!start) return
+          // 글자 가운데가 아니라 **집은 자리**를 기준으로 따라오게 한다.
+          const offU = cur.x - start.u
+          const offV = -cur.z - start.v
+          el.setPointerCapture(e.pointerId)
+          const move = (ev: PointerEvent) => {
+            const p = h.pick(ev.clientX, ev.clientY, cur.y)
+            if (p) cbMove.current?.(i, p.u + offU, p.v + offV)
+          }
+          const up = () => {
+            el.removeEventListener('pointermove', move)
+            el.removeEventListener('pointerup', up)
+            el.removeEventListener('pointercancel', up)
+          }
+          el.addEventListener('pointermove', move)
+          el.addEventListener('pointerup', up)
+          el.addEventListener('pointercancel', up)
+        })
+      }
+      labelHost.appendChild(el)
+      return { el, x: s.u, y: s.y ?? 0.22, z: -s.v }
+    })
+    handles.current?.invalidate()
+    // signKey 가 같으면 글자 내용이 그대로라 다시 만들 필요가 없다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signKey, editing])
+
+  // 자리와 고름 표시는 DOM 을 새로 만들지 않고 값만 고친다.
+  useEffect(() => {
+    const ls = labelsRef.current
+    signs.forEach((s, i) => {
+      const l = ls[i]
+      if (!l) return
+      l.x = s.u
+      l.y = s.y ?? 0.22
+      l.z = -s.v
+      l.el.classList.toggle('is-picked', !!picked?.includes(i))
+    })
+    handles.current?.invalidate()
+  }, [signs, picked])
 
   // ---------------------------------------------------------------- 값 반영
   useEffect(() => {
@@ -563,21 +700,22 @@ export function HospitalMap3D({
   useEffect(() => {
     const h = handles.current
     if (!h) return
-    const attr = h.plan.geometry.getAttribute('position') as THREE.BufferAttribute
-    const arr = attr.array as Float32Array
-    let n = 0
+    // 굵은 선은 점을 통째로 다시 넘겨야 한다. 경로는 초당 몇 번뿐이라 괜찮다.
+    const pts: number[] = []
     if (visible.plan && plan) {
       for (const [x, y] of plan) {
-        if (n >= MAX_PLAN) break
+        if (pts.length >= MAX_PLAN * 3) break
         const m = mapToModel(x, y)
-        arr[n * 3] = m.u
-        arr[n * 3 + 1] = 0.06
-        arr[n * 3 + 2] = -m.v
-        n += 1
+        // 바닥에서 1.5 cm 띄운다. 바닥면과 같은 높이면 얼룩덜룩 깜빡인다.
+        pts.push(m.u, 0.015, -m.v)
       }
     }
-    h.plan.geometry.setDrawRange(0, n)
-    attr.needsUpdate = true
+    // 점이 둘 미만이면 선이 될 수 없다.
+    h.plan.visible = pts.length >= 6
+    if (h.plan.visible) {
+      h.plan.geometry.setPositions(pts)
+      h.plan.computeLineDistances()
+    }
     h.invalidate()
   }, [plan, visible.plan])
 

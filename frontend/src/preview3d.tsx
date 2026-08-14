@@ -13,47 +13,34 @@ import { createRoot } from 'react-dom/client'
 
 import { HospitalMap3D, type WaypointMarker } from './components/HospitalMap3D'
 import { WAYPOINTS } from './components/mapWaypoints'
+import { insideWall, simulateParticles, simulatePlan, simulateScan } from './previewSim'
 import './index.css'
 import './App.css'
 
 function App() {
-  const [x, setX] = useState(1.3)
-  const [y, setY] = useState(0.7)
+  // 복도 한가운데. 벽 속이면 라이다가 전부 0 이 되어 화면이 빈다.
+  const [x, setX] = useState(1.524)
+  const [y, setY] = useState(0.952)
   const [yaw, setYaw] = useState(0.6)
+  const [spread, setSpread] = useState(0.05)
+  const [goal, setGoal] = useState('ct_room_goal')
   const [live, setLive] = useState(true)
   const [estop, setEstop] = useState(false)
   const [showWp, setShowWp] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
 
   const pose = live ? { x, y, yaw } : null
+  const blocked = insideWall(x, y)
 
-  // 라이다처럼 보이는 값. 실제 벽 거리가 아니라 그리기만 확인하는 용도다.
-  const scan = useMemo(() => {
-    const out: number[][] = []
-    for (let i = 0; i < 360; i += 1) {
-      const a = (i / 360) * Math.PI * 2 - Math.PI
-      out.push([a, 0.45 + 0.35 * Math.abs(Math.sin(a * 2)) + 0.05 * Math.sin(a * 11)])
-    }
-    return out
-  }, [])
+  // 실제 벽에 부딪히는 라이다. RViz 에서 보던 것과 같은 모양이 나와야 맞다.
+  const scan = useMemo(() => simulateScan(x, y, yaw), [x, y, yaw])
+  const particles = useMemo(() => simulateParticles(x, y, spread), [x, y, spread])
 
-  const particles = useMemo(() => {
-    const out: number[][] = []
-    for (let i = 0; i < 600; i += 1) {
-      out.push([x + (Math.random() - 0.5) * 0.16, y + (Math.random() - 0.5) * 0.16])
-    }
-    return out
-  }, [x, y])
-
+  // 벽을 피해 도는 경로. 목표는 아래에서 고른다.
   const plan = useMemo(() => {
-    const goal = WAYPOINTS.find((w) => w.id === 'ct_room_goal')!
-    const out: number[][] = []
-    for (let i = 0; i <= 40; i += 1) {
-      const t = i / 40
-      out.push([x + (goal.x - x) * t, y + (goal.y - y) * t + Math.sin(t * Math.PI) * 0.18])
-    }
-    return out
-  }, [x, y])
+    const g = WAYPOINTS.find((w) => w.id === goal)
+    return g ? simulatePlan(x, y, g.x, g.y) : []
+  }, [x, y, goal])
 
   const waypoints: WaypointMarker[] = useMemo(
     () =>
@@ -100,6 +87,12 @@ function App() {
         좌표가 맞는지 확인하세요.
         {selected && ` — 고른 지점: ${selected}`}
       </p>
+      {blocked && (
+        <p style={{ margin: 0, fontSize: 13, color: '#b45309', fontWeight: 600 }}>
+          로봇이 벽 안에 있습니다 — 라이다가 전부 거리 0 이라 아무것도 안 보입니다.
+          x·y 를 옮기세요.
+        </p>
+      )}
 
       <HospitalMap3D
         pose={pose}
@@ -117,11 +110,23 @@ function App() {
         }}
       />
 
-      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(3, 1fr)' }}>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(4, 1fr)' }}>
         {row('x (m)', x, -0.3, 3.2, setX)}
         {row('y (m)', y, -0.4, 2.0, setY)}
         {row('방향 (rad)', yaw, -Math.PI, Math.PI, setYaw)}
+        {row('파티클 퍼짐 (m)', spread, 0.01, 0.6, setSpread)}
       </div>
+
+      <label style={{ display: 'grid', gap: 4, fontSize: 13, maxWidth: 260 }}>
+        <span>경로 목표</span>
+        <select value={goal} onChange={(e) => setGoal(e.target.value)}>
+          {WAYPOINTS.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.label} ({w.id})
+            </option>
+          ))}
+        </select>
+      </label>
 
       <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
         <label>

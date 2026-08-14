@@ -70,6 +70,22 @@
   font-size: 0.78em;
 }
 
+/* 편집 화면에서만. 평소에는 글자가 손짓을 통과시킨다. */
+.map3d__sign--editing {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.map3d__sign--editing:active {
+  cursor: grabbing;
+}
+
+.map3d__sign--editing.is-picked {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
 .map3d__loading {
   position: absolute;
   inset: 0;
