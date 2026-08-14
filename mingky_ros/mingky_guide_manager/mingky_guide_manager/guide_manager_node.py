@@ -409,13 +409,34 @@ class GuideManager(Node):
             self._emergency_reason = msg.data
 
     def _on_cancel_session(self, msg: String) -> None:
-        """로봇 내부 안전 감시가 장기 장애를 판정하면 안내를 재개 없이 끝낸다."""
-        reason = msg.data.strip()
-        if reason not in ('robot_offline', 'system_failure'):
+        """장애 또는 의료진 취소 요청을 받아 안내를 재개 없이 끝낸다."""
+        raw = msg.data.strip()
+        requested_session_id = 0
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            reason = raw
+        else:
+            if not isinstance(payload, dict):
+                self.get_logger().warn(f'잘못된 세션 취소 요청을 무시합니다: {raw!r}')
+                return
+            reason = str(payload.get('reason', '')).strip()
+            try:
+                requested_session_id = int(payload.get('session_id', 0))
+            except (TypeError, ValueError):
+                self.get_logger().warn(f'잘못된 세션 취소 요청을 무시합니다: {raw!r}')
+                return
+
+        if reason not in ('aborted', 'robot_offline', 'system_failure'):
             self.get_logger().warn(f'알 수 없는 세션 취소 사유를 무시합니다: {reason!r}')
             return
         if self.session_id <= 0 or self.session_state in (
                 GuideState.SESSION_NONE, GuideState.SESSION_COMPLETED):
+            return
+        if requested_session_id > 0 and requested_session_id != self.session_id:
+            self.get_logger().warn(
+                f'현재 세션과 다른 취소 요청을 무시합니다: '
+                f'requested={requested_session_id}, current={self.session_id}')
             return
 
         active_session_id = self.session_id
@@ -434,9 +455,15 @@ class GuideManager(Node):
         self.previous_visit = ''
         self.current_visit = ''
         self.session_visits = []
-        self.robot_state = GuideState.ROBOT_PAUSED
-        self.get_logger().error(
-            f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
+        if reason == 'aborted':
+            self.get_logger().info(
+                f'의료진 요청으로 안내 세션 {active_session_id} 취소; '
+                '충전소로 복귀합니다.')
+            self._request_dock_return('guidance_canceled')
+        else:
+            self.robot_state = GuideState.ROBOT_PAUSED
+            self.get_logger().error(
+                f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
 
     def _on_fire_evacuation(self, request, response):
         """화재 대피가 안내 상태와 기존 Nav2 콜백을 안전하게 선점하게 한다."""
@@ -509,6 +536,8 @@ class GuideManager(Node):
             self.robot_state = (
                 GuideState.ROBOT_BATTERY_LOW
                 if self._dock_reason == 'battery'
+                else GuideState.ROBOT_RETURNING_TO_DOCK
+                if self._dock_reason == 'guidance_canceled'
                 else GuideState.ROBOT_MOVING)
             self._dock_pending = False
             self._return_to_dock()
@@ -592,6 +621,11 @@ class GuideManager(Node):
             self._reject_start_guidance(
                 'localization_active',
                 'AMCL 자동 재탐색 중에는 환자 안내를 시작할 수 없습니다.')
+            return
+        if self._dock_reason is not None:
+            self._reject_start_guidance(
+                'returning_to_dock',
+                '충전소 복귀 중에는 환자 안내를 시작할 수 없습니다.')
             return
 
         if requested_session_id <= 0 or requested_session_id != self.session_id:
@@ -969,11 +1003,13 @@ class GuideManager(Node):
     def _dock_failed(
             self, waypoint_name: str, error_code: int, *, retryable: bool) -> None:
         dock_active = (
-            self._dock_reason == 'session_completed'
-            or (self._dock_reason == 'battery' and self._battery_alarm))
+            self._dock_reason is not None
+            and (self._dock_reason != 'battery' or self._battery_alarm))
         self.robot_state = (
             GuideState.ROBOT_BATTERY_LOW
             if self._dock_reason == 'battery'
+            else GuideState.ROBOT_RETURNING_TO_DOCK
+            if self._dock_reason == 'guidance_canceled'
             else GuideState.ROBOT_MOVING)
         if (retryable and dock_active and not self._emergency_engaged
                 and not self._fire_evacuating
@@ -986,9 +1022,13 @@ class GuideManager(Node):
         self.events.publish(
             'dock.return_failed',
             {'station_name': waypoint_name, 'error_code': int(error_code)})
+        failed_reason = self._dock_reason
         self._dock_reason = None
         self._dock_pending = False
-        if not self._battery_alarm:
+        if failed_reason == 'guidance_canceled':
+            # 복귀 최종 실패 뒤 재배정되면 현재 위치를 보장할 수 없다.
+            self.robot_state = GuideState.ROBOT_PAUSED
+        elif not self._battery_alarm:
             self.robot_state = GuideState.ROBOT_IDLE
 
     def _send_nav_goal(
@@ -1045,6 +1085,8 @@ class GuideManager(Node):
             self.robot_state = (
                 GuideState.ROBOT_BATTERY_LOW
                 if self._dock_reason == 'battery'
+                else GuideState.ROBOT_RETURNING_TO_DOCK
+                if self._dock_reason == 'guidance_canceled'
                 else GuideState.ROBOT_MOVING)
             self.events.publish(
                 'dock.return_started', {'station_name': waypoint_name})
@@ -1121,7 +1163,11 @@ class GuideManager(Node):
             if is_dock:
                 self._cancel_dock_retry()
                 # 좌표 도착만으로 충전 전류가 흐른다고 단정할 수는 없다.
-                self.robot_state = GuideState.ROBOT_WAITING
+                dock_reason = self._dock_reason
+                self.robot_state = (
+                    GuideState.ROBOT_IDLE
+                    if dock_reason == 'guidance_canceled'
+                    else GuideState.ROBOT_WAITING)
                 self.events.publish(
                     'dock.return_succeeded', {'station_name': waypoint_name})
                 self.get_logger().info(f'충전소 도착: {waypoint_name}')

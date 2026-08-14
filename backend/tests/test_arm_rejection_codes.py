@@ -71,7 +71,7 @@ def _row(**overrides):
     return row
 
 
-def _arm(monkeypatch, row, *, seen="online"):
+def _arm(monkeypatch, row, *, seen="online", guide_robot_state=None):
     monkeypatch.setattr(robots, "get_pool", lambda: ArmPool(row))
     heartbeat.reset()
     robot_runtime.reset()
@@ -81,6 +81,10 @@ def _arm(monkeypatch, row, *, seen="online"):
     elif seen == "offline":
         heartbeat.touch("pinky-01")
         heartbeat._offline.add("pinky-01")
+    if guide_robot_state is not None:
+        robot_runtime.update(
+            "pinky-01", "active", False,
+            guide_robot_state=guide_robot_state)
     # seen == "unknown" 이면 아무것도 안 한다.
 
     with pytest.raises(HTTPException) as exc_info:
@@ -155,6 +159,14 @@ def test_offline_and_unknown_link_are_separate_codes(monkeypatch):
     assert unknown.detail["code"] == "link_unknown"
 
 
+@pytest.mark.parametrize("state", ["returning_to_dock", "paused"])
+def test_returning_or_paused_robot_cannot_be_armed(monkeypatch, state):
+    error = _arm(monkeypatch, _row(), guide_robot_state=state)
+
+    assert error.detail["code"] == "robot_unavailable"
+    assert error.detail["params"]["state"] == state
+
+
 class TrendConnection(ArmConnection):
     """arm 검증 + 전압 추이 조회를 함께 처리한다."""
 
@@ -191,6 +203,7 @@ def _ramp(start_v, per_hour, count=13, step_min=5):
 def _arm_with_trend(monkeypatch, row, samples):
     monkeypatch.setattr(robots, "get_pool", lambda: TrendPool(row, samples))
     heartbeat.reset()
+    robot_runtime.reset()
     heartbeat.touch("pinky-01")
     try:
         asyncio.run(robots.arm_robot("pinky-01"))

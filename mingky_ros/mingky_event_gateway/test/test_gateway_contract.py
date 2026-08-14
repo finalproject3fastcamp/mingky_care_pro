@@ -1,5 +1,8 @@
 """관제 명령을 로봇 책임 경로로 보내는 계약."""
 
+import json
+from types import SimpleNamespace
+
 from mingky_event_gateway.gateway_node import (
     ACTIVE_GUIDE_SESSION_STATES,
     HeartbeatFailureGuard,
@@ -86,6 +89,55 @@ def test_active_guidance_states_cover_confirmation_through_room_waiting():
         GuideState.SESSION_ARRIVED,
         GuideState.SESSION_IN_ROOM,
     )
+
+
+def test_cancel_guidance_dispatches_session_scoped_abort():
+    published = []
+    gateway = SimpleNamespace(
+        _guide_session_id=42,
+        _session_cancel_pub=SimpleNamespace(
+            publish=lambda message: published.append(message.data)),
+        get_logger=lambda: SimpleNamespace(
+            info=lambda message: None,
+            warn=lambda message: None,
+            error=lambda message: None,
+        ),
+    )
+
+    handled = EventGateway._dispatch(gateway, {
+        'order_id': 'order-1',
+        'command': 'cancel_guidance',
+        'argument': '42',
+    })
+
+    assert handled is True
+    assert json.loads(published[0]) == {
+        'reason': 'aborted',
+        'session_id': 42,
+    }
+
+
+def test_cancel_guidance_never_cancels_a_different_current_session():
+    published = []
+    gateway = SimpleNamespace(
+        _guide_session_id=43,
+        _session_cancel_pub=SimpleNamespace(
+            publish=lambda message: published.append(message.data)),
+        get_logger=lambda: SimpleNamespace(
+            info=lambda message: None,
+            warn=lambda message: None,
+            error=lambda message: None,
+        ),
+    )
+
+    handled = EventGateway._dispatch(gateway, {
+        'order_id': 'old-order',
+        'command': 'cancel_guidance',
+        'argument': '42',
+    })
+
+    assert handled is True
+    assert published == []
 
 
 def test_heartbeat_guard_triggers_once_after_sustained_failure():

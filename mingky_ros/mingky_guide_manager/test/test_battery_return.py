@@ -94,6 +94,67 @@ def test_long_communication_failure_ends_and_clears_active_session(manager):
     assert node.robot_state == GuideState.ROBOT_PAUSED
 
 
+def test_medical_cancel_stops_navigation_and_returns_to_dock(manager):
+    node, published = manager
+    node.session_id = 45
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    node.patient_id = 'patient-1'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray']
+    cancelled = []
+    node.navigation_cancel_pub = SimpleNamespace(
+        publish=lambda message: cancelled.append(message.data))
+
+    node._on_cancel_session(String(data=json.dumps({
+        'reason': 'aborted',
+        'session_id': 45,
+    })))
+
+    assert cancelled == [True]
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 45),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_RETURNING_TO_DOCK
+    assert node._dock_reason == 'guidance_canceled'
+    assert len(node.nav.sent) == 1
+
+    result = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+    node._on_goal_result(
+        result, node._nav_generation, 'charging_station_1', True, 0)
+
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node._dock_reason is None
+    assert published[-1] == (
+        'dock.return_succeeded', {'station_name': 'charging_station_1'}, 0)
+
+
+def test_medical_cancel_for_an_old_session_does_not_stop_current_session(manager):
+    node, published = manager
+    node.session_id = 46
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    cancelled = []
+    node.navigation_cancel_pub = SimpleNamespace(
+        publish=lambda message: cancelled.append(message.data))
+
+    node._on_cancel_session(String(data=json.dumps({
+        'reason': 'aborted',
+        'session_id': 45,
+    })))
+
+    assert cancelled == []
+    assert published == []
+    assert node.session_id == 46
+    assert node.session_state == GuideState.SESSION_GUIDING
+
+
 def test_fire_evacuation_ends_session_and_invalidates_navigation(manager):
     node, published = manager
     node.session_id = 44
@@ -129,6 +190,7 @@ def test_guidance_goal_is_blocked_during_fire_evacuation(manager):
 def test_dock_success_never_emits_clinical_nav_success(manager):
     node, published = manager
     node._nav_generation = 7
+    node._dock_reason = 'battery'
     result = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
 
     node._on_goal_result(result, 7, 'charging_station_1', True, 0)
@@ -152,6 +214,18 @@ def test_session_created_while_low_is_closed_immediately(manager):
     node._on_session_start(message)
 
     assert published == [('session.ended', {'end_reason': 'battery'}, 51)]
+    assert node.session_id == 0
+
+
+def test_session_created_while_cancel_return_is_closed_immediately(manager):
+    node, published = manager
+    node._dock_reason = 'guidance_canceled'
+    message = SessionStart(session_id=52, patient_id='patient-2')
+
+    node._on_session_start(message)
+
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 52)]
     assert node.session_id == 0
 
 

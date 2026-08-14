@@ -61,6 +61,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
     body = RobotHeartbeatIn(
         system_state="active", localization_active=True,
         navigation_speed_mps=0.18,
+        guide_robot_state="returning_to_dock",
         inventory_hash="a1b2c3d4", cpu_total_pct=23.4, queue_pending=1204,
         max_node_cpu_pct=99.9, max_node_cpu_name="event_gateway")
 
@@ -70,6 +71,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
     assert state.queue_pending == 1204
     assert state.max_node_cpu_name == "event_gateway"
     assert state.navigation_speed_mps == 0.18
+    assert state.guide_robot_state == "returning_to_dock"
     # 3~5초마다 덮어쓰는 값은 DB 에 쌓지 않는다. 저장 쿼리가 없어야 한다.
     assert all("INSERT" not in query for query, _ in connection.calls)
 

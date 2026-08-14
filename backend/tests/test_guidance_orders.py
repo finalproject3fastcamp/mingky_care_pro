@@ -88,8 +88,8 @@ def test_create_order_validates_session_before_queueing(monkeypatch):
     async def require_robot(robot_id):
         calls.append(('robot', robot_id))
 
-    async def require_session(robot_id, argument):
-        calls.append(('session', robot_id, argument))
+    async def require_session(robot_id, argument, command):
+        calls.append(('session', robot_id, argument, command))
 
     queued = SimpleNamespace(command='start_guidance', argument='42')
     monkeypatch.setattr(orders_router, '_require_robot', require_robot)
@@ -102,8 +102,92 @@ def test_create_order_validates_session_before_queueing(monkeypatch):
     assert result is queued
     assert calls == [
         ('robot', 'pinky-01'),
-        ('session', 'pinky-01', '42'),
+        ('session', 'pinky-01', '42', 'start_guidance'),
     ]
+
+
+def test_cancel_guidance_command_is_part_of_the_contract():
+    command = OrderIn(command='cancel_guidance', argument='42')
+
+    assert command.command == 'cancel_guidance'
+    assert command.argument == '42'
+
+
+def test_cancel_guidance_validates_session_before_queueing(monkeypatch):
+    calls = []
+
+    async def require_robot(robot_id):
+        calls.append(('robot', robot_id))
+
+    async def require_session(robot_id, argument, command):
+        calls.append(('session', robot_id, argument, command))
+
+    queued = SimpleNamespace(command='cancel_guidance', argument='42')
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+    monkeypatch.setattr(orders_router, '_require_active_session', require_session)
+    monkeypatch.setattr(orders_router.orders, 'put', lambda *args: queued)
+    monkeypatch.setattr(
+        orders_router.robot_runtime,
+        'snapshot',
+        lambda: {
+            'pinky-01': type('Runtime', (), {'system_state': 'active'})(),
+        },
+    )
+
+    result = asyncio.run(orders_router.create_order(
+        'pinky-01', OrderIn(command='cancel_guidance', argument='42')))
+
+    assert result is queued
+    assert calls == [
+        ('robot', 'pinky-01'),
+        ('session', 'pinky-01', '42', 'cancel_guidance'),
+    ]
+
+
+def test_cancel_guidance_has_an_independent_priority_slot():
+    assert orders._slot('cancel_guidance') is not orders._slot('set_mode')
+    assert orders._slot('cancel_guidance') is not orders._slot('goto')
+    assert orders._slot('cancel_guidance') is not orders._slot('system_stop')
+
+
+def test_cancel_guidance_is_delivered_before_motion():
+    orders.reset()
+    motion = orders.put('pinky-01', 'goto', 'xray_room_goal')
+    cancel = orders.put('pinky-01', 'cancel_guidance', '42')
+
+    assert orders.peek('pinky-01') == cancel
+    assert orders.ack('pinky-01', cancel.order_id) is True
+    assert orders.peek('pinky-01') == motion
+    orders.reset()
+
+
+def test_create_cancel_discards_an_undelivered_motion_command(monkeypatch):
+    async def require_robot(robot_id):
+        return None
+
+    async def require_session(robot_id, argument, command):
+        return None
+
+    monkeypatch.setattr(orders_router, '_require_robot', require_robot)
+    monkeypatch.setattr(orders_router, '_require_active_session', require_session)
+    monkeypatch.setattr(
+        orders_router.robot_runtime,
+        'snapshot',
+        lambda: {
+            'pinky-01': type('Runtime', (), {'system_state': 'active'})(),
+        },
+    )
+    orders.reset()
+    motion = orders.put('pinky-01', 'start_guidance', '42')
+
+    cancel = asyncio.run(orders_router.create_order(
+        'pinky-01', OrderIn(command='cancel_guidance', argument='42')))
+
+    assert orders.peek('pinky-01') == cancel
+    assert orders.ack('pinky-01', cancel.order_id) is True
+    assert orders.ack('pinky-01', motion.order_id) is False
+    assert orders.peek('pinky-01') is None
+    orders.reset()
 
 
 def test_unknown_guidance_command_remains_rejected():

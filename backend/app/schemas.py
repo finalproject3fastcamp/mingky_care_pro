@@ -120,12 +120,13 @@ class OrderIn(BaseModel):
     """
 
     command: Literal[
-        "goto", "goto_pose", "start_session", "start_guidance", "set_mode",
+        "goto", "goto_pose", "start_session", "start_guidance",
+        "cancel_guidance", "set_mode",
         "localize", "system_start", "system_stop", "system_restart",
         "fire_alarm_reset", "set_navigation_speed",
     ]
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
-    # start_session 이면 patient_id, start_guidance 면 session_id,
+    # start_session 이면 patient_id, start_guidance/cancel_guidance 면 session_id,
     # set_mode 면 auto | manual | estop, set_navigation_speed 면 m/s 숫자,
     # 나머지 제어 명령은 run.
     #
@@ -258,6 +259,10 @@ class RobotOut(BaseModel):
     fire_alarm_active: bool | None = None
     returning_to_dock: bool = False
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
+    guide_robot_state: Literal[
+        "idle", "moving", "waiting", "charging", "battery_low",
+        "comm_lost", "paused", "returning_to_dock",
+    ] | None = None
     runtime_reported_at: datetime | None = None
     # 로봇이 보고한 자원·큐 상태. 전부 인메모리(robot_runtime)이고 DB 에
     # 저장하지 않는다. 구버전 게이트웨이는 안 보내므로 None 이 정상이다.
@@ -300,6 +305,11 @@ class RobotHeartbeatIn(BaseModel):
     # Nav2 controller_server에 실제로 반영된 직진 목표속도. 구버전 게이트웨이는
     # 이 값을 보내지 않으므로 None을 허용한다.
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
+    # Guide Manager의 현재 로봇 상태. 구버전 게이트웨이는 보내지 않는다.
+    guide_robot_state: Literal[
+        "idle", "moving", "waiting", "charging", "battery_low",
+        "comm_lost", "paused", "returning_to_dock",
+    ] | None = None
 
     # 게이트웨이가 계산한 인벤토리 지문. 서버가 아는 값과 다르면 본문을 요구한다.
     inventory_hash: str | None = Field(default=None, max_length=64)

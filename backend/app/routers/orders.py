@@ -43,16 +43,18 @@ async def _require_robot(robot_id: str) -> None:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
 
-async def _require_active_session(robot_id: str, argument: str) -> None:
-    """출발 명령이 현재 로봇의 활성 세션을 정확히 가리키는지 확인한다."""
+async def _require_active_session(
+        robot_id: str, argument: str, command: str = "start_guidance") -> None:
+    """세션 명령이 현재 로봇의 활성 세션을 정확히 가리키는지 확인한다."""
     try:
         session_id = int(argument)
     except ValueError as exc:
         raise HTTPException(
-            status_code=422, detail="start_guidance requires a session_id") from exc
+            status_code=422, detail=f"{command} requires a session_id") from exc
     if session_id <= 0:
         raise HTTPException(
-            status_code=422, detail="start_guidance requires a positive session_id")
+            status_code=422,
+            detail=f"{command} requires a positive session_id")
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -81,8 +83,8 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
     소화하는 쪽이 오히려 위험하다.
     """
     await _require_robot(robot_id)
-    if body.command == "start_guidance":
-        await _require_active_session(robot_id, body.argument)
+    if body.command in ("start_guidance", "cancel_guidance"):
+        await _require_active_session(robot_id, body.argument, body.command)
     if body.command == "localize" and body.argument != "run":
         raise HTTPException(
             status_code=422, detail="localize requires argument 'run'")
@@ -151,7 +153,7 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
             # 뒤 다시 켰을 때 낡은 목표가 갑자기 실행되는 일을 막는다.
             orders.clear_motion(robot_id)
     if body.command in (
-            "goto", "goto_pose", "start_guidance", "localize",
+            "goto", "goto_pose", "start_guidance", "cancel_guidance", "localize",
             "fire_alarm_reset"):
         runtime = robot_runtime.snapshot().get(robot_id)
         if runtime is not None and runtime.system_state != "active":
@@ -159,6 +161,10 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
                 status_code=409,
                 detail=f"robot system is {runtime.system_state}",
             )
+    if body.command == "cancel_guidance":
+        # 취소보다 먼저 적재됐지만 아직 로봇이 받지 않은 출발·목적지 명령이
+        # 취소 직후 실행되는 것을 막는다.
+        orders.clear_motion(robot_id)
     return orders.put(robot_id, body.command, body.argument)
 
 

@@ -65,6 +65,9 @@ function categorize(robot: Robot): Candidate {
   if (robot.returning_to_dock) {
     return { robot, eligible: false, reason: '충전소 복귀 중' }
   }
+  if (robot.active_session_id == null && robot.guide_robot_state === 'paused') {
+    return { robot, eligible: false, reason: '안전 확인 필요' }
+  }
   // 이미 활성화됐거나 안내 중인 로봇도 고를 수 있어야 한다. 막아두면 한 번
   // 나온 뒤에는 되돌아갈 방법이 없어 취소조차 못 한다. 이 화면은 "새로 켜는
   // 곳" 이 아니라 "담당할 로봇을 고르는 곳" 이다 — 여러 대를 번갈아 본다.

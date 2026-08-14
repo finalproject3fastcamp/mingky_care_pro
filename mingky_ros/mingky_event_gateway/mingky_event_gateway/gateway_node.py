@@ -401,7 +401,9 @@ class EventGateway(Node):
         self._qr_observation = None
         self._qr_wake = threading.Event()
         self._clinical_active = False
+        self._guide_robot_state = GuideState.ROBOT_IDLE
         self._guide_session_state = GuideState.SESSION_NONE
+        self._guide_session_id = 0
         self._guide_patient_id = ''
         self._returning_to_dock = False
         self._localization_active = False
@@ -538,7 +540,9 @@ class EventGateway(Node):
         self._qr_wake.set()
 
     def _on_guide_state(self, msg: GuideState) -> None:
+        self._guide_robot_state = msg.robot_state
         self._guide_session_state = msg.session_state
+        self._guide_session_id = int(msg.session_id)
         self._guide_patient_id = msg.patient_id
         self._returning_to_dock = bool(msg.returning_to_dock)
         self._clinical_active = (
@@ -775,6 +779,7 @@ class EventGateway(Node):
                 "fire_alarm_active": self._fire_alarm_active,
                 "returning_to_dock": self._returning_to_dock,
                 "navigation_speed_mps": self._navigation_speed_mps,
+                "guide_robot_state": self._guide_robot_state,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
                 "max_node_cpu_pct": self._max_node_cpu_pct,
@@ -1213,6 +1218,31 @@ class EventGateway(Node):
                 lambda result, requested=speed: self._on_navigation_speed_response(
                     result, requested))
             self.get_logger().info(f"주행 속도 변경 요청: {speed:.2f} m/s")
+            return True
+
+        if command == "cancel_guidance":
+            try:
+                session_id = int(argument)
+            except (TypeError, ValueError):
+                self.get_logger().error(
+                    f"잘못된 안내 취소 세션 ID: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if session_id <= 0:
+                self.get_logger().error(
+                    f"잘못된 안내 취소 세션 ID: {session_id}")
+                return True
+            if self._guide_session_id not in (0, session_id):
+                self.get_logger().warn(
+                    f"현재 세션과 다른 안내 취소 명령을 폐기합니다: "
+                    f"requested={session_id}, current={self._guide_session_id}")
+                return True
+            self._session_cancel_pub.publish(String(data=json.dumps({
+                "reason": "aborted",
+                "session_id": session_id,
+            })))
+            self.get_logger().info(
+                f"명령 실행: cancel_guidance(session_id={session_id})")
             return True
 
         publisher = self._order_pubs.get(command)

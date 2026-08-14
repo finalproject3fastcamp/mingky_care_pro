@@ -62,6 +62,9 @@ export function rejectionMessage(detail: RejectionDetail): RejectionMessage {
     case 'returning_to_dock':
       return { text: '충전소로 복귀 중입니다', action: '복귀가 끝난 뒤 다시 선택' }
 
+    case 'robot_unavailable':
+      return { text: '안전 확인이 필요한 로봇입니다', action: '다른 로봇 선택 또는 대기' }
+
     case 'robot_offline':
       return {
         text: `로봇과 연결이 끊긴 지 ${minutes(num(params, 'last_seen_sec'))} 됐습니다`,
