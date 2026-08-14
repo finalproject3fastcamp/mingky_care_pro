@@ -292,6 +292,20 @@ robot.mode_changed:
   level: info
   payload: { mode: [auto, manual, estop], previous: [auto, manual, estop], source: string }
 
+# estop 은 걸어 잠긴다. 스스로 풀리지 않으며 명시적으로 해제해야 한다.
+#
+# 이 두 코드가 없는 동안 비상정지 이력이 통째로 화면에서 빠져 있었다.
+# 적재는 됐지만 미등록 코드라 상태 갱신을 타지 않아, 사고를 조사할 때
+# 아무 흔적이 없었다. 관제 서버에는 손으로 추가돼 있었으나 저장소에는
+# 반영되지 않아 재배포하면 다시 사라지는 상태였다.
+robot.estop_engaged:
+  level: error
+  payload: { source: string }
+
+robot.estop_released:
+  level: warning
+  payload: { source: string }
+
 robot.resumed:
   level: info
   payload: { reason: string }
