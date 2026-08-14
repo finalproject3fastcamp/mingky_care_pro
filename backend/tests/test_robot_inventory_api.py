@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 import pytest
 
-from app import heartbeat, robot_runtime
+from app import arming, heartbeat, robot_runtime
 from app.routers import robots
 from app.schemas import RobotHeartbeatIn, RobotInventoryIn
 
@@ -50,6 +50,7 @@ def _setup(monkeypatch, connection):
     monkeypatch.setattr(robots, "get_pool", lambda: FakePool(connection))
     heartbeat.reset()
     robot_runtime.reset()
+    arming._armed.clear()
 
 
 def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
@@ -60,6 +61,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
     body = RobotHeartbeatIn(
         system_state="active", localization_active=True,
         navigation_speed_mps=0.18,
+        guide_robot_state="returning_to_dock",
         inventory_hash="a1b2c3d4", cpu_total_pct=23.4, queue_pending=1204,
         max_node_cpu_pct=99.9, max_node_cpu_name="event_gateway")
 
@@ -69,8 +71,22 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
     assert state.queue_pending == 1204
     assert state.max_node_cpu_name == "event_gateway"
     assert state.navigation_speed_mps == 0.18
+    assert state.guide_robot_state == "returning_to_dock"
     # 3~5초마다 덮어쓰는 값은 DB 에 쌓지 않는다. 저장 쿼리가 없어야 한다.
     assert all("INSERT" not in query for query, _ in connection.calls)
+
+
+def test_returning_heartbeat_disarms_qr_scanning(monkeypatch):
+    connection = FakeConnection(value=1)
+    _setup(monkeypatch, connection)
+    heartbeat.touch('pinky-01')
+    arming.arm('pinky-01')
+
+    asyncio.run(robots.post_heartbeat(
+        'pinky-01', RobotHeartbeatIn(returning_to_dock=True)))
+
+    assert robot_runtime.snapshot()['pinky-01'].returning_to_dock is True
+    assert arming.is_armed('pinky-01') is False
 
 
 def test_heartbeat_asks_for_inventory_when_the_hash_is_new(monkeypatch):

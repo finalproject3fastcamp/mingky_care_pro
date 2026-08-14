@@ -44,6 +44,7 @@ _SAFETY_COMMANDS = frozenset({"set_mode"})
 _FIRE_COMMANDS = frozenset({"fire_alarm_reset"})
 _SYSTEM_COMMANDS = frozenset({"system_start", "system_stop", "system_restart"})
 _CONFIG_COMMANDS = frozenset({"set_navigation_speed"})
+_SESSION_COMMANDS = frozenset({"cancel_guidance"})
 
 # robot_id → 대기 중인 주행 명령. 로봇당 하나만 둔다.
 #
@@ -70,6 +71,8 @@ _system: dict[str, OrderOut] = {}
 # 덮이거나, 반대로 속도 변경이 환자 목적지를 지우면 안 된다.
 _config: dict[str, OrderOut] = {}
 
+# 안내 취소는 주행·설정 명령에 덮이지 않도록 별도 슬롯에 둔다.
+_session: dict[str, OrderOut] = {}
 # robot_id → 그 로봇의 명령을 기다리고 있는 대기자들.
 #
 # 롱폴링용이다. 로봇이 3초마다 물어보면 명령이 걸린 직후에도 평균 1.5초를
@@ -95,6 +98,8 @@ def _slot(command: str) -> dict[str, OrderOut]:
         return _system
     if command in _CONFIG_COMMANDS:
         return _config
+    if command in _SESSION_COMMANDS:
+        return _session
     return _pending
 
 
@@ -162,7 +167,8 @@ def peek(robot_id: str) -> OrderOut | None:
     정지가 먼저 가야 한다. 반대 순서면 로봇이 목적지로 출발한 뒤에야
     정지를 받는다.
     """
-    return (_safety.get(robot_id) or _fire.get(robot_id) or _system.get(robot_id)
+    return (_safety.get(robot_id) or _fire.get(robot_id)
+            or _session.get(robot_id) or _system.get(robot_id)
             or _config.get(robot_id) or _pending.get(robot_id))
 
 
@@ -172,7 +178,7 @@ def ack(robot_id: str, order_id: uuid.UUID) -> bool:
     지운 경우 True. order_id 가 안 맞으면 지우지 않고 False —
     그 사이 새 명령으로 덮어써진 경우이므로 새 것을 살려둬야 한다.
     """
-    for slot in (_safety, _fire, _system, _config, _pending):
+    for slot in (_safety, _fire, _session, _system, _config, _pending):
         order = slot.get(robot_id)
         if order is not None and order.order_id == order_id:
             del slot[robot_id]
@@ -193,12 +199,13 @@ def snapshot() -> dict[str, list[OrderOut]]:
     """
     result: dict[str, list[OrderOut]] = {}
     robot_ids = (
-        set(_safety) | set(_fire) | set(_system) | set(_config) | set(_pending)
+        set(_safety) | set(_fire) | set(_session) | set(_system)
+        | set(_config) | set(_pending)
     )
     for robot_id in robot_ids:
         orders = [
             s[robot_id]
-            for s in (_safety, _fire, _system, _config, _pending)
+            for s in (_safety, _fire, _session, _system, _config, _pending)
             if robot_id in s]
         result[robot_id] = orders
     return result
@@ -209,5 +216,6 @@ def reset() -> None:
     _pending.clear()
     _safety.clear()
     _fire.clear()
+    _session.clear()
     _system.clear()
     _config.clear()
