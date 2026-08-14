@@ -29,11 +29,9 @@
  * FIXTURE)로 묶여 있어서 색을 여기서 바꿀 수 있다.
  * **원점을 옮겨 다시 내보내면 좌표가 전부 어긋난다.**
  *
- * public/pinky.glb — 로봇. 예전 모형 파일에 붙박이로 들어 있던 핑키를 한 대만
- * 떼어 발밑 한가운데를 원점으로 옮긴 것이다(실측 11.6 x 13.6 x 11.0 cm).
- * 색은 전부 파랑 계열로 다시 칠했다 — 몸통(베이스링크)이 가장 밝고,
- * 바퀴와 윗판은 그보다 진하다. 원래는 흰 몸통에 검은 바퀴였는데 바닥도
- * 흰색이라 화면에서 로봇이 사라졌다.
+ * public/models/pinky.glb — 로봇. 로봇 카드(PinkyModelCard)가 쓰는 것과 같은
+ * 모형이다. 화면마다 다른 로봇이 나오면 안 되고, 같은 파일을 두 벌 두면
+ * 한쪽만 갱신되어 어긋난다.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -46,7 +44,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
-import { SIGNS, type Sign } from './mapWaypoints'
+import { SIGNS } from './mapSigns'
 import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
@@ -70,18 +68,6 @@ interface Props extends DiagLayers {
   estop?: boolean
   /** 이 로봇을 고른 상태인지. 켜면 초록으로 박동한다. */
   selected?: boolean
-  /** 안내판 목록. 기본은 mapWaypoints 의 SIGNS 다. 편집 화면만 이걸 바꿔 넘긴다. */
-  signs?: Sign[]
-  /** 켜면 글자를 끌어 옮길 수 있다. 편집 화면 전용이다. */
-  editing?: boolean
-  /** 글자를 끌었을 때. 실측 모델 좌표(u, v)로 알려 준다. */
-  onSignMove?: (index: number, u: number, v: number) => void
-  /** 편집 화면에서 고른 글자들. 테두리로 표시한다. */
-  picked?: readonly number[]
-  /** 글자를 눌렀을 때. shift 를 누른 채면 add 가 true 다. */
-  onSignPick?: (index: number, add: boolean) => void
-  /** 조명·배경을 덮어쓴다. 값을 맞춰 보는 화면에서만 쓴다. */
-  look?: Partial<Look>
 }
 
 interface LabelHandle {
@@ -184,21 +170,10 @@ const COLOR = {
 } as const
 
 /**
- * 모형 안에서 로봇이 바라보던 쪽과 우리가 0도로 삼는 쪽의 차이(rad).
- * 라이노에서 놓인 방향이 지도의 0도와 같을 이유가 없어서 여기서 맞춘다.
+ * 모형이 바라보는 쪽과 지도의 0도 사이의 차이(rad).
+ * 모형이 놓인 방향이 지도의 0도와 같을 이유가 없어서 여기서 맞춘다.
  */
-const FACING = Math.PI
-
-/**
- * 비상정지 때 로봇을 물들일 색. 재질 이름별로 짝을 지어, 평소의 밝고 어두운
- * 차례를 그대로 붉은 쪽으로 옮긴다. 전부 같은 빨강으로 칠하면 형태가 뭉개져
- * 로봇이 아니라 붉은 덩어리로 보인다.
- */
-const ESTOP_TINT: Record<string, number> = {
-  BASE: 0x5e1618,
-  BODY: 0xed3f3f,
-  TOP: 0x8f2224,
-}
+const FACING = 0
 
 /** 박동 한 주기(ms). 2D 지도에서 쓰던 1.5초와 같다. */
 const PULSE_MS = 1500
@@ -227,7 +202,6 @@ interface Handles {
   plan: Line2
   waypoints: THREE.Group
   invalidate: () => void
-  setSignSize: (v: number) => void
   resetView: () => void
   pick: (clientX: number, clientY: number, atY?: number) => { u: number; v: number } | null
   pickWaypoint: (clientX: number, clientY: number) => string | null
@@ -244,12 +218,6 @@ export function HospitalMap3D({
   onSelectWaypoint,
   estop = false,
   selected = false,
-  signs = SIGNS,
-  editing = false,
-  onSignMove,
-  picked,
-  onSignPick,
-  look,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -334,9 +302,8 @@ export function HospitalMap3D({
     scene.environment = envTex
 
     // ---- 로봇 ----
-    // 핑키 실물 모형(public/pinky.glb)을 쓴다. 실측 11.6 x 13.6 x 11.0 cm 이라
-    // 그대로 놓으면 통로에 들어가는지가 눈에 보인다. 도형으로 대충 그리면
-    // 그 판단을 못 한다.
+    // 실물 모형을 실제 크기 그대로 놓는다. 도형으로 대충 그리면 통로에
+    // 들어가는지를 판단할 수 없다.
     const robot = new THREE.Group()
     robot.visible = false
     scene.add(robot)
@@ -433,6 +400,17 @@ export function HospitalMap3D({
     // ---- 안내 글자 ----
     // 3D 안에 글자를 넣는 대신 HTML 을 위에 띄운다. 그래야 항상 화면을
     // 정면으로 보고, 글꼴·굵기·색을 CSS 로 그대로 쓸 수 있다.
+    labelsRef.current = SIGNS.map((sign) => {
+      const el = document.createElement('div')
+      el.className = 'map3d__sign' + (sign.rank === 1 ? '' : ' map3d__sign--minor')
+      el.textContent = sign.label
+      if (sign.sub) {
+        el.appendChild(document.createElement('br'))
+        el.appendChild(document.createTextNode(sign.sub))
+      }
+      labelHost.appendChild(el)
+      return { el, x: sign.u, y: sign.y, z: -sign.v }
+    })
 
     // ---- 바닥(찍기용) ----
     // 눈에 보이지는 않지만 광선이 부딪힐 면이 있어야 클릭 지점을 알 수 있다.
@@ -499,13 +477,6 @@ export function HospitalMap3D({
       }
     }
 
-    let signSize = LOOK.signSize
-    const setSignSize = (v: number) => {
-      signSize = v
-      labelHost.style.fontSize = `${host.clientWidth * v}px`
-      invalidate()
-    }
-
     let showSigns = true
     const setShowSigns = (v: boolean) => {
       showSigns = v
@@ -544,7 +515,7 @@ export function HospitalMap3D({
       // 굵은 선은 화면 크기를 알아야 두께를 계산한다.
       planMat.resolution.set(w, h)
       // 글자 크기는 화면 폭을 따라간다.
-      labelHost.style.fontSize = `${w * signSize}px`
+      labelHost.style.fontSize = `${w * LOOK.signSize}px`
       invalidate()
     }
     const ro = new ResizeObserver(resize)
@@ -588,10 +559,19 @@ export function HospitalMap3D({
 
     const mats: THREE.MeshStandardMaterial[] = []
     const robotMats: Handles['robotMats'] = []
-    loader.load('/pinky.glb', (gltf) => {
+    loader.load('/models/pinky.glb', (gltf) => {
       if (disposed) return
+      const model = gltf.scene
+      // 팀 모형은 ROS/URDF 규약대로 z 가 위다. 이 화면은 y 가 위라 눕혀 세운다.
+      model.rotation.x = -Math.PI / 2
+      model.updateMatrixWorld(true)
+      // 원점을 발밑 한가운데로 옮긴다. 그래야 로봇 좌표를 그대로 얹을 수 있다.
+      const box = new THREE.Box3().setFromObject(model)
+      const c = box.getCenter(new THREE.Vector3())
+      model.position.set(-c.x, -box.min.y, -c.z)
+
       const seen = new Set<THREE.Material>()
-      gltf.scene.traverse((o) => {
+      model.traverse((o) => {
         const m = o as THREE.Mesh
         if (!m.isMesh) return
         m.castShadow = true
@@ -600,14 +580,11 @@ export function HospitalMap3D({
         seen.add(mat)
         mat.envMapIntensity = LOOK.env
         mats.push(mat)
-        robotMats.push({
-          m: mat,
-          base: mat.color.clone(),
-          estop: ESTOP_TINT[mat.name] ?? ESTOP_TINT.BODY,
-        })
+        // 무늬가 있는 재질이라 색은 곱해진다 — 붉게 칠하면 로봇 전체가
+        // 무늬를 유지한 채 붉어진다.
+        robotMats.push({ m: mat, base: mat.color.clone(), estop: COLOR.estop })
       })
-      // 모형 원점은 발밑 한가운데다(뽑을 때 그렇게 옮겼다). 그대로 얹으면 된다.
-      robot.add(gltf.scene)
+      robot.add(model)
       // 모형은 늦게 온다. 그 사이에 이미 비상정지였다면 여기서 칠해 준다 —
       // 안 그러면 상태가 다시 바뀔 때까지 파란 로봇이 그대로 서 있는다.
       setRobotReady((n) => n + 1)
@@ -665,7 +642,6 @@ export function HospitalMap3D({
       host,
       pulse,
       robotMats,
-      setSignSize,
       scan: scanPts,
       particles: particlePts,
       plan: planLine,
@@ -703,111 +679,6 @@ export function HospitalMap3D({
       handles.current = null
     }
   }, [])
-
-  // ---------------------------------------------------------------- 조명
-  // 값을 손으로 맞춰 보려면 장면을 다시 만들지 않고 바로 바뀌어야 한다.
-  const lookKey = JSON.stringify(look ?? null)
-  useEffect(() => {
-    const h = handles.current
-    if (!h) return
-    const L = { ...LOOK, ...(look ?? {}) }
-    h.sun.intensity = L.sun
-    h.sun.position.copy(h.sun.target.position).add(new THREE.Vector3(...L.sunFrom))
-    h.hemi.intensity = L.fill
-    h.hemi.color.set(L.sky)
-    h.hemi.groundColor.set(L.ground)
-    h.renderer.toneMappingExposure = L.exposure
-    h.host.style.background = L.background
-    h.setSignSize(L.signSize)
-    const sm = h.scan.material as THREE.PointsMaterial
-    sm.size = L.scanSize
-    sm.opacity = L.scanOpacity
-    sm.color.set(L.scanColor)
-    const pm = h.plan.material as LineMaterial
-    pm.linewidth = L.planWidth
-    pm.opacity = L.planOpacity
-    pm.color.set(L.planColor)
-    for (const m of h.mats) m.envMapIntensity = L.env
-    h.invalidate()
-    // lookKey 로 값이 실제로 바뀐 때만 돈다(객체는 매번 새로 만들어진다).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lookKey, ready, robotReady])
-
-  // ---------------------------------------------------------------- 안내 글자
-  // 콜백은 렌더마다 새 함수가 되므로 상자에 담아 둔다. 이렇게 해야 글자
-  // DOM 을 다시 만들지 않아도 최신 콜백이 불린다 — 끄는 도중에 DOM 이
-  // 새로 만들어지면 손을 놓친다.
-  const cbMove = useRef(onSignMove)
-  const cbPick = useRef(onSignPick)
-  cbMove.current = onSignMove
-  cbPick.current = onSignPick
-
-  // 글자 목록이 바뀔 때만 DOM 을 다시 만든다.
-  const signKey = signs.map((s) => `${s.label}${s.sub ?? ''}${s.rank}`).join('')
-  useEffect(() => {
-    const labelHost = labelHostRef.current
-    if (!labelHost) return
-    for (const l of labelsRef.current) l.el.remove()
-
-    labelsRef.current = signs.map((s, i) => {
-      const el = document.createElement('div')
-      el.className = 'map3d__sign' + (s.rank === 1 ? '' : ' map3d__sign--minor')
-      el.textContent = s.label
-      if (s.sub) {
-        el.appendChild(document.createElement('br'))
-        el.appendChild(document.createTextNode(s.sub))
-      }
-      if (editing) {
-        el.classList.add('map3d__sign--editing')
-        el.addEventListener('pointerdown', (e) => {
-          // 글자를 끄는 동안 화면이 같이 돌면 안 된다.
-          e.stopPropagation()
-          e.preventDefault()
-          cbPick.current?.(i, e.shiftKey)
-          const h = handles.current
-          const cur = labelsRef.current[i]
-          if (!h || !cur || !cbMove.current) return
-          const start = h.pick(e.clientX, e.clientY, cur.y)
-          if (!start) return
-          // 글자 가운데가 아니라 **집은 자리**를 기준으로 따라오게 한다.
-          const offU = cur.x - start.u
-          const offV = -cur.z - start.v
-          el.setPointerCapture(e.pointerId)
-          const move = (ev: PointerEvent) => {
-            const p = h.pick(ev.clientX, ev.clientY, cur.y)
-            if (p) cbMove.current?.(i, p.u + offU, p.v + offV)
-          }
-          const up = () => {
-            el.removeEventListener('pointermove', move)
-            el.removeEventListener('pointerup', up)
-            el.removeEventListener('pointercancel', up)
-          }
-          el.addEventListener('pointermove', move)
-          el.addEventListener('pointerup', up)
-          el.addEventListener('pointercancel', up)
-        })
-      }
-      labelHost.appendChild(el)
-      return { el, x: s.u, y: s.y ?? 0.22, z: -s.v }
-    })
-    handles.current?.invalidate()
-    // signKey 가 같으면 글자 내용이 그대로라 다시 만들 필요가 없다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signKey, editing])
-
-  // 자리와 고름 표시는 DOM 을 새로 만들지 않고 값만 고친다.
-  useEffect(() => {
-    const ls = labelsRef.current
-    signs.forEach((s, i) => {
-      const l = ls[i]
-      if (!l) return
-      l.x = s.u
-      l.y = s.y ?? 0.22
-      l.z = -s.v
-      l.el.classList.toggle('is-picked', !!picked?.includes(i))
-    })
-    handles.current?.invalidate()
-  }, [signs, picked])
 
   // ---------------------------------------------------------------- 값 반영
   useEffect(() => {
