@@ -92,8 +92,10 @@ _UNKNOWN_CODES_SQL = f"""
 async def list_unknown_codes(
     since: datetime | None = None,
     limit: int = Query(100, ge=1, le=500),
+    include_resolved: bool = False,
+    registry: EventCodeRegistry = Depends(get_registry),
 ) -> list[UnknownCodeOut]:
-    """서버가 해석하지 못한 event_code 와 건수.
+    """지금도 서버가 해석하지 못하는 event_code 와 건수.
 
     비상정지 이력이 통째로 화면에서 빠져 있어도 지금까지는 아무 신호가
     없었다. 로봇 로그에만 남고 관제는 조용했다. 이 목록이 그 신호다.
@@ -101,6 +103,13 @@ async def list_unknown_codes(
     적재 자체는 되고 있으므로 데이터가 사라진 것은 아니다. 다만 등록되지
     않은 코드는 상태 갱신을 타지 않아 대시보드 판정에서 빠진다 —
     config/event_codes.yaml 을 갱신하면 그때부터 반영된다.
+
+    **이미 등록된 코드는 기본으로 뺀다.** events 의 마커는 append-only 라
+    영원히 남는데, yaml 을 갱신해 문제를 해결한 뒤에도 목록에 그대로 있으면
+    경고가 절대 꺼지지 않는다. 항상 켜져 있는 경고는 아무도 안 본다 —
+    그러면 진짜 미등록 코드가 새로 들어와도 묻힌다.
+
+    지난 이력을 보려면 include_resolved=true 로 부른다.
     """
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -117,6 +126,7 @@ async def list_unknown_codes(
             last_seen=row["last_seen"],
         )
         for row in rows
+        if include_resolved or not registry.is_known(row["event_code"] or "")
     ]
 
 

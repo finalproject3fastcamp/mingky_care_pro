@@ -53,7 +53,7 @@ def test_unknown_codes_are_aggregated_from_the_marker_events(monkeypatch):
     ])
     monkeypatch.setattr(events, "get_pool", lambda: pool)
 
-    result = asyncio.run(events.list_unknown_codes())
+    result = asyncio.run(events.list_unknown_codes(registry=FakeRegistry([])))
 
     # 별도 수집 테이블이 아니라 ingest 가 남긴 마커를 집계한다.
     query, _ = pool.connection.call
@@ -71,7 +71,8 @@ def test_since_and_limit_are_passed_through(monkeypatch):
     monkeypatch.setattr(events, "get_pool", lambda: pool)
     since = datetime(2026, 8, 13, tzinfo=timezone.utc)
 
-    asyncio.run(events.list_unknown_codes(since=since, limit=25))
+    asyncio.run(events.list_unknown_codes(since=since, limit=25,
+                                          registry=FakeRegistry([])))
 
     _, args = pool.connection.call
     assert args == (since, 25)
@@ -84,7 +85,46 @@ def test_marker_without_received_code_does_not_break_the_screen(monkeypatch):
     pool = FakePool([_row(None, None, 1, now, now)])
     monkeypatch.setattr(events, "get_pool", lambda: pool)
 
-    result = asyncio.run(events.list_unknown_codes())
+    result = asyncio.run(events.list_unknown_codes(registry=FakeRegistry([])))
 
     assert result[0].event_code == "(코드 없음)"
     assert result[0].robot_id is None
+
+
+class FakeRegistry:
+    def __init__(self, known):
+        self.known = set(known)
+
+    def is_known(self, code):
+        return code in self.known
+
+
+def test_codes_registered_since_are_dropped_from_the_warning(monkeypatch):
+    """yaml 을 갱신해 해결한 코드는 목록에서 빠진다.
+
+    events 의 마커는 append-only 라 영원히 남는다. 해결한 뒤에도 계속
+    보이면 경고가 절대 꺼지지 않고, 항상 켜져 있는 경고는 아무도 안 본다 —
+    그러면 진짜 미등록 코드가 새로 들어와도 묻힌다.
+    """
+    now = datetime.now(timezone.utc)
+    pool = FakePool([
+        _row("robot.estop_engaged", "pinky-01", 4, now, now),   # 이제 등록됨
+        _row("robot.unknown_thing", "pinky-02", 2, now, now),   # 여전히 미등록
+    ])
+    monkeypatch.setattr(events, "get_pool", lambda: pool)
+
+    result = asyncio.run(events.list_unknown_codes(
+        registry=FakeRegistry({"robot.estop_engaged"})))
+
+    assert [r.event_code for r in result] == ["robot.unknown_thing"]
+
+
+def test_history_is_still_reachable_with_include_resolved(monkeypatch):
+    now = datetime.now(timezone.utc)
+    pool = FakePool([_row("robot.estop_engaged", "pinky-01", 4, now, now)])
+    monkeypatch.setattr(events, "get_pool", lambda: pool)
+
+    result = asyncio.run(events.list_unknown_codes(
+        include_resolved=True, registry=FakeRegistry({"robot.estop_engaged"})))
+
+    assert [r.event_code for r in result] == ["robot.estop_engaged"]
