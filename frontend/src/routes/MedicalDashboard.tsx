@@ -9,7 +9,7 @@ import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotPicker } from '../components/RobotPicker'
-import { RobotMap } from '../components/RobotMap'
+import { LazyHospitalMap3D } from '../components/LazyHospitalMap3D'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
@@ -221,7 +221,7 @@ export function MedicalDashboard() {
   }
 
   return (
-    <div className="dashboard">
+    <div className="dashboard dashboard--medical">
       {stale && <ErrorBanner />}
       {/* 활성화·안내를 유지한 채 선택 화면으로. 다른 로봇을 추가로 켜는 통로다. */}
       <button
@@ -253,13 +253,15 @@ export function MedicalDashboard() {
               modeStatusRevision={teleop.modeStatusRevision}
               robotConnected={teleop.robotConnected}
             />
-            <RobotMap
+            <LazyHospitalMap3D
               pose={teleop.pose}
               live={teleop.robotConnected}
               scan={teleop.scan}
               particles={teleop.particles}
               plan={teleop.plan}
               onSetPose={teleop.setPose}
+              estop={teleop.appliedMode === 'estop'}
+              selected
             />
             <TeleopPad
               drive={teleop.drive}
