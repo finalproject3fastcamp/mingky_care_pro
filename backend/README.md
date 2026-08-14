@@ -25,6 +25,22 @@ uvicorn app.main:app --reload
 
 기본 접속: <http://localhost:8000>
 
+> **인스턴스는 1개다.** `heartbeat` · `arming` · `orders` 가 인메모리라 둘 이상
+> 뜨면 판정이 갈린다 — `comm_lost` 가 멀쩡한 로봇에 찍히고 arming 이 간헐적으로
+> 안 보인다.
+>
+> 기동 시 PostgreSQL advisory lock 으로 강제한다(`_claim_single_instance`).
+> 워커 수를 세지 않으므로 `--workers 2` `--workers=2` `WEB_CONCURRENCY=2` 가 전부
+> 걸리고, 컨테이너 레플리카나 다른 호스트의 두 번째 배포도 같이 걸린다.
+> 못 잡으면 종료 코드 3.
+>
+> 락이 DB 세션에 붙어 있어서 DB 재시작이나 네트워크 블립으로 세션이 끊기면 락만
+> 사라진다. `_hold_single_instance()` 가 10초마다 보유를 확인하고 다시 잡는다.
+> 그 사이 다른 인스턴스가 들어왔으면 이쪽이 SIGTERM 으로 물러난다.
+>
+> **같은 DB 를 보는 백엔드를 둘 띄울 수는 없다.** 개발용을 따로 돌리려면 DB 를
+> 나눠라.
+
 - `GET /health` — 헬스체크. 로드된 이벤트 코드 수도 함께 반환
 - `POST /qr/scan` — QR 스캔 → 안내 세션 시작 + 오늘 진료 일정 조회
 - `POST /events` — 로봇 이벤트 배치 적재
