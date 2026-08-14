@@ -31,7 +31,9 @@
  *
  * public/pinky.glb — 로봇. 예전 모형 파일에 붙박이로 들어 있던 핑키를 한 대만
  * 떼어 발밑 한가운데를 원점으로 옮긴 것이다(실측 11.6 x 13.6 x 11.0 cm).
- * 몸통은 흰색이었는데 바닥도 흰색이라 보이지 않아 파랑으로 바꿨다.
+ * 색은 전부 파랑 계열로 다시 칠했다 — 몸통(베이스링크)이 가장 밝고,
+ * 바퀴와 윗판은 그보다 진하다. 원래는 흰 몸통에 검은 바퀴였는데 바닥도
+ * 흰색이라 화면에서 로봇이 사라졌다.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -78,6 +80,8 @@ interface Props extends DiagLayers {
   picked?: readonly number[]
   /** 글자를 눌렀을 때. shift 를 누른 채면 add 가 true 다. */
   onSignPick?: (index: number, add: boolean) => void
+  /** 조명·배경을 덮어쓴다. 값을 맞춰 보는 화면에서만 쓴다. */
+  look?: Partial<Look>
 }
 
 interface LabelHandle {
@@ -104,15 +108,34 @@ type LayerKey = keyof typeof LAYER_LABEL
  * `sky`/`ground` 는 그림자 안쪽이 새까매지지 않게 받쳐 준다.
  * **둘의 차이가 형태를 읽히게 하므로, 받침을 올리면 입체감이 사라진다.**
  */
-export const LOOK = {
-  background: '#eef1f4',
+export interface Look {
+  background: string
+  sky: number
+  ground: number
+  fill: number
+  sun: number
+  sunFrom: readonly [number, number, number]
+  env: number
+  exposure: number
+  viewFrom: readonly [number, number, number]
+}
+
+export const LOOK: Look = {
+  /**
+   * 3D 뒤에 깔리는 색. 빛이 아니라서 **건물 밝기에는 영향이 없다** —
+   * 건물이 흰색이라 배경이 밝으면 경계가 흐려지므로 어둡게 깔아 도드라지게 한다.
+   *
+   * 3D 안이 아니라 캔버스 뒤에 깐다. 3D 안에 넣으면 톤매핑을 타서 지정한
+   * 값과 다른 색으로 나온다(밝은 회색을 넣었더니 더 밝게 나왔다).
+   */
+  background: '#b9bcbf',
   /** 하늘빛·바닥반사 받침 */
   sky: 0x9fb4c6,
   ground: 0xc8ccd0,
   fill: 0.55,
   /** 주광. 그림자를 만든다 */
   sun: 2.6,
-  sunFrom: [1.4, 2.6, 1.9] as const,
+  sunFrom: [1.4, 2.6, 1.9],
   /** 주변 반사(있는 듯 없는 듯). 재질에 생기를 준다 */
   env: 0.3,
   exposure: 1.0,
@@ -121,8 +144,8 @@ export const LOOK = {
    * 낮게 볼수록 입체감은 살지만 바닥이 벽에 가린다 — 바닥에 그리는 라이다를
    * 보려면 어느 정도 높이가 필요하다.
    */
-  viewFrom: [0.08, 1.0, 0.62] as const,
-} as const
+  viewFrom: [0.08, 1.0, 0.62],
+}
 
 const COLOR = {
   scan: 0xef4444,
@@ -140,7 +163,18 @@ const COLOR = {
  * 모형 안에서 로봇이 바라보던 쪽과 우리가 0도로 삼는 쪽의 차이(rad).
  * 라이노에서 놓인 방향이 지도의 0도와 같을 이유가 없어서 여기서 맞춘다.
  */
-const FACING = 0
+const FACING = Math.PI
+
+/**
+ * 비상정지 때 로봇을 물들일 색. 재질 이름별로 짝을 지어, 평소의 밝고 어두운
+ * 차례를 그대로 붉은 쪽으로 옮긴다. 전부 같은 빨강으로 칠하면 형태가 뭉개져
+ * 로봇이 아니라 붉은 덩어리로 보인다.
+ */
+const ESTOP_TINT: Record<string, number> = {
+  BASE: 0x5e1618,
+  BODY: 0xed3f3f,
+  TOP: 0x8f2224,
+}
 
 /** 박동 한 주기(ms). 2D 지도에서 쓰던 1.5초와 같다. */
 const PULSE_MS = 1500
@@ -156,9 +190,14 @@ interface Handles {
   controls: OrbitControls
   renderer: THREE.WebGLRenderer
   robot: THREE.Group
+  sun: THREE.DirectionalLight
+  hemi: THREE.HemisphereLight
+  /** 건물·로봇의 모든 재질. 주변 반사 세기를 한꺼번에 바꿀 때 쓴다 */
+  mats: THREE.MeshStandardMaterial[]
+  host: HTMLDivElement
   pulse: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
-  /** 로봇 몸통 재질. 비상정지 때 붉게 물들인다 */
-  bodyMat: { m: THREE.MeshStandardMaterial; base: THREE.Color } | null
+  /** 로봇 재질들. 비상정지 때 통째로 붉게 물들인다 */
+  robotMats: { m: THREE.MeshStandardMaterial; base: THREE.Color; estop: number }[]
   scan: THREE.Points
   particles: THREE.Points
   plan: Line2
@@ -185,6 +224,7 @@ export function HospitalMap3D({
   onSignMove,
   picked,
   onSignPick,
+  look,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -192,6 +232,7 @@ export function HospitalMap3D({
   const labelsRef = useRef<LabelHandle[]>([])
 
   const [ready, setReady] = useState(false)
+  const [robotReady, setRobotReady] = useState(0)
   const [failed, setFailed] = useState(false)
   const [placing, setPlacing] = useState(false)
   const [drag, setDrag] = useState<{ u: number; v: number } | null>(null)
@@ -212,11 +253,16 @@ export function HospitalMap3D({
 
     let disposed = false
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(LOOK.background)
+    // 배경은 캔버스 뒤(CSS)에 깐다. 위 LOOK.background 주석 참고.
+    host.style.background = LOOK.background
 
     const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 60)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+    })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = LOOK.exposure
@@ -508,23 +554,31 @@ export function HospitalMap3D({
     const loader = new GLTFLoader()
     loader.setMeshoptDecoder(MeshoptDecoder)
 
-    let bodyMat: Handles['bodyMat'] = null
+    const mats: THREE.MeshStandardMaterial[] = []
+    const robotMats: Handles['robotMats'] = []
     loader.load('/pinky.glb', (gltf) => {
       if (disposed) return
+      const seen = new Set<THREE.Material>()
       gltf.scene.traverse((o) => {
         const m = o as THREE.Mesh
         if (!m.isMesh) return
         m.castShadow = true
         const mat = m.material as THREE.MeshStandardMaterial
-        if (!mat) return
+        if (!mat || seen.has(mat)) return
+        seen.add(mat)
         mat.envMapIntensity = LOOK.env
-        // 흰 몸통만 비상정지 때 물들인다. 바퀴·윗판까지 빨개지면 로봇이
-        // 아니라 붉은 덩어리로 보인다.
-        if (mat.name === 'BODY' && !bodyMat) bodyMat = { m: mat, base: mat.color.clone() }
+        mats.push(mat)
+        robotMats.push({
+          m: mat,
+          base: mat.color.clone(),
+          estop: ESTOP_TINT[mat.name] ?? ESTOP_TINT.BODY,
+        })
       })
       // 모형 원점은 발밑 한가운데다(뽑을 때 그렇게 옮겼다). 그대로 얹으면 된다.
       robot.add(gltf.scene)
-      if (handles.current) handles.current.bodyMat = bodyMat
+      // 모형은 늦게 온다. 그 사이에 이미 비상정지였다면 여기서 칠해 준다 —
+      // 안 그러면 상태가 다시 바뀔 때까지 파란 로봇이 그대로 서 있는다.
+      setRobotReady((n) => n + 1)
       invalidate()
     })
 
@@ -543,6 +597,7 @@ export function HospitalMap3D({
             // 바닥은 그림자를 받기만 한다. 스스로 그림자를 만들면 자기 면에
             // 얼룩이 진다.
             if (mat.name === 'FLOOR') m.castShadow = false
+            if (!mats.includes(mat)) mats.push(mat)
           }
         })
         scene.add(gltf.scene)
@@ -572,8 +627,12 @@ export function HospitalMap3D({
       controls,
       renderer,
       robot,
+      sun,
+      hemi,
+      mats,
+      host,
       pulse,
-      bodyMat,
+      robotMats,
       scan: scanPts,
       particles: particlePts,
       plan: planLine,
@@ -611,6 +670,26 @@ export function HospitalMap3D({
       handles.current = null
     }
   }, [])
+
+  // ---------------------------------------------------------------- 조명
+  // 값을 손으로 맞춰 보려면 장면을 다시 만들지 않고 바로 바뀌어야 한다.
+  const lookKey = JSON.stringify(look ?? null)
+  useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const L = { ...LOOK, ...(look ?? {}) }
+    h.sun.intensity = L.sun
+    h.sun.position.copy(h.sun.target.position).add(new THREE.Vector3(...L.sunFrom))
+    h.hemi.intensity = L.fill
+    h.hemi.color.set(L.sky)
+    h.hemi.groundColor.set(L.ground)
+    h.renderer.toneMappingExposure = L.exposure
+    h.host.style.background = L.background
+    for (const m of h.mats) m.envMapIntensity = L.env
+    h.invalidate()
+    // lookKey 로 값이 실제로 바뀐 때만 돈다(객체는 매번 새로 만들어진다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lookKey, ready, robotReady])
 
   // ---------------------------------------------------------------- 안내 글자
   // 콜백은 렌더마다 새 함수가 되므로 상자에 담아 둔다. 이렇게 해야 글자
@@ -703,12 +782,12 @@ export function HospitalMap3D({
     // 박동은 고른 로봇이거나 비상정지일 때만. 늘 뛰면 아무것도 알리지 못한다.
     h.pulse.visible = !!pose && (selected || estop)
     h.pulse.material.color.setHex(estop ? COLOR.estop : COLOR.selected)
-    if (h.bodyMat) {
-      if (estop) h.bodyMat.m.color.setHex(COLOR.estop)
-      else h.bodyMat.m.color.copy(h.bodyMat.base)
+    for (const r of h.robotMats) {
+      if (estop) r.m.color.setHex(r.estop)
+      else r.m.color.copy(r.base)
     }
     h.invalidate()
-  }, [pose, estop, selected])
+  }, [pose, estop, selected, robotReady])
 
   useEffect(() => {
     const h = handles.current

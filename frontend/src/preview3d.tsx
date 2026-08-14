@@ -5,22 +5,26 @@
  * 시점·조명·안내 글자·레이어를 눈으로 확인한다. 슬라이더로 로봇을 옮겨 보면
  * 좌표가 제대로 맞았는지 알 수 있다.
  *
+ * 조명은 여기서 손으로 맞춘 뒤, 아래 상자의 값을 HospitalMap3D 의 LOOK 에
+ * 넣으면 대시보드에 그대로 적용된다.
+ *
  * `npm run dev` 후 /preview-3d.html 로 연다.
  */
 
 import { useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import { HospitalMap3D, type WaypointMarker } from './components/HospitalMap3D'
+import { HospitalMap3D, LOOK, type WaypointMarker } from './components/HospitalMap3D'
 import { WAYPOINTS } from './components/mapWaypoints'
 import { insideWall, simulateParticles, simulatePlan, simulateScan } from './previewSim'
 import './index.css'
 import './App.css'
 
 function App() {
-  // 복도 한가운데. 벽 속이면 라이다가 전부 0 이 되어 화면이 빈다.
-  const [x, setX] = useState(1.524)
-  const [y, setY] = useState(0.952)
+  // 건물 안에서 벽으로부터 가장 멀리 떨어진 자리. 벽에 붙여 두면 로봇이
+  // 벽에 가려 보이지 않고, 벽 속이면 라이다가 전부 0 이 되어 화면이 빈다.
+  const [x, setX] = useState(2.601)
+  const [y, setY] = useState(0.314)
   const [yaw, setYaw] = useState(0.6)
   const [spread, setSpread] = useState(0.05)
   const [goal, setGoal] = useState('ct_room_goal')
@@ -29,6 +33,52 @@ function App() {
   const [sel, setSel] = useState(true)
   const [showWp, setShowWp] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
+
+  // ---- 조명 ----
+  // 방향은 x·y·z 대신 방위각·고도로 잡는다. "해를 어느 쪽에서 몇 도 위로
+  // 띄울까" 가 사람이 생각하는 방식이고, 셋을 따로 만지면 세기가 같이 변한다.
+  const [sun, setSun] = useState(LOOK.sun)
+  const [az, setAz] = useState(36)
+  const [el, setEl] = useState(48)
+  const [fill, setFill] = useState(LOOK.fill)
+  const [env, setEnv] = useState(LOOK.env)
+  const [exposure, setExposure] = useState(LOOK.exposure)
+  const [bg, setBg] = useState(LOOK.background)
+
+  const sunFrom = useMemo(() => {
+    const r = 3.5
+    const a = (az * Math.PI) / 180
+    const e = (el * Math.PI) / 180
+    return [r * Math.cos(e) * Math.sin(a), r * Math.sin(e), r * Math.cos(e) * Math.cos(a)] as [
+      number,
+      number,
+      number,
+    ]
+  }, [az, el])
+
+  const look = useMemo(
+    () => ({ sun, sunFrom, fill, env, exposure, background: bg }),
+    [sun, sunFrom, fill, env, exposure, bg],
+  )
+
+  const lookCode =
+    `  background: '${bg}',\n` +
+    `  sky: 0x${LOOK.sky.toString(16).padStart(6, '0')},\n` +
+    `  ground: 0x${LOOK.ground.toString(16).padStart(6, '0')},\n` +
+    `  fill: ${fill},\n` +
+    `  sun: ${sun},\n` +
+    `  sunFrom: [${sunFrom.map((v) => v.toFixed(3)).join(', ')}],\n` +
+    `  env: ${env},\n` +
+    `  exposure: ${exposure},\n`
+
+  const downloadLook = () => {
+    const url = URL.createObjectURL(new Blob([lookCode], { type: 'text/plain' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'look.txt'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const pose = live ? { x, y, yaw } : null
   const blocked = insideWall(x, y)
@@ -104,6 +154,7 @@ function App() {
         estop={estop}
         selected={sel}
         waypoints={waypoints}
+        look={look}
         onSelectWaypoint={setSelected}
         onSetPose={(nx, ny, nyaw) => {
           setX(nx)
@@ -129,6 +180,46 @@ function App() {
           ))}
         </select>
       </label>
+
+      <fieldset style={{ border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 14px 14px' }}>
+        <legend style={{ fontSize: 13, fontWeight: 600, padding: '0 6px' }}>조명</legend>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(3, 1fr)' }}>
+          {row('주광 세기', sun, 0, 6, setSun)}
+          {row('주광 방위 (도)', az, 0, 360, setAz)}
+          {row('주광 고도 (도)', el, 5, 88, setEl)}
+          {row('받침 세기', fill, 0, 1.5, setFill)}
+          {row('주변 반사', env, 0, 1.5, setEnv)}
+          {row('노출', exposure, 0.3, 2.2, setExposure)}
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 10, fontSize: 13 }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            배경색
+            <input type="color" value={bg} onChange={(e) => setBg(e.target.value)} />
+            <code>{bg}</code>
+          </label>
+          <button type="button" onClick={() => navigator.clipboard?.writeText(lookCode)}>
+            값 복사
+          </button>
+          <button type="button" onClick={downloadLook}>
+            값 파일로 내려받기
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSun(LOOK.sun)
+              setAz(36)
+              setEl(48)
+              setFill(LOOK.fill)
+              setEnv(LOOK.env)
+              setExposure(LOOK.exposure)
+              setBg(LOOK.background)
+            }}
+          >
+            처음으로
+          </button>
+        </div>
+        <textarea readOnly value={lookCode} rows={8} style={{ width: '100%', marginTop: 10, fontSize: 12 }} />
+      </fieldset>
 
       <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
         <label>
