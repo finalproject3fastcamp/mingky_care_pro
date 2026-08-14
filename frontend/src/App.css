@@ -58,6 +58,78 @@
   color: var(--accent-strong);
 }
 
+.app-nav-menu {
+  position: relative;
+}
+
+.app-nav-menu::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 8px;
+  content: '';
+}
+
+.app-header nav .app-nav-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.app-nav-menu__trigger span {
+  font-size: 0.72rem;
+  transition: transform 0.15s ease;
+}
+
+.app-nav-menu__panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  gap: 4px;
+  width: 250px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 18px 38px rgb(15 23 42 / 18%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-6px);
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+}
+
+/* 마우스뿐 아니라 키보드 탭 이동으로도 하위 메뉴를 열 수 있어야 한다. */
+.app-nav-menu:hover .app-nav-menu__panel,
+.app-nav-menu:focus-within .app-nav-menu__panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.app-nav-menu:hover .app-nav-menu__trigger span,
+.app-nav-menu:focus-within .app-nav-menu__trigger span {
+  transform: rotate(180deg);
+}
+
+.app-header nav .app-nav-menu__panel a {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+
+.app-nav-menu__panel strong { font-size: 0.88rem; }
+.app-nav-menu__panel small {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
 .app-main {
   flex: 1;
   padding: 32px;
@@ -1495,43 +1567,9 @@
 
 /* Engineer workspace */
 .engineer-shell {
-  width: min(1440px, 100%);
+  width: min(1760px, 100%);
   margin: 0 auto;
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
 }
-
-.engineer-nav {
-  position: sticky;
-  top: 86px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.engineer-nav nav { display: grid; gap: 6px; }
-
-.engineer-nav__link {
-  display: grid;
-  gap: 3px;
-  padding: 12px 14px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  text-decoration: none;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.engineer-nav__link:hover { background: var(--surface); color: var(--text); }
-.engineer-nav__link.active {
-  color: var(--accent-strong);
-  background: var(--accent-bg);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-.engineer-nav__link span { font-weight: 700; }
-.engineer-nav__link small { color: var(--text-subtle); }
 .engineer-content { min-width: 0; }
 .engineer-content .dashboard { max-width: none; }
 
@@ -1874,9 +1912,6 @@
 }
 
 @media (max-width: 820px) {
-  .engineer-shell { grid-template-columns: 1fr; }
-  .engineer-nav { position: static; }
-  .engineer-nav nav { grid-template-columns: 1fr 1fr; }
   .waypoint-workspace { grid-template-columns: 1fr; }
   .waypoint-editor { grid-column: auto; }
   .waypoint-page-header { align-items: stretch; flex-direction: column; }
