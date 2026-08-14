@@ -164,6 +164,7 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
         system_state=runtime.system_state if runtime else "unknown",
         localization_active=runtime.localization_active if runtime else False,
         fire_alarm_active=runtime.fire_alarm_active if runtime else None,
+        guide_robot_state=runtime.guide_robot_state if runtime else None,
         runtime_reported_at=runtime.reported_at if runtime else None,
         # 구버전 게이트웨이는 안 보낸다. None 이 정상이고, 화면은 값이 없는
         # 것과 0 인 것을 구분해서 그려야 한다.
@@ -223,6 +224,13 @@ async def arm_robot(robot_id: str) -> RobotOut:
                     "robot_offline", "robot is offline",
                     last_seen_sec=round(
                         (datetime.now(timezone.utc) - seen[0]).total_seconds()))
+            runtime = robot_runtime.snapshot().get(robot_id)
+            if runtime is not None and runtime.guide_robot_state in (
+                    "returning_to_dock", "paused"):
+                raise _reject(
+                    "robot_unavailable",
+                    f"robot state is {runtime.guide_robot_state}",
+                    state=runtime.guide_robot_state)
             percent = row["battery_percent"]
             if percent is None:
                 raise _reject("battery_unknown", "battery reading is missing")
@@ -330,6 +338,7 @@ async def post_heartbeat(
         body.system_state,
         body.localization_active,
         body.fire_alarm_active,
+        guide_robot_state=body.guide_robot_state,
         inventory_hash=body.inventory_hash,
         cpu_total_pct=body.cpu_total_pct,
         queue_pending=body.queue_pending,

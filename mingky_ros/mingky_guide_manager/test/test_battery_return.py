@@ -94,7 +94,7 @@ def test_long_communication_failure_ends_and_clears_active_session(manager):
     assert node.robot_state == GuideState.ROBOT_PAUSED
 
 
-def test_medical_cancel_stops_navigation_and_returns_robot_to_idle(manager):
+def test_medical_cancel_stops_navigation_and_returns_to_dock(manager):
     node, published = manager
     node.session_id = 45
     node.session_state = GuideState.SESSION_GUIDING
@@ -113,12 +113,26 @@ def test_medical_cancel_stops_navigation_and_returns_robot_to_idle(manager):
     })))
 
     assert cancelled == [True]
-    assert published == [('session.ended', {'end_reason': 'aborted'}, 45)]
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 45),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
     assert node.session_id == 0
     assert node.session_state == GuideState.SESSION_NONE
     assert node.patient_id == ''
     assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_RETURNING_TO_DOCK
+    assert node._dock_reason == 'guidance_canceled'
+    assert len(node.nav.sent) == 1
+
+    result = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+    node._on_goal_result(
+        result, node._nav_generation, 'charging_station_1', True, 0)
+
     assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node._dock_reason is None
+    assert published[-1] == (
+        'dock.return_succeeded', {'station_name': 'charging_station_1'}, 0)
 
 
 def test_medical_cancel_for_an_old_session_does_not_stop_current_session(manager):
@@ -176,6 +190,7 @@ def test_guidance_goal_is_blocked_during_fire_evacuation(manager):
 def test_dock_success_never_emits_clinical_nav_success(manager):
     node, published = manager
     node._nav_generation = 7
+    node._dock_reason = 'battery'
     result = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
 
     node._on_goal_result(result, 7, 'charging_station_1', True, 0)
@@ -199,6 +214,18 @@ def test_session_created_while_low_is_closed_immediately(manager):
     node._on_session_start(message)
 
     assert published == [('session.ended', {'end_reason': 'battery'}, 51)]
+    assert node.session_id == 0
+
+
+def test_session_created_while_cancel_return_is_closed_immediately(manager):
+    node, published = manager
+    node._dock_reason = 'guidance_canceled'
+    message = SessionStart(session_id=52, patient_id='patient-2')
+
+    node._on_session_start(message)
+
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 52)]
     assert node.session_id == 0
 
 
@@ -667,6 +694,7 @@ def test_emergency_state_is_mirrored_with_recovery_event(manager):
 def test_dock_failure_retries_before_final_event(manager):
     node, published = manager
     node._battery_alarm = True
+    node._dock_reason = 'battery'
     node._dock_attempt = 1
 
     node._dock_failed('charging_station_1', 6, retryable=True)

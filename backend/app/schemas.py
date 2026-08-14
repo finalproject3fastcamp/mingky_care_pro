@@ -257,6 +257,10 @@ class RobotOut(BaseModel):
     ] = "unknown"
     localization_active: bool = False
     fire_alarm_active: bool | None = None
+    guide_robot_state: Literal[
+        "idle", "moving", "waiting", "charging", "battery_low",
+        "comm_lost", "paused", "returning_to_dock",
+    ] | None = None
     runtime_reported_at: datetime | None = None
     # 로봇이 보고한 자원·큐 상태. 전부 인메모리(robot_runtime)이고 DB 에
     # 저장하지 않는다. 구버전 게이트웨이는 안 보내므로 None 이 정상이다.
@@ -294,6 +298,11 @@ class RobotHeartbeatIn(BaseModel):
     localization_active: bool = False
     # None은 구버전 게이트웨이이거나 아직 화재 노드의 상태를 받지 못한 경우다.
     fire_alarm_active: bool | None = None
+    # Guide Manager의 현재 로봇 상태. 구버전 게이트웨이는 보내지 않는다.
+    guide_robot_state: Literal[
+        "idle", "moving", "waiting", "charging", "battery_low",
+        "comm_lost", "paused", "returning_to_dock",
+    ] | None = None
 
     # 게이트웨이가 계산한 인벤토리 지문. 서버가 아는 값과 다르면 본문을 요구한다.
     inventory_hash: str | None = Field(default=None, max_length=64)

@@ -59,6 +59,14 @@ export function rejectionMessage(detail: RejectionDetail): RejectionMessage {
     case 'robot_busy':
       return { text: '다른 환자를 안내 중입니다', action: '다른 로봇 선택 또는 대기' }
 
+    case 'robot_unavailable':
+      return {
+        text: params.state === 'returning_to_dock'
+          ? '충전소로 복귀 중인 로봇입니다'
+          : '안전 확인이 필요한 로봇입니다',
+        action: '다른 로봇 선택 또는 대기',
+      }
+
     case 'robot_offline':
       return {
         text: `로봇과 연결이 끊긴 지 ${minutes(num(params, 'last_seen_sec'))} 됐습니다`,

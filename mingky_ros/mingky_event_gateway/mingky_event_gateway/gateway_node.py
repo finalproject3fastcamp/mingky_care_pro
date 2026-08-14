@@ -377,6 +377,7 @@ class EventGateway(Node):
         self._qr_observation = None
         self._qr_wake = threading.Event()
         self._clinical_active = False
+        self._guide_robot_state = GuideState.ROBOT_IDLE
         self._guide_session_state = GuideState.SESSION_NONE
         self._guide_session_id = 0
         self._guide_patient_id = ''
@@ -508,6 +509,7 @@ class EventGateway(Node):
         self._qr_wake.set()
 
     def _on_guide_state(self, msg: GuideState) -> None:
+        self._guide_robot_state = msg.robot_state
         self._guide_session_state = msg.session_state
         self._guide_session_id = int(msg.session_id)
         self._guide_patient_id = msg.patient_id
@@ -740,6 +742,7 @@ class EventGateway(Node):
                 "system_state": self._system_state(),
                 "localization_active": self._localization_active,
                 "fire_alarm_active": self._fire_alarm_active,
+                "guide_robot_state": self._guide_robot_state,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
                 "max_node_cpu_pct": self._max_node_cpu_pct,

@@ -15,6 +15,7 @@ string ROBOT_CHARGING=charging
 string ROBOT_BATTERY_LOW=battery_low
 string ROBOT_COMM_LOST=comm_lost
 string ROBOT_PAUSED=paused
+string ROBOT_RETURNING_TO_DOCK=returning_to_dock
 
 # --- 세션 축 : 환자 안내 진행 상태 ---
 string SESSION_NONE=none
