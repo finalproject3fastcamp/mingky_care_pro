@@ -18,6 +18,13 @@ config/event_codes.yaml 3절의 규칙을 코드로 옮긴 곳이다.
   4. 미등록 코드는 거부하지 않는다.
      그대로 적재하고 system.unknown_event_code 를 추가로 남긴다.
      기록을 잃지 않으면서 문서 누락이 대시보드에 드러난다.
+
+  5. 로봇 타입에 맞지 않는 코드는 상태를 갱신하지 않는다.
+     event_codes.yaml 의 robot_types 와 robots.robot_type 을 대조한다.
+     4번과 같은 원칙으로 이벤트는 적재하고 system.robot_type_mismatch 를
+     추가로 남기지만, 상태 갱신은 건너뛴다 — nav.goal_succeeded 는
+     session_steps.arrived_at 을 찍으므로 조제 스테이션이 보낸 것을 그대로
+     적용하면 팔 하나가 환자의 안내 단계를 진행시킨다.
 """
 
 import json
@@ -121,6 +128,28 @@ async def _apply_state_safely(conn: asyncpg.Connection, event: EventIn,
         return 0
 
 
+def _mismatch_marker(event: EventIn, actual_type: str, allowed: list[str]) -> EventIn:
+    """타입에 맞지 않는 코드를 받았다는 사실을 남긴다.
+
+    payload 만 보고 원인을 말할 수 있어야 한다 — 무엇을 받았고, 보낸 로봇이
+    무슨 타입이며, 그 코드가 누구 것인지.
+    """
+    return EventIn(
+        event_id=uuid.uuid4(),
+        robot_id=event.robot_id,
+        session_id=event.session_id,
+        occurred_at=event.occurred_at,
+        level="warning",
+        event_code="system.robot_type_mismatch",
+        source_node="backend.ingest",
+        payload={
+            "received_code": event.event_code,
+            "actual_type": actual_type,
+            "allowed_types": allowed,
+        },
+    )
+
+
 def _unknown_marker(event: EventIn) -> EventIn:
     """미등록 코드를 받았다는 사실 자체를 이벤트로 남긴다."""
     return EventIn(
@@ -140,6 +169,16 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
     result = IngestResult(received=len(events), inserted=0, duplicates=0,
                           state_updates=0)
 
+    # 규칙 5 판정용 타입을 배치당 한 번만 읽는다. 이벤트마다 조회하면
+    # 한 배치가 수백 건일 때 왕복이 그만큼 늘어난다.
+    robot_ids = list({e.robot_id for e in events})
+    robot_types = {}
+    if robot_ids:
+        rows = await conn.fetch(
+            "SELECT robot_id, robot_type FROM robots WHERE robot_id = ANY($1)",
+            robot_ids)
+        robot_types = {r["robot_id"]: r["robot_type"] for r in rows}
+
     # 규칙 1 — 도착 순서가 아니라 발생 순서로 적용한다.
     ordered = sorted(events, key=lambda e: e.occurred_at)
 
@@ -147,21 +186,37 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
     async with conn.transaction():
         for event in ordered:
             known = registry.is_known(event.event_code)
+            rtype = robot_types.get(event.robot_id)
 
             # 규칙 4 — 모르는 코드도 버리지 않는다.
             if not known and event.event_code not in result.unknown_codes:
                 result.unknown_codes.append(event.event_code)
 
+            # 규칙 5 — 타입에 맞지 않는 코드인가.
+            # rtype 이 없으면(robots 에 없는 로봇) 판정하지 않는다. 그건
+            # 오배선이 아니라 등록 누락이라는 다른 문제다.
+            allowed = registry.allowed_robot_types(event.event_code)
+            mismatched = bool(known and rtype and allowed and rtype not in allowed)
+            if mismatched and event.event_code not in result.type_mismatches:
+                result.type_mismatches.append(event.event_code)
+
             if await _insert(conn, event):
                 result.inserted += 1
-                # 규칙 3 — 새로 들어온 이벤트에 대해서만 상태를 건드린다.
-                if known:
+
+                # 규칙 5 — 오배선은 적재하되 상태는 건드리지 않는다.
+                # "거부하지 않는다" 는 기록 얘기지 판정이 아니다. 그대로
+                # 적용하면 조제 스테이션이 환자의 안내 단계를 진행시킨다.
+                if mismatched:
+                    log.warning("오배선 감지: %s 가 %s 를 보냄 (허용: %s)",
+                                event.robot_id, event.event_code, allowed)
+                    await _insert(conn, _mismatch_marker(event, rtype, allowed))
+                elif known:
+                    # 규칙 3 — 새로 들어온 정상 이벤트에 대해서만 상태를 건드린다.
                     result.state_updates += await _apply_state_safely(
                         conn, event, result)
+                else:
+                    await _insert(conn, _unknown_marker(event))
             else:
                 result.duplicates += 1
-
-            if not known:
-                await _insert(conn, _unknown_marker(event))
 
     return result

@@ -53,3 +53,7 @@ class EventCodeRegistry:
     def applies_to(self, code: str) -> str | None:
         """이 이벤트가 갱신하는 DB 대상. 로그 전용이면 None."""
         return (self._codes.get(code) or {}).get("applies_to")
+
+    def allowed_robot_types(self, code: str) -> list[str]:
+        """이 이벤트를 발행할 수 있는 로봇 타입 목록."""
+        return (self._codes.get(code) or {}).get("robot_types", [])
