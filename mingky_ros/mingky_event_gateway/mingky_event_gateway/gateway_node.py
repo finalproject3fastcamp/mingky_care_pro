@@ -71,6 +71,12 @@ TRANSIENT_STATUSES = frozenset({408, 429})
 # 섞인 게 아니라 서버 계약이 어긋난 것이다. 계속 가려내면 큐 전체를 지운다.
 MAX_CONSECUTIVE_REJECTS = 5
 
+# 배터리 표본을 이 시간보다 오래 못 받았으면 낡은 것으로 본다.
+#
+# 발행 주기는 5초다. 세 번 연속 놓칠 때까지는 정상으로 보고, 그 뒤로는
+# 보내지 않는다. heartbeat 의 두절 판정(15초)과 같은 계산이다.
+BATTERY_STALE_AFTER_SEC = 20.0
+
 
 def matches_guided_patient(
     observation: QrObservation, session_state: str, patient_id: str,
@@ -130,6 +136,24 @@ class IntervalGate:
             return False
         self.last_attempt = now
         return True
+
+
+def battery_is_stale(sample_at, now, max_age_sec=BATTERY_STALE_AFTER_SEC) -> bool:
+    """마지막 표본이 너무 오래됐는가.
+
+    이 판정이 없으면 구독이 끊긴 뒤에도 캐시된 마지막 값을 계속 보낸다.
+    서버는 수신 시각으로 recorded_at 을 찍으므로 화면에는 '방금 들어온
+    최신값' 으로 보인다 — 9시간 전 값이 25초 전 것으로 표시됐다.
+
+    값과 신선도의 출처가 다르면 신선도 배지는 아무것도 보장하지 못한다.
+    낡은 값은 보내지 않는 쪽이 맞다. 화면에 '정보 없음' 이 뜨는 편이
+    틀린 숫자가 떠 있는 것보다 낫다.
+
+    한 번도 못 받았으면(None) 낡은 것으로 본다.
+    """
+    if sample_at is None:
+        return True
+    return (now - sample_at) > max_age_sec
 
 
 def send_outcome(status_code: int) -> str:
@@ -343,6 +367,11 @@ class EventGateway(Node):
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
         self._battery_percent = None
+        # 마지막으로 표본을 받은 시각. 값과 함께 봐야 한다 — 값만 들고 있으면
+        # 구독이 끊겨도 마지막 값을 영원히 재전송하게 된다.
+        self._battery_at = None
+        # 끊김 로그를 매 주기 찍지 않기 위한 전이 표시.
+        self._battery_stale_logged = False
         self._battery_wake = threading.Event()
         self._qr_lock = threading.Lock()
         self._qr_observation = None
@@ -451,6 +480,7 @@ class EventGateway(Node):
             return
         with self._battery_lock:
             self._battery_voltage = float(msg.data)
+            self._battery_at = time.monotonic()
         self._battery_wake.set()
 
     def _on_battery_percent(self, msg: Float32) -> None:
@@ -459,6 +489,7 @@ class EventGateway(Node):
             return
         with self._battery_lock:
             self._battery_percent = int(round(max(0.0, min(100.0, msg.data))))
+            self._battery_at = time.monotonic()
         self._battery_wake.set()
 
     def _on_qr_observation(self, msg: QrObservation) -> None:
@@ -846,11 +877,28 @@ class EventGateway(Node):
     # --------------------------------------------------------------- battery
 
     def _battery_payload(self) -> dict | None:
+        """보낼 표본. 낡았으면 None 을 돌려 전송 자체를 건너뛴다."""
         with self._battery_lock:
             voltage = self._battery_voltage
             percent = self._battery_percent
+            sample_at = self._battery_at
         if voltage is None and percent is None:
             return None
+        if battery_is_stale(sample_at, time.monotonic()):
+            # 구독이 끊겼거나 발행 노드가 죽었다. 마지막 값을 계속 보내면
+            # 서버가 그것을 최신값으로 기록해 화면이 조용히 거짓말을 한다.
+            if not self._battery_stale_logged:
+                age = time.monotonic() - sample_at if sample_at else None
+                self.get_logger().error(
+                    "배터리 표본이 끊겼습니다"
+                    + (f" ({age:.0f}초 경과)" if age else "")
+                    + ". 낡은 값을 보내지 않고 멈춥니다 — "
+                    "battery/voltage 발행 노드를 확인하세요.")
+                self._battery_stale_logged = True
+            return None
+        if self._battery_stale_logged:
+            self.get_logger().info("배터리 표본 복구")
+            self._battery_stale_logged = False
         return {"voltage": voltage, "battery_percent": percent}
 
     def _battery_loop(self) -> None:
@@ -876,6 +924,13 @@ class EventGateway(Node):
 
             payload = self._battery_payload()
             if payload is None:
+                # 표본이 없거나 낡았다. 이때도 실행 시각은 소비한다 —
+                # 안 그러면 남은 대기가 계속 0이 되어 스레드가 쉬지 않고
+                # 돈다(IntervalGate 와 같은 이유). 한 번이라도 보낸 뒤에만
+                # 해당한다. 첫 표본 전에는 last_sent 가 None 이라 wake 를
+                # 무기한 기다리므로 원래 돌지 않는다.
+                if last_sent is not None:
+                    last_sent = time.monotonic()
                 continue
             last_sent = time.monotonic()
             try:

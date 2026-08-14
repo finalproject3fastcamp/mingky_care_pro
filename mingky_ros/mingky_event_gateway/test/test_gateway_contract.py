@@ -4,11 +4,13 @@ from mingky_event_gateway.gateway_node import (
     ACTIVE_GUIDE_SESSION_STATES,
     HeartbeatFailureGuard,
     IntervalGate,
+    BATTERY_STALE_AFTER_SEC,
     RejectBudget,
     SEND_OK,
     SEND_REJECT,
     SEND_RETRY,
     SYSTEM_COMMANDS,
+    battery_is_stale,
     isolate_rejected,
     matches_guided_patient,
     send_outcome,
@@ -235,3 +237,29 @@ def test_many_bad_events_are_still_isolated_while_the_server_works():
     assert (progressed, exhausted) == (True, False)
     assert len(rejected) == 6
     assert sorted(dropped) == list(range(16))
+
+
+def test_battery_sample_goes_stale_when_the_topic_stops():
+    """구독이 끊기면 캐시된 마지막 값을 계속 보내지 않는다.
+
+    실제 사고: battery/voltage 구독이 끊긴 뒤 게이트웨이가 9시간 동안 같은
+    6.76V 를 재전송했다. 서버는 수신 시각으로 recorded_at 을 찍으므로
+    화면에는 '25초 전 최신값' 으로 보였다. 로봇 안에서는 계속 7.23V 였다.
+    """
+    # 방금 받은 표본은 신선하다.
+    assert battery_is_stale(100.0, now=105.0, max_age_sec=20.0) is False
+    assert battery_is_stale(100.0, now=119.9, max_age_sec=20.0) is False
+
+    # 발행 주기(5초)를 세 번 넘겨 놓치면 낡은 것으로 본다.
+    assert battery_is_stale(100.0, now=120.1, max_age_sec=20.0) is True
+
+
+def test_battery_never_received_counts_as_stale():
+    # 한 번도 못 받은 것과 오래된 것은 화면에서 같은 처리를 받아야 한다 —
+    # 둘 다 '이 숫자를 믿지 마라' 다.
+    assert battery_is_stale(None, now=1000.0) is True
+
+
+def test_battery_stale_threshold_covers_three_publish_periods():
+    # 발행 주기가 5초다. 한두 번 놓쳤다고 끊겼다고 보면 오탐이 된다.
+    assert BATTERY_STALE_AFTER_SEC >= 15.0
