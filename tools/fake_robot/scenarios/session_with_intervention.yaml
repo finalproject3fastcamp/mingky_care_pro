@@ -1,0 +1,102 @@
+# 개입이 낀 세션 — 완주했지만 SLO 성공은 아니다.
+#
+# session_complete.yaml 과 진행은 같고, 1단계 도착 직후에 관제가 로컬라이제이션
+# 재요청을 넣는다. 세션은 3단계를 다 돌고 end_reason=completed 로 끝난다.
+#
+# 이 시나리오가 확인하는 것은 §1.1 판정의 핵심이다 — **완주가 성공을 뜻하지
+# 않는다.** 사람이 손을 댔으면 실패로 센다. end_reason 만 보고 집계하면 이
+# 세션이 성공으로 잡히고, SLO 는 실제보다 좋아 보인다.
+#
+# ## 왜 localize 인가
+#
+# §1.1 이 개입으로 꼽는 관리 명령은 system_stop · system_restart · localize
+# 셋인데, 앞의 둘은 세션 진행 중이면 백엔드가 409 로 **거부한다**
+# (backend/app/routers/orders.py). 안내 중인 로봇을 세우는 경로가 애초에
+# 막혀 있으므로, 세션 구간에 실제로 들어올 수 있는 관리 명령은 localize 뿐이다.
+#
+# ## 두 번째 명령은 왜 actor 가 없나
+#
+# 실수가 아니라 검증 대상이다. 헤더를 안 보내도 서버는 거부하지 않고 익명으로
+# 남겨야 한다(backend/app/actor.py). 그리고 goto 는 정상 주행이라 기록은 되지만
+# 개입 판정 집합(control_audit.INTERVENTION_ACTIONS)에는 안 들어간다 —
+# "기록은 넓게, 판정은 좁게" 가 실제로 그렇게 도는지 본다.
+
+name: 개입이 낀 세션 (p001, localize)
+
+robots:
+  - id: pinky-01
+    type: mobile
+    battery_percent: 84
+    voltage: 11.8
+    # 제어 명령은 통합 launch 가 active 일 때만 받는다. 기본값이지만
+    # 이 시나리오에서는 전제라서 적어 둔다.
+    system_state: active
+
+steps:
+  - { robot: pinky-01, action: battery }
+  - { robot: pinky-01, action: arm }
+  - { robot: pinky-01, action: qr_scan, patient_id: p001, marker_id: 21 }
+
+  - robot: pinky-01
+    action: event
+    code: session.started
+    payload: { patient_id: p001, marker_id: 21 }
+
+  # --- 1단계 X-ray ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: X-ray }
+    wait: 0.5
+
+  # --- 개입: 위치 추정이 흔들려 관제가 재탐색을 건다 ---
+  # 로봇은 스스로 복구하지 못했고 사람이 손을 댔다. 이 한 줄이 세션의 판정을
+  # 바꾼다.
+  - robot: pinky-01
+    action: order
+    command: localize
+    argument: run
+    actor: 정민경          # 한글 이름 — 헤더 latin-1 왕복까지 여기서 검증된다
+
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 1, source: qr }
+
+  # --- 2단계 임상병리실 ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 임상병리실 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 임상병리실 }
+    wait: 0.5
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 2, source: qr }
+
+  # --- 3단계 물리치료실 ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 물리치료실 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 물리치료실 }
+    wait: 0.5
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 3, source: qr }
+
+  # --- 정상 종료 ---
+  - robot: pinky-01
+    action: event
+    code: session.ended
+    payload: { end_reason: completed }
+
+  # 세션이 끝난 뒤의 주행 명령. 기록은 남되 개입으로는 안 잡혀야 한다.
+  # actor 를 안 보내므로 익명 행으로 들어간다.
+  - robot: pinky-01
+    action: order
+    command: goto
+    argument: dock-1

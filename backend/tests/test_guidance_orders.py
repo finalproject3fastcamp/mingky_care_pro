@@ -9,6 +9,7 @@ import pytest
 
 from app.routers import orders as orders_router
 from app import orders
+from app.actor import ANONYMOUS
 from app.schemas import OrderIn
 
 
@@ -94,10 +95,10 @@ def test_create_order_validates_session_before_queueing(monkeypatch):
     queued = SimpleNamespace(command='start_guidance', argument='42')
     monkeypatch.setattr(orders_router, '_require_robot', require_robot)
     monkeypatch.setattr(orders_router, '_require_active_session', require_session)
-    monkeypatch.setattr(orders_router.orders, 'put', lambda *args: queued)
+    monkeypatch.setattr(orders_router.orders, 'put', lambda *args, **kwargs: queued)
 
     result = asyncio.run(orders_router.create_order(
-        'pinky-01', OrderIn(command='start_guidance', argument='42')))
+        'pinky-01', OrderIn(command='start_guidance', argument='42'), ANONYMOUS))
 
     assert result is queued
     assert calls == [
@@ -125,7 +126,7 @@ def test_cancel_guidance_validates_session_before_queueing(monkeypatch):
     queued = SimpleNamespace(command='cancel_guidance', argument='42')
     monkeypatch.setattr(orders_router, '_require_robot', require_robot)
     monkeypatch.setattr(orders_router, '_require_active_session', require_session)
-    monkeypatch.setattr(orders_router.orders, 'put', lambda *args: queued)
+    monkeypatch.setattr(orders_router.orders, 'put', lambda *args, **kwargs: queued)
     monkeypatch.setattr(
         orders_router.robot_runtime,
         'snapshot',
@@ -135,7 +136,7 @@ def test_cancel_guidance_validates_session_before_queueing(monkeypatch):
     )
 
     result = asyncio.run(orders_router.create_order(
-        'pinky-01', OrderIn(command='cancel_guidance', argument='42')))
+        'pinky-01', OrderIn(command='cancel_guidance', argument='42'), ANONYMOUS))
 
     assert result is queued
     assert calls == [
@@ -181,7 +182,7 @@ def test_create_cancel_discards_an_undelivered_motion_command(monkeypatch):
     motion = orders.put('pinky-01', 'start_guidance', '42')
 
     cancel = asyncio.run(orders_router.create_order(
-        'pinky-01', OrderIn(command='cancel_guidance', argument='42')))
+        'pinky-01', OrderIn(command='cancel_guidance', argument='42'), ANONYMOUS))
 
     assert orders.peek('pinky-01') == cancel
     assert orders.ack('pinky-01', cancel.order_id) is True
@@ -251,7 +252,7 @@ def test_navigation_speed_rejects_active_session(monkeypatch):
     with pytest.raises(HTTPException) as raised:
         asyncio.run(orders_router.create_order(
             'pinky-01', OrderIn(
-                command='set_navigation_speed', argument='0.15')))
+                command='set_navigation_speed', argument='0.15'), ANONYMOUS))
 
     assert raised.value.status_code == 409
 
@@ -264,7 +265,9 @@ def test_fire_alarm_reset_rejects_unknown_argument(monkeypatch):
 
     with pytest.raises(HTTPException) as raised:
         asyncio.run(orders_router.create_order(
-            'pinky-01', OrderIn(command='fire_alarm_reset', argument='reset')))
+            'pinky-01',
+            OrderIn(command='fire_alarm_reset', argument='reset'),
+            ANONYMOUS))
 
     assert raised.value.status_code == 422
 
@@ -287,7 +290,9 @@ def test_fire_alarm_reset_rejects_when_alarm_is_not_active(monkeypatch):
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(orders_router.create_order(
-            'pinky-01', OrderIn(command='fire_alarm_reset', argument='run')))
+            'pinky-01',
+            OrderIn(command='fire_alarm_reset', argument='run'),
+            ANONYMOUS))
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == 'fire alarm is not active'
@@ -300,7 +305,7 @@ def test_localize_rejects_unknown_argument(monkeypatch):
 
     with pytest.raises(HTTPException) as raised:
         asyncio.run(orders_router.create_order(
-            'pinky-01', OrderIn(command='localize', argument='start')))
+            'pinky-01', OrderIn(command='localize', argument='start'), ANONYMOUS))
 
     assert raised.value.status_code == 422
 
@@ -315,7 +320,7 @@ def test_system_stop_rejects_active_session(monkeypatch):
 
     with pytest.raises(HTTPException) as raised:
         asyncio.run(orders_router.create_order(
-            'pinky-01', OrderIn(command='system_stop', argument='run')))
+            'pinky-01', OrderIn(command='system_stop', argument='run'), ANONYMOUS))
 
     assert raised.value.status_code == 409
 
@@ -326,9 +331,9 @@ def test_system_start_is_allowed_without_session_query(monkeypatch):
 
     queued = SimpleNamespace(command='system_start', argument='run')
     monkeypatch.setattr(orders_router, '_require_robot', require_robot)
-    monkeypatch.setattr(orders_router.orders, 'put', lambda *args: queued)
+    monkeypatch.setattr(orders_router.orders, 'put', lambda *args, **kwargs: queued)
 
     result = asyncio.run(orders_router.create_order(
-        'pinky-01', OrderIn(command='system_start', argument='run')))
+        'pinky-01', OrderIn(command='system_start', argument='run'), ANONYMOUS))
 
     assert result is queued

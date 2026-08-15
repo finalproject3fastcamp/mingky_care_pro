@@ -57,6 +57,33 @@ def test_migration_ledger_bootstraps_existing_databases():
         assert f"('{version}')" in sql, f"{version} 가 backfill 목록에 없습니다"
 
 
+def test_control_audit_keeps_anonymous_rows_distinguishable():
+    """익명 actor 를 센티널 문자열로 표시하지 않는다.
+
+    'unknown' 같은 값을 기본값으로 박으면 조작자가 실제로 그렇게 적어 보낸
+    행과 아무것도 안 온 행이 같아진다. 익명 비율을 보려고 만든 표가 익명을
+    못 세게 되고, 그 사실은 몇 달 뒤 감사 요청이 들어와야 드러난다.
+
+    NULL 로 두고 짝 제약으로 묶는 것이 이 설계의 핵심이라, 편의상
+    NOT NULL DEFAULT 로 바꾸는 것이 가장 현실적인 붕괴 경로다.
+    """
+    sql = (MIGRATIONS / "011_control_audit.sql").read_text(encoding="utf-8")
+
+    table = sql[sql.index("CREATE TABLE control_audit"):sql.index("CREATE INDEX")]
+    # 주석은 뺀다. 이 파일은 'unknown' 을 쓰지 않는 이유를 주석으로 적고
+    # 있으므로, 산문까지 훑으면 설명이 위반으로 잡힌다.
+    audit_table = "\n".join(
+        line for line in table.splitlines() if not line.strip().startswith("--"))
+
+    actor_column = next(
+        line for line in audit_table.splitlines()
+        if line.strip().startswith("actor "))
+
+    assert "CHECK ((actor IS NULL) = (actor_source = 'absent'))" in audit_table
+    assert "'unknown'" not in audit_table
+    assert "NOT NULL" not in actor_column, actor_column
+
+
 def test_every_migration_is_named_so_the_runner_can_order_it():
     """러너가 파일명을 버전으로 쓴다. 접두사가 없으면 순서도 이력도 깨진다."""
     for migration in MIGRATIONS.glob("*.sql"):

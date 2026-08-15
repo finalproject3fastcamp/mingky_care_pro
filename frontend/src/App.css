@@ -130,6 +130,37 @@
   font-weight: 400;
 }
 
+/* 조작자 이름. 비어 있다는 사실이 눈에 띄어야 해서 헤더에 상시 노출한다. */
+.app-actor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.app-actor__label {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+}
+
+.app-actor__input {
+  width: 110px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.app-actor__warn {
+  color: var(--warning);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
 .app-main {
   flex: 1;
   padding: 32px;

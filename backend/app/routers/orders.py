@@ -5,11 +5,13 @@
 동작한다. 설계 근거는 app/orders.py 주석 참고.
 """
 
+import uuid
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from .. import orders, robot_runtime
+from .. import control_audit, orders, robot_runtime
+from ..actor import Actor, actor_from_header
 from ..db import get_pool
 from ..schemas import OrderAck, OrderIn, OrderOut
 
@@ -75,12 +77,20 @@ async def _require_active_session(
 
 
 @router.post("/{robot_id}/orders", response_model=OrderOut, status_code=201)
-async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
+async def create_order(
+    robot_id: str,
+    body: OrderIn,
+    actor: Actor = Depends(actor_from_header),
+) -> OrderOut:
     """명령을 건다. 대시보드가 호출한다.
 
     로봇당 대기 명령은 하나다. 아직 안 받아간 것이 있으면 덮어쓴다 —
     안내 로봇에게 유효한 목적지는 최신 하나뿐이고, 밀린 목적지를 순서대로
     소화하는 쪽이 오히려 위험하다.
+
+    `X-Actor` 헤더로 실행자를 남긴다. 없어도 거부하지 않는다 — 감사 누락이
+    제어를 막으면 안 된다(actor.py). 익명으로 기록되고 fleet 탭이 그 비율을
+    드러낸다.
     """
     await _require_robot(robot_id)
     if body.command in ("start_guidance", "cancel_guidance"):
@@ -165,7 +175,19 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
         # 취소보다 먼저 적재됐지만 아직 로봇이 받지 않은 출발·목적지 명령이
         # 취소 직후 실행되는 것을 막는다.
         orders.clear_motion(robot_id)
-    return orders.put(robot_id, body.command, body.argument)
+
+    # 검증을 통과한 뒤, 명령이 걸리기 전에 남긴다. 순서 근거는
+    # control_audit 모듈 주석 — 요약하면 SLO 는 실제보다 좋아 보이는 쪽으로
+    # 틀리면 안 된다. 거부된 명령(위의 422·409)은 개입이 아니므로 여기 못 온다.
+    #
+    # 식별자를 여기서 만드는 이유는 감사 행이 명령을 가리켜야 하기 때문이다.
+    # put() 이 만들면 기록 시점에는 아직 그 값이 없다.
+    order_id = uuid.uuid4()
+    await control_audit.record(
+        robot_id, body.command, actor,
+        argument=body.argument, order_id=order_id)
+
+    return orders.put(robot_id, body.command, body.argument, order_id=order_id)
 
 
 @router.get("/{robot_id}/orders/next", response_model=OrderOut | None)

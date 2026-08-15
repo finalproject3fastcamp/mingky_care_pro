@@ -1,5 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 
+import { ActorField } from './ActorField'
+
 export function Layout() {
   return (
     <div className="app-shell">
@@ -34,6 +36,7 @@ export function Layout() {
               </NavLink>
             </div>
           </div>
+          <ActorField />
         </nav>
       </header>
       <main className="app-main">
