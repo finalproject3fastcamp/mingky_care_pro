@@ -15,6 +15,7 @@
 """
 
 import asyncio
+import json
 import os
 import socket
 import subprocess
@@ -312,3 +313,75 @@ def test_order_without_the_actor_header_is_recorded_anonymously(backend):
     """)[0]
     assert counts["anonymous"] >= 1
     assert counts["total"] > counts["anonymous"]
+
+
+def get_json(base_url: str, path: str):
+    with urllib.request.urlopen(f"{base_url}{path}", timeout=5) as response:
+        return json.loads(response.read())
+
+
+def test_slo_api_counts_the_intervened_session_as_a_failure(backend):
+    """§1.1 판정이 API 를 통해서도 같은 답을 낸다.
+
+    앞선 테스트들이 만든 세션은 둘 다 completed 다. 하나는 깨끗하고 하나는
+    localize 개입이 끼어 있으므로 완주율은 50% 여야 한다.
+
+    단위 테스트는 judge() 에 손으로 만든 행을 먹인다. 여기서는 WINDOW_SQL 이
+    진짜 DB 에서 그 행을 제대로 만들어내는지를 본다 — 실패하면 원인이 산식이
+    아니라 쿼리라는 뜻이다.
+    """
+    result = get_json(backend, "/slo/completion")
+
+    assert result["sessions_judged"] == 2
+    assert result["success"] == 1
+    assert result["failure"] == 1
+    assert result["completion_rate"] == 0.5
+    # 표본이 창을 못 채웠다. 화면이 이 완주율을 그대로 믿으면 안 된다.
+    assert result["sample_complete"] is False
+    assert result["budget_total"] == 5
+    assert result["budget_exhausted"] is False
+
+    failed = result["failed_sessions"]
+    assert len(failed) == 1
+    # 완주는 했다. 실패 사유는 종료가 아니라 개입 하나뿐이다.
+    assert failed[0]["end_reason"] == "completed"
+    assert failed[0]["failures"] == ["operator_order"]
+
+
+def test_slo_window_can_be_narrowed_for_investigation(backend):
+    """창을 줄이면 예산도 같이 줄어든다.
+
+    window=1 이면 가장 최근에 끝난 세션 하나만 본다. 그 세션이 개입이 낀
+    쪽이므로 완주율 0% 이고, 예산 0 을 이미 넘겨 소진이다.
+    """
+    result = get_json(backend, "/slo/completion?window=1")
+
+    assert result["sessions_judged"] == 1
+    assert result["completion_rate"] == 0.0
+    assert result["budget_total"] == 0
+    assert result["budget_exhausted"] is True
+
+
+def test_control_audit_api_exposes_the_anonymous_share(backend):
+    """익명 비율은 목록이 아니라 전체에 대한 값이어야 한다.
+
+    "최근 20건 중 몇 건" 으로 세면 개입이 뜸한 날에는 비율이 요동친다.
+    누적으로 봐야 클라이언트가 헤더를 빠뜨리기 시작한 것을 알아챌 수 있다.
+    """
+    page = get_json(backend, "/control-audit?limit=1")
+
+    assert page["total"] == 2
+    assert page["anonymous"] == 1
+    # limit 은 목록만 자른다. 집계까지 잘리면 위 두 숫자가 1 이 된다.
+    assert len(page["items"]) == 1
+
+    full = get_json(backend, "/control-audit")
+    actions = {item["action"]: item for item in full["items"]}
+
+    assert actions["localize"]["actor"] == "정민경"
+    assert actions["localize"]["intervention"] is True
+    # goto 는 기록되지만 판정 대상이 아니다. 프론트가 이 판단을 다시 하지
+    # 않도록 백엔드가 붙여 보낸다.
+    assert actions["goto"]["actor"] is None
+    assert actions["goto"]["actor_source"] == "absent"
+    assert actions["goto"]["intervention"] is False

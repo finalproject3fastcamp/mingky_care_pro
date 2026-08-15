@@ -459,3 +459,70 @@ class QrObservationOut(BaseModel):
     visible: bool = False
     distance: float | None = None
     observed_at: datetime | None = None
+
+
+class SloSessionOut(BaseModel):
+    """판정이 끝난 세션 한 건.
+
+    failures 가 비어 있으면 성공이다. 별도의 success 불린을 두지 않는 이유는
+    둘이 어긋난 응답을 만들 수 있기 때문이다 — 목록이 곧 판정이다.
+    """
+
+    session_id: int
+    robot_id: str
+    started_at: datetime
+    ended_at: datetime
+    end_reason: str
+    # abnormal_end · manual_stop · operator_order (app/slo.py 의 상수)
+    failures: list[str]
+
+
+class SloWindowOut(BaseModel):
+    """직전 N세션 이동창의 완주율과 오차 예산 (§1.1 · §1.2).
+
+    completion_rate 만 내려주지 않는다. 숫자 하나로는 "왜 나빠졌는가" 로
+    넘어갈 수 없어서, 실패한 세션 목록을 같이 실어 화면이 바로 원인 추적
+    도구가 되게 한다.
+    """
+
+    window: int
+    sessions_judged: int
+    # 표본이 창을 채웠는가. 12세션에 1회 실패면 91.7% 지만 신뢰구간이 창만큼
+    # 넓다. 화면이 "표본 부족" 을 표시할 수 있어야 한다.
+    sample_complete: bool
+    success: int
+    failure: int
+    # 표본이 0 이면 완주율은 존재하지 않는다. 0.0 과 구분해야 한다.
+    completion_rate: float | None
+    target: float
+    budget_total: int
+    budget_used: int
+    # 잔량 0 과 소진은 다른 상태다. 50세션에서 실패 5건은 정확히 90% 로
+    # 목표 안이고, 6건부터 위반이다.
+    budget_remaining: int
+    budget_exhausted: bool
+    failed_sessions: list[SloSessionOut]
+
+
+class ControlAuditOut(BaseModel):
+    """제어 개입 한 건. actor 가 없으면 익명 기록이다."""
+
+    audit_id: int
+    occurred_at: datetime
+    robot_id: str
+    session_id: int | None = None
+    action: str
+    argument: str | None = None
+    actor: str | None = None
+    actor_source: str
+    # 이 명령이 §1.1 판정 대상인지. 프론트가 목록을 다시 필터링하면서 백엔드와
+    # 다른 집합을 쓰게 되는 것을 막는다.
+    intervention: bool
+
+
+class ControlAuditPage(BaseModel):
+    total: int
+    # actor 가 비어 있는 행. 이 비율이 오르면 클라이언트가 헤더를 빠뜨리고 있다.
+    anonymous: int
+    limit: int
+    items: list[ControlAuditOut]
