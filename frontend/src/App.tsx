@@ -6,6 +6,7 @@ import { EngineerLayout } from './routes/EngineerLayout'
 import { WaypointDashboard } from './routes/WaypointDashboard'
 import { CameraDashboard } from './routes/CameraDashboard'
 import { SystemDashboard } from './routes/SystemDashboard'
+import { FleetDashboard } from './routes/FleetDashboard'
 import './App.css'
 
 function App() {
@@ -20,6 +21,8 @@ function App() {
           <Route path="medical/:robotId" element={<MedicalDashboard />} />
           <Route path="engineer" element={<EngineerLayout />}>
             <Route index element={<Navigate to="events" replace />} />
+            {/* SLO 가 맨 위에 오는 화면이라 엔지니어 탭의 첫 항목이다. */}
+            <Route path="fleet" element={<FleetDashboard />} />
             <Route path="events" element={<EngineerDashboard />} />
             <Route path="system" element={<SystemDashboard />} />
             <Route path="waypoints" element={<WaypointDashboard />} />
