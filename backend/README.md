@@ -53,6 +53,73 @@ uvicorn app.main:app --reload
 - `GET /patients/{patient_id}/photo` — 환자 프로필 사진 (`image/*`, private 캐시)
 - `GET /docs` — OpenAPI 문서
 
+## 테스트
+
+```bash
+pip install -r backend/requirements-dev.txt   # pytest 는 여기 있다
+cd backend
+pytest
+```
+
+**DB 가 없어도 돈다.** `app.config` 가 import 시점이 아니라 `connect()` 시점에
+환경 변수를 읽기 때문이다. `database/.env` 없이 클론한 사람도, CI 러너도 바로
+실행할 수 있다. 이 계약이 깨지면 `tests/test_config_env.py` 가 먼저 깨진다.
+
+### 통합 테스트 (`-m e2e`)
+
+나머지 테스트는 전부 가짜 커넥션이다. 빠르지만 그래서 **한 번도 통과시켜본 적
+없는 경로**가 있다 — heartbeat 로 `link_state` 를 세우고, 배터리 표본으로 arming
+전제조건을 채우고, arm 을 받고, QR 로 세션을 만들고, 이벤트가 `session_steps` 를
+실제로 갱신하는 순서다. 그 순서가 깨지면 단위 테스트는 전부 초록인데 로봇이
+아무것도 못 한다.
+
+여기서는 진짜 uvicorn 과 진짜 PostgreSQL 을 쓴다. 로봇만
+[가짜](../tools/fake_robot/)다.
+
+```bash
+# DB 를 하나 띄우고 스키마·시드를 넣는다
+docker run -d --name mingky-test -p 5433:5432 \
+  -e POSTGRES_USER=mingky -e POSTGRES_PASSWORD=test -e POSTGRES_DB=mingky postgres:16
+
+PGHOST=127.0.0.1 PGPORT=5433 PGPASSWORD=test \
+POSTGRES_USER=mingky POSTGRES_DB=mingky \
+MINGKY_MIGRATIONS_DIR=database/migrations MINGKY_SEEDS_DIR=database/seeds \
+  sh deploy/init-db.sh
+
+# 백엔드는 테스트가 알아서 띄운다
+cd backend
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5433 POSTGRES_USER=mingky \
+POSTGRES_PASSWORD=test POSTGRES_DB=mingky pytest -m e2e
+```
+
+`migrate` 와 달리 **시드까지** 넣어야 한다. 세션 완주 시나리오는 환자 `p001` 과
+로봇 `pinky-01` 이 있어야 성립한다.
+
+기본 `pytest` 는 `-m e2e` 를 제외한다(`pytest.ini` 의 `addopts`). DB 없이 도는
+것이 나머지 테스트의 계약이라 섞으면 안 된다.
+
+> 이미 같은 DB 에 백엔드가 붙어 있으면 테스트가 띄우는 백엔드가 단일 인스턴스
+> 가드에 걸려 종료 코드 3 으로 죽는다. 그때는 uvicorn 로그를 그대로 출력하니
+> 원인이 바로 보인다.
+
+### CI
+
+`.github/workflows/backend-tests.yml` 에 잡이 둘이다.
+
+| 잡 | 도는 것 | 빨간색이 뜻하는 것 |
+| --- | --- | --- |
+| `unit` | DB 없이 `pytest` | 원인이 코드에 있다 |
+| `e2e` | postgres 서비스 + `pytest -m e2e` | 원인이 배관 어딘가에 있다 — 스키마, 시드, 기동 순서, 정본 |
+
+섞으면 첫 실패에서 "코드가 틀렸나 DB 가 안 떴나" 를 가릴 수 없다. `unit` 이
+초록인데 `e2e` 만 빨간 것 자체가 진단 정보다.
+
+`e2e` 는 `needs: unit` 이라 `unit` 이 깨지면 아예 안 돈다. 원인이 이미 나왔는데
+로그만 두 배로 늘릴 이유가 없다.
+
+스키마 적용에 CI 전용 SQL 을 쓰지 않고 배포와 같은 `deploy/init-db.sh` 를
+부른다. 따로 두면 배포 경로가 깨져도 CI 는 초록이다.
+
 ## 로봇 생존 감시
 
 `POST /robots/{id}/heartbeat` 를 받아 마지막 수신 시각을 **백엔드 메모리**에 두고,
