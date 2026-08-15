@@ -1,0 +1,39 @@
+# 이 저장소의 첫 CI.
+#
+# 일부러 단위 테스트만 돌린다. 가짜 로봇 하네스를 띄우는 통합 테스트는
+# postgres 서비스 + 마이그레이션 + 백엔드 기동 + 시나리오 재생이 한 줄에
+# 엮여 있어서, 처음부터 같이 넣으면 첫 실패에서 원인 분리가 안 된다.
+# 이 잡이 안정적으로 초록이 된 뒤에 E2E 잡을 얹는다 (로드맵 8).
+#
+# DB 환경 변수를 주지 않는 것이 의도다. app.config 가 import 시점이 아니라
+# connect 시점에 환경 변수를 읽으므로, DB 없이도 수집과 실행이 되어야 한다.
+# 그 계약이 깨지면 tests/test_config_env.py 가 먼저 깨진다.
+
+name: backend tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: 단위 테스트
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # backend/Dockerfile 의 python:3.12-slim 과 맞춘다.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 의존성 설치
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: pytest
+        working-directory: backend
+        run: python -m pytest

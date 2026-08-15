@@ -6,13 +6,37 @@ from dotenv import load_dotenv
 DATABASE_ENV_PATH = Path(__file__).resolve().parents[2] / "database" / ".env"
 load_dotenv(DATABASE_ENV_PATH)
 
-_HOST = os.environ.get("POSTGRES_HOST", "localhost")
-_PORT = os.environ["POSTGRES_PORT"]
-_USER = os.environ["POSTGRES_USER"]
-_PASSWORD = os.environ["POSTGRES_PASSWORD"]
-_DB = os.environ["POSTGRES_DB"]
+_REQUIRED_DB_KEYS = ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB",
+                     "POSTGRES_PORT")
 
-DATABASE_URL = f"postgresql://{_USER}:{_PASSWORD}@{_HOST}:{_PORT}/{_DB}"
+
+def database_url() -> str:
+    """DB 접속 문자열. import 시점이 아니라 호출 시점에 환경 변수를 읽는다.
+
+    ## 왜 상수가 아닌가
+
+    모듈 최상단에서 읽으면 `POSTGRES_PORT` 하나가 없다는 이유로 app.config 를
+    거치는 모든 것이 KeyError 로 죽는다. DB 를 쓰지도 않는 테스트까지 수집
+    단계에서 무너진다 — 13개 모듈 중 10개가 그랬다. database/.env 는
+    .gitignore 에 있어서 CI 러너에는 아예 없으므로, 이대로면 CI 를 세울 수 없다.
+
+    ## 왜 기본값을 주지 않는가
+
+    기본값을 깔면 오타 하나로 엉뚱한 DB 에 조용히 붙는다. 관제 데이터를 다루는
+    쪽에서 그건 KeyError 보다 나쁘다. 실패는 그대로 두고 **실패 시점만** import
+    에서 connect 로 옮긴다.
+    """
+    missing = [key for key in _REQUIRED_DB_KEYS if not os.environ.get(key)]
+    if missing:
+        raise RuntimeError(
+            f"DB 환경 변수가 없습니다: {', '.join(missing)}. "
+            f"{DATABASE_ENV_PATH} 를 만들거나 환경 변수로 넘기세요.")
+
+    host = os.environ.get("POSTGRES_HOST", "localhost")
+    return (f"postgresql://{os.environ['POSTGRES_USER']}"
+            f":{os.environ['POSTGRES_PASSWORD']}"
+            f"@{host}:{os.environ['POSTGRES_PORT']}"
+            f"/{os.environ['POSTGRES_DB']}")
 
 # --- 로봇 생존 감시 -----------------------------------------------------------
 #
