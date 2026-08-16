@@ -20,6 +20,7 @@ import type { EventFilterValues } from '../lib/eventFilters'
 import { listUnknownCodes } from '../lib/eventsApi'
 import { useEventFeed } from '../lib/useEventFeed'
 import { usePolling } from '../lib/usePolling'
+import { isMobile } from '../types/monitoring'
 
 /** GET /robots 응답 중 필터가 쓰는 부분만. 전체 스키마는 schemas.py 의 RobotOut. */
 interface RobotSummary {
@@ -212,7 +213,9 @@ export function EngineerDashboard() {
         </div>
       )}
 
-      {focusedRobot && (
+      {/* 배터리는 주행 로봇에만 있다. OMX 는 유선 급전이라 카드 자체가
+          성립하지 않는다 — 팔을 고르면 이 카드는 나오지 않는다. */}
+      {focusedRobot && isMobile(focusedRobot) && (
         <div className="card">
           <div className="card-title">배터리</div>
           <BatteryReading

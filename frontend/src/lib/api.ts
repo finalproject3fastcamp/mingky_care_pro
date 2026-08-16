@@ -6,6 +6,7 @@ import type { ControlAuditPage, SloWindow } from '../types/slo'
 import type {
   ActiveSession,
   QrObservation,
+  MobileRobot,
   Robot,
   RobotInventory,
 } from '../types/monitoring'
@@ -65,8 +66,10 @@ export async function getQrObservation(
   return data
 }
 
-export async function armRobot(robotId: string): Promise<Robot> {
-  const { data } = await api.post<Robot>(`/robots/${robotId}/arm`)
+export async function armRobot(robotId: string): Promise<MobileRobot> {
+  // 백엔드가 mobile 이 아닌 로봇의 arming 을 409(not_mobile)로 거부한다.
+  // 성공 응답은 항상 주행 로봇이다.
+  const { data } = await api.post<MobileRobot>(`/robots/${robotId}/arm`)
   return data
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
@@ -22,7 +22,7 @@ import { useRobotMode } from '../lib/useRobotMode'
 import { usePolling } from '../lib/usePolling'
 import { useTeleopSocket } from '../lib/useTeleopSocket'
 import type { EventOut } from '../types/events'
-import type { ActiveSession, Robot } from '../types/monitoring'
+import { isMobile, type ActiveSession, type MobileRobot } from '../types/monitoring'
 
 const POLL_MS = 3000
 const FORECAST_POLL_MS = 120000
@@ -41,7 +41,7 @@ export function MedicalDashboard() {
   // armed_at 이 아직 null 이다. 그 낡은 값을 그대로 믿으면 아래 orphan 판정이
   // 방금 한 선택을 무효로 보고 선택 화면으로 튕긴다. 폴링이 따라잡을 때까지
   // 이 응답으로 덮어쓴다.
-  const [justArmed, setJustArmed] = useState<Robot | null>(null)
+  const [justArmed, setJustArmed] = useState<MobileRobot | null>(null)
   const [locationBusy, setLocationBusy] = useState(false)
   const [locationNotice, setLocationNotice] = useState<string | null>(null)
 
@@ -84,7 +84,12 @@ export function MedicalDashboard() {
   // 선택한 로봇이 실제 목록에 있고 armed 이거나 세션이 있는 동안만 유효 선택이다.
   // 세션이 끝나거나 다른 경로로 disarmed 되면 선택을 자동으로 해제해서
   // 다음 tick 에 RobotPicker 로 돌아간다.
-  const robotList = robots.data ?? []
+  // 이 화면은 환자 안내 전용이다. 팔은 QR 도 arming 도 세션도 없으므로
+  // 목록 단계에서 거른다 — 그래야 아래 전부가 MobileRobot 으로 좁혀진다.
+  // useMemo 인 이유는 아래 effect 의 의존성이라서다. 매 렌더 새 배열을 만들면
+  // 그 effect 가 매 렌더 돈다.
+  const robotList = useMemo(
+    () => (robots.data ?? []).filter(isMobile), [robots.data])
   const polledRobot = selectedRobotId
     ? robotList.find((r) => r.robot_id === selectedRobotId) ?? null
     : null
@@ -150,13 +155,13 @@ export function MedicalDashboard() {
   // 판단하므로 다른 경로로 해제되면 정상적으로 선택 화면으로 돌아간다.
   useEffect(() => {
     if (justArmed == null) return
-    const polled = robots.data?.find((r) => r.robot_id === justArmed.robot_id)
+    const polled = robotList.find((r) => r.robot_id === justArmed.robot_id)
     if (polled && (polled.armed_at != null || polled.active_session_id != null)) {
       setJustArmed(null)
     }
-  }, [robots.data, justArmed])
+  }, [robotList, justArmed])
 
-  function handleSelect(robot: Robot) {
+  function handleSelect(robot: MobileRobot) {
     setJustArmed(robot)
     navigate(`/medical/${robot.robot_id}`)
   }
@@ -337,7 +342,7 @@ export function MedicalDashboard() {
 
 interface SessionViewProps {
   session: ActiveSession
-  robot: Robot
+  robot: MobileRobot
   events: EventOut[]
   mode: 'auto' | 'manual' | 'estop' | null
   robotConnected: boolean

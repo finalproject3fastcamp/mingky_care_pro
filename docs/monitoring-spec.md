@@ -372,12 +372,21 @@ heartbeat payload 에 `{topic: age_sec}` 로 실어 보낸다. 도착하는 데�
 
 ### 7.3 타입별 분기 규칙
 
-- **백엔드** — 공통 필드는 평평하게, 타입별 지표는 `detail JSONB` 한 칸에 담는다.
+- **백엔드** — 공통 필드는 평평하게, 타입별 지표는 `detail` 한 칸에 담는다.
   배터리·RSSI·서보 온도를 전부 컬럼으로 만들면 절반이 항상 `NULL` 이고, 세 번째
-  로봇 종류가 오면 또 마이그레이션한다. 조회는 `detail->>'servo_temp_max'` 로 된다.
+  로봇 종류가 오면 또 마이그레이션한다. `GET /robots` 가 `MobileRobotOut` 과
+  `ManipulatorRobotOut` 으로 갈라진다(`robot_type` 이 discriminator).
+
+  팔의 `detail` 은 **저장하지 않는다.** 재료가 이미 `events` 에 다 있어
+  (§6.2 의 9개 코드) `app/dispense.py` 가 직전 20 사이클을 접어 만든다. 같은
+  사실을 컬럼으로 한 번 더 들고 있으면 둘이 갈라지는 날이 오고, 그때 어느
+  쪽이 맞는지 판단할 근거가 없다. 서보 온도 추이처럼 이벤트로 재구성되지 않는
+  값이 생기면 그때 `detail JSONB` 컬럼을 추가한다(로드맵 11).
 - **프론트** — `robot_type` 을 discriminant 로 하는 discriminated union
-  (`type Robot = MobileRobot | ArmRobot`). 런타임 `if` 분기로는 "팔에 배터리
-  카드를 렌더" 하는 실수가 안 잡히지만, 이러면 컴파일 타임에 잡힌다.
+  (`type Robot = MobileRobot | ManipulatorRobot`). 런타임 `if` 분기로는 "팔에
+  배터리 카드를 렌더" 하는 실수가 안 잡히지만, 이러면 컴파일 타임에 잡힌다.
+  실제로 유니온을 세우자 배터리·세션·Nav2 를 팔에서도 읽고 있던 자리가 5개
+  파일에서 컴파일 에러로 드러났다.
 - **선택기** — 로봇 선택기는 4대를 모두 보여주고 제어 패널만 타입에 따라 바꾼다.
   현재 `SystemDashboard` 는 `filter(robot_type === 'mobile')`, `CameraDashboard`
   는 `pinky-` 접두사로 팔을 화면에서 아예 뺀다. 카메라는 팔에 없으니 타당하지만,
