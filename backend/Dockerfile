@@ -11,7 +11,12 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend/app backend/app
-COPY config/event_codes.yaml config/event_codes.yaml
+# 파일 하나가 아니라 디렉터리 전체다. 서버가 읽는 정본이 다섯 개로 늘었고
+# (event_codes · duplicate_node_severity · topic_watch · servo_limits ·
+# alert_routes), 하나씩 적으면 새 파일을 추가한 사람이 여기를 잊는다.
+# 그때 증상은 에러가 아니라 **판정이 조용히 기본값으로 도는 것**이라 아무도
+# 못 알아챈다 — duplicate_node_severity.yaml 이 실제로 그 상태였다.
+COPY config config
 COPY database/seeds database/seeds
 # 대시보드가 로봇 위치를 그릴 바탕 지도. Nav2 가 쓰는 것과 같은 파일이다.
 COPY mingky_ros/mingky_bringup/map map

@@ -34,7 +34,7 @@ steps:
   # 맵도 다른 것을 물고 있다 — 이름은 같고 지문만 다르다.
   - robot: pinky-02
     action: inventory
-    commit: 999999999999
+    commit: 9f3e11c2ab77
     branch: hotfix/nav-timeout
     dirty: true
     map_name: yun_map_highres_clean

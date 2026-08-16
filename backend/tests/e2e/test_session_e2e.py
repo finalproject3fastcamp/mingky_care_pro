@@ -15,11 +15,13 @@
 """
 
 import asyncio
+import http.server
 import json
 import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -49,8 +51,45 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+class _WebhookReceiver(http.server.BaseHTTPRequestHandler):
+    """알림 웹훅을 받는 자리. Slack 대신 여기로 쏜다 (§8.4)."""
+
+    received: list = []
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8")
+        try:
+            _WebhookReceiver.received.append(json.loads(body))
+        except json.JSONDecodeError:
+            _WebhookReceiver.received.append({"raw": body})
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, *args):
+        """기본 구현이 stderr 로 요청마다 한 줄씩 찍는다. 테스트 로그를 덮는다."""
+
+
 @pytest.fixture(scope="module")
-def backend():
+def webhook():
+    """실제 채널 대신 로컬 수신기를 세운다.
+
+    알림은 '보냈다' 까지가 기능이다. 선별 로직은 단위 테스트가 잠그지만,
+    ingest → notify → HTTP 배관이 실제로 이어져 있는지는 여기서만 확인된다.
+    """
+    _WebhookReceiver.received.clear()
+    server = http.server.HTTPServer(("127.0.0.1", 0), _WebhookReceiver)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/hook"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.fixture(scope="module")
+def backend(webhook):
     """진짜 uvicorn 을 띄운다.
 
     워크플로가 아니라 테스트가 서버를 띄우는 이유는, 로컬에서도 CI 와 똑같이
@@ -65,7 +104,10 @@ def backend():
          "--host", "127.0.0.1", "--port", str(port)],
         cwd=REPO_ROOT / "backend",
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        env={**os.environ},
+        # 알림은 기본이 '꺼짐' 이다(ALERT_WEBHOOK_URL 없음). 여기서만 켜서
+        # 로컬 수신기로 돌린다 — 개발·CI 가 실수로 실제 채널에 쏘지 않는다.
+        env={**os.environ, "ALERT_WEBHOOK_URL": webhook,
+             "ALERT_WEBHOOK_KIND": "json"},
     )
 
     deadline = time.monotonic() + 30
@@ -560,7 +602,7 @@ def test_split_fleet_configuration_is_caught(backend):
 
     # "갈렸다" 만으로는 무엇을 되돌려야 할지 모른다. 몇 대 몇인지가 필요하다.
     assert found["commit"]["values"] == {
-        "a1b2c3d4e5f6": ["pinky-01"], "999999999999": ["pinky-02"]}
+        "a1b2c3d4e5f6": ["pinky-01"], "9f3e11c2ab77": ["pinky-02"]}
     # 이름은 둘 다 yun_map_highres_clean 이다. 이름으로 비교했으면 못 잡는다.
     assert set(found["map"]["values"]) == {"7c9f1a2b3c4d", "ffffffffffff"}
     assert robots["pinky-01"]["map_name"] == robots["pinky-02"]["map_name"]
@@ -643,3 +685,55 @@ def test_mobile_robots_cannot_report_servos(backend):
     assert caught.value.code == 409
     assert scalar(
         "SELECT count(*) FROM robot_servo_log WHERE robot_id = 'pinky-01'") == 0
+
+
+def test_serious_events_leave_the_screen(backend):
+    """심각한 사건이 대시보드 밖으로 나간다 (§8.4 · 로드맵 12).
+
+    원칙 4 — 야간에 화면을 보는 사람이 없으면 관측한 것이 아니다. 선별 규칙은
+    단위 테스트가 잠그고, 여기서 보는 것은 ingest → notify → HTTP 배관이
+    실제로 이어져 있는가다.
+
+    앞선 시나리오들이 이미 사이클 포기·서보 과열·토픽 두절을 만들어 뒀다.
+    """
+    # 전송은 태스크로 던져진다. 적재 응답을 기다린 것만으로는 아직 안 왔을 수 있다.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not _WebhookReceiver.received:
+        time.sleep(0.3)
+
+    sent = list(_WebhookReceiver.received)
+    codes = {alert["event_code"] for alert in sent}
+
+    assert sent, "알림이 한 건도 나가지 않았습니다"
+    # 정본(config/alert_routes.yaml)에 있는 코드만 나가야 한다.
+    assert codes <= {
+        "fire.detected", "robot.estop_engaged", "robot.comm_lost",
+        "robot.battery_low", "manipulator.servo_fault",
+        "manipulator.servo_overheat", "manipulator.cycle_aborted",
+        "robot.topic_stale", "robot.comm_restored",
+    }, codes
+
+    # 확률적 실패는 절대 나가지 않는다 (§4.4). 이게 새면 하루에 수십 번 울리고
+    # 그 순간부터 아무도 이 채널을 안 본다.
+    assert "manipulator.pick_failed" not in codes
+
+    # 코드 이름만 보내면 받는 사람이 저장소를 열어야 뜻을 안다.
+    first = sent[0]
+    assert first["robot_id"]
+    assert first["tier"] in ("page", "notify")
+    assert first["text"]
+
+
+def test_the_same_fact_is_not_announced_twice(backend):
+    """두절이 흔들리는 로봇 하나가 채널을 도배하면 안 된다.
+
+    servo_overheat.yaml 은 어깨가 임계를 넘은 뒤에도 표본을 계속 올린다.
+    서버가 반복 발행을 막고 있으므로 알림은 한 건이어야 한다.
+    """
+    per_key = {}
+    for alert in _WebhookReceiver.received:
+        key = (alert["robot_id"], alert["event_code"])
+        per_key[key] = per_key.get(key, 0) + 1
+
+    repeated = {key: count for key, count in per_key.items() if count > 1}
+    assert repeated == {}, repeated
