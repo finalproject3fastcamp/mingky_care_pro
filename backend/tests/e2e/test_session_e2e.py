@@ -571,3 +571,75 @@ def test_split_fleet_configuration_is_caught(backend):
     assert "policy" not in found
     # 앞선 시나리오들이 두 팔에 같은 체크포인트를 실어 뒀다.
     assert robots["omx-01"]["policy_checkpoint_id"] == "act_omx_020000"
+
+
+def test_servo_telemetry_lands_and_crosses_thresholds(backend):
+    """서보 온도·전류 수집과 임계 판정 (§4.4 · 로드맵 11).
+
+    실기로 과열을 재현하려면 팔을 몇십 분 돌려야 하고, 그때도 원하는 조인트가
+    원하는 온도로 올라간다는 보장이 없다. 여기서 보려는 것은 온도계가 아니라
+    서버의 판정이다 — 조인트별 임계, 히스테리시스, 반복 발행 억제.
+    """
+    play("servo_overheat.yaml", backend)
+
+    codes = [row["event_code"] for row in query("""
+        SELECT event_code FROM events
+        WHERE event_code LIKE 'manipulator.servo_%' AND robot_id = 'omx-01'
+        ORDER BY occurred_at
+    """)]
+
+    # 과열 한 번, 해제 한 번. 계속 뜨거운 동안 반복 발행하면 알림이 잡음이 된다.
+    assert codes == ["manipulator.servo_overheat", "manipulator.servo_cooled"], codes
+
+    # 그리퍼는 66℃ 까지 갔지만 자기 임계(70) 아래다. 공통선을 쓰면 정상
+    # 동작이 매 사이클 경고로 뜬다.
+    overheated = query("""
+        SELECT payload::text AS payload, level FROM events
+        WHERE event_code = 'manipulator.servo_overheat' LIMIT 1
+    """)[0]
+    assert "shoulder_lift" in overheated["payload"]
+    # 팔은 아직 돌고 있다. error 는 이미 멈춘 상태에만 쓴다 (§8.4).
+    assert overheated["level"] == "warning"
+
+    # 표본은 events 가 아니라 추이 로그에 쌓인다. 1분마다 찍히는 온도를
+    # events 에 넣으면 타임라인 필터가 쓸모없어진다.
+    assert scalar("""
+        SELECT count(*) FROM robot_servo_log WHERE robot_id = 'omx-01'
+    """) >= 10
+
+
+def test_servo_health_api_separates_hot_from_climbing(backend):
+    """지금 뜨거운 것과 오르는 중인 것은 다른 사실이다 (§4.4)."""
+    health = get_json(backend, "/robots/omx-01/servos")
+    servos = {servo["joint"]: servo for servo in health["servos"]}
+
+    # 에러 비트는 온도와 무관하게 fault 다. 서보가 이미 토크를 끊었을 수 있다.
+    assert servos["wrist"]["state"] == "fault"
+    assert servos["wrist"]["hardware_error"] == 32
+    # 나쁜 것이 맨 앞에 온다. 화면이 다시 정렬하지 않는다.
+    assert health["servos"][0]["state"] == "fault"
+
+    # 시나리오가 몇 초 안에 끝나므로 추세를 낼 시간 폭이 없다. 그때 기울기를
+    # 만들어내면 안 된다 — 틀린 추세는 없는 추세보다 나쁘다.
+    assert servos["shoulder_lift"]["slope_c_per_hour"] is None
+    assert servos["shoulder_lift"]["rising"] is False
+
+
+def test_mobile_robots_cannot_report_servos(backend):
+    """오배선을 그대로 쌓으면 서보가 없는 로봇의 행이 추이 판정에 섞인다.
+
+    이벤트(§6.1)와 다른 판단이다 — 저쪽은 기록을 잃으면 사건이 사라지지만
+    이건 주기 표본이라 하나 버려도 다음이 온다.
+    """
+    request = urllib.request.Request(
+        f"{backend}/robots/pinky-01/servos",
+        data=json.dumps({"servos": [{"joint": "wrist", "temp_c": 40}]}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST")
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(request, timeout=5)
+
+    assert caught.value.code == 409
+    assert scalar(
+        "SELECT count(*) FROM robot_servo_log WHERE robot_id = 'pinky-01'") == 0

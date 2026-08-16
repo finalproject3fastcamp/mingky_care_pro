@@ -403,6 +403,22 @@ class Harness:
         self.log(f"  명령 {body['command']}({body['argument']}) "
                  f"← {who} ({robot.robot_id}) order={result['order_id']}")
 
+    def do_servos(self, robot: Robot, args: dict) -> None:
+        """서보 온도·전류 표본 (§4.4 · 로드맵 11).
+
+        실기에서는 U2D2 로 Dynamixel 을 읽어 보낸다. 과열을 실기로 재현하려면
+        팔을 실제로 몇십 분 돌려야 하고, 그때도 원하는 조인트가 원하는 온도로
+        올라간다는 보장이 없다.
+
+        여기서 검증하려는 것은 온도계가 아니라 **서버가 임계를 어떻게
+        판정하는가** 다 — 조인트별 임계, 히스테리시스, 반복 발행 억제.
+        """
+        request(self.base_url, "POST", f"/robots/{robot.robot_id}/servos",
+                {"servos": args.get("servos") or []})
+        hottest = max((s.get("temp_c") or 0) for s in args.get("servos") or [{}])
+        self.log(f"  서보 {len(args.get('servos') or [])}개 "
+                 f"최고 {hottest}℃ ({robot.robot_id})")
+
     def do_inventory(self, robot: Robot, args: dict) -> None:
         """형상 보고 — 지금 무슨 커밋·무슨 맵으로 도는가 (§7.2 형상 패널).
 
@@ -452,6 +468,7 @@ class Harness:
         "battery": do_battery,
         "topics": do_topics,
         "inventory": do_inventory,
+        "servos": do_servos,
         "arm": do_arm,
         "qr_scan": do_qr_scan,
         "event": do_event,

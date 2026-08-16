@@ -243,6 +243,78 @@ class ServoFault(BaseModel):
     occurred_at: datetime
 
 
+class ServoReadingIn(BaseModel):
+    """Dynamixel 하나가 보고한 표본 (§4.4 · 로드맵 11).
+
+    전부 optional 이다. U2D2 응답이 부분적으로 실패해도 읽은 것만 보내는 쪽이,
+    한 항목 때문에 표본 전체를 버리는 것보다 낫다. 다만 하나도 없으면 DB 가
+    거부한다(012 의 CHECK).
+
+    hardware_error 의 0 과 None 은 다른 사실이다 — 전자는 '정상이라고
+    읽었다', 후자는 '못 읽었다' 이고, 둘을 같게 저장하면 통신이 죽은 서보가
+    정상으로 집계된다.
+    """
+
+    joint: str = Field(min_length=1, max_length=30)
+    temp_c: float | None = Field(default=None, ge=-20, le=150)
+    # 부호가 있다. 방향에 따라 음수이고 절대값이 부하다.
+    current_ma: float | None = Field(default=None, ge=-10000, le=10000)
+    voltage_v: float | None = Field(default=None, ge=0, le=30)
+    hardware_error: int | None = Field(default=None, ge=0, le=255)
+
+
+class ServoSampleIn(BaseModel):
+    """한 번의 스캔에서 읽은 조인트들. 팔 하나가 주기적으로 올린다."""
+
+    # 상한은 payload 방어다. OMX 는 조인트 5개 + 그리퍼다.
+    servos: list[ServoReadingIn] = Field(min_length=1, max_length=20)
+
+
+class ServoReadingOut(BaseModel):
+    """조인트 하나의 최신값과 추세 (§4.4).
+
+    **지금 뜨거운 것과 오르는 중인 것은 다른 사실이다.** 40℃ 인데 회차마다
+    오르는 조인트가, 55℃ 에서 평평한 조인트보다 나쁜 신호다. 그래서 state 와
+    rising 을 따로 둔다 — 하나로 뭉개면 예지보전 신호가 사라진다.
+    """
+
+    joint: str
+    recorded_at: datetime
+    temp_c: float | None = None
+    current_ma: float | None = None
+    voltage_v: float | None = None
+    hardware_error: int | None = None
+
+    # fault   하드웨어 에러 비트가 섰다
+    # hot     임계 초과. 이벤트가 나간다
+    # warm    경고선 초과. 표시만 한다
+    # ok      정상
+    # unknown 온도를 못 읽었다 (에러 비트도 없으면 판정 불가)
+    state: Literal["fault", "hot", "warm", "ok", "unknown"]
+    warn_temp_c: float | None = None
+    hot_temp_c: float | None = None
+
+    # 온도 추세. 신뢰할 만할 때만 채운다 — 표본이 모자라거나 적합이 나쁘면
+    # None 이다. 틀린 추세는 없는 추세보다 나쁘다(battery_forecast 와 같은 규칙).
+    slope_c_per_hour: float | None = None
+    rising: bool = False
+    sample_count: int = 0
+
+
+class ServoHealthOut(BaseModel):
+    """팔 한 대의 서보 상태 (§4.4 · 로드맵 11).
+
+    로봇 목록에 얹지 않는다. 저쪽은 3초 폴링인데 추세는 몇 시간 창의 집계라
+    같이 두면 그 쿼리가 3초마다 돈다 — 배터리 예상(`/battery-forecast`)을
+    따로 뺀 것과 같은 이유다.
+    """
+
+    robot_id: str
+    window_min: int
+    # 나쁜 것부터 정렬돼 온다. 화면이 다시 정렬하지 않는다.
+    servos: list[ServoReadingOut] = Field(default_factory=list)
+
+
 class ManipulatorDetail(BaseModel):
     """팔 전용 지표 (§7.3 의 `detail`). app/dispense.py 가 events 에서 만든다.
 

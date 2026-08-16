@@ -142,6 +142,37 @@ export interface ServoFault {
   occurred_at: string
 }
 
+/**
+ * 조인트 하나의 최신값과 추세. schemas.py 의 ServoReadingOut 과 1:1 (§4.4).
+ *
+ * **지금 뜨거운 것과 오르는 중인 것은 다른 사실이다.** 40℃ 인데 회차마다
+ * 오르는 조인트가, 55℃ 에서 평평한 조인트보다 나쁜 신호다. 그래서 state 와
+ * rising 이 따로 온다.
+ */
+export interface ServoReading {
+  joint: string
+  recorded_at: string
+  temp_c: number | null
+  current_ma: number | null
+  voltage_v: number | null
+  /** 0 은 '정상이라고 읽었다', null 은 '못 읽었다'. 다른 사실이다. */
+  hardware_error: number | null
+  state: 'fault' | 'hot' | 'warm' | 'ok' | 'unknown'
+  warn_temp_c: number | null
+  hot_temp_c: number | null
+  /** 신뢰할 만할 때만 온다. 틀린 추세는 없는 추세보다 나쁘다. */
+  slope_c_per_hour: number | null
+  rising: boolean
+  sample_count: number
+}
+
+/** GET /robots/{id}/servos. 나쁜 것부터 정렬돼 온다. */
+export interface ServoHealth {
+  robot_id: string
+  window_min: number
+  servos: ServoReading[]
+}
+
 /** 팔 전용 지표. schemas.py 의 ManipulatorDetail 과 1:1 (§7.2 · §7.3). */
 export interface ManipulatorDetail {
   policy_checkpoint_id: string | null

@@ -444,6 +444,26 @@ manipulator.servo_fault:
   # Dynamixel 이 직접 보고하는 하드웨어 에러 비트. mobile 에 없는 예지보전
   # 신호다(§4.4). 온도·전류 추이 수집은 로드맵 11 에서 따로 붙는다.
 
+manipulator.servo_overheat:
+  robot_types: [manipulator]
+  level: warning
+  payload: { joint: string, temp_c: float, limit_c: float }
+  # 로봇이 아니라 수집 서버가 발행한다(backend/app/servo_health.py). 임계는
+  # config/servo_limits.yaml 에 있고 조인트마다 다르다 — 그리퍼는 쥔 채
+  # 버티는 시간이 길어 뜨겁게 도는 것이 정상이다.
+  #
+  # warning 인 이유: XM430 은 80℃ 에서 스스로 토크를 끊는다. 그 아래에서
+  # 미리 알리는 신호이므로 아직 팔은 돌고 있다. error 는 이미 멈춘 상태
+  # (cycle_aborted · servo_fault)에만 쓴다 — §8.4 의 심각도 분리.
+
+manipulator.servo_cooled:
+  robot_types: [manipulator]
+  level: info
+  payload: { joint: string, temp_c: float }
+  # servo_overheat 의 짝. 경고선(warn_temp_c)까지 내려와야 발행한다 —
+  # 임계 바로 아래에서 흔들리는 조인트가 과열/해제를 반복하면 그 알림을
+  # 아무도 안 본다.
+
 manipulator.policy_loaded:
   robot_types: [manipulator]
   level: info

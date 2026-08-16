@@ -1,0 +1,73 @@
+# 서보가 뜨거워진다 — 로드맵 11 이 잡으려는 예지보전 신호.
+#
+# Dynamixel 은 온도·전류·하드웨어 에러 비트를 스스로 보고한다. mobile 에는
+# 대응물이 없는 신호다(§4.4). 실기로 과열을 재현하려면 팔을 몇십 분 돌려야
+# 하고, 그때도 원하는 조인트가 원하는 온도로 올라간다는 보장이 없다.
+#
+# 확인할 것 (backend/app/servo_health.py)
+#   1. 임계를 넘으면 manipulator.servo_overheat 가 한 번만 발행된다
+#   2. 그리퍼는 임계가 따로다 — 66℃ 는 다른 축이면 과열이지만 그리퍼는 정상
+#   3. 경고선까지 내려와야 servo_cooled 가 나간다 (히스테리시스)
+#   4. 하드웨어 에러 비트는 온도와 무관하게 fault 다
+#
+# 이벤트를 직접 쏘지 않는다. 서버가 표본만 보고 스스로 판정하는지를 본다.
+
+name: 서보 과열 (조인트별 임계 · 히스테리시스)
+
+robots:
+  - id: omx-01
+    type: manipulator
+
+steps:
+  # 정상 가동. 아무 일도 일어나지 않아야 한다.
+  - robot: omx-01
+    action: servos
+    servos:
+      - { joint: shoulder_lift, temp_c: 42, current_ma: 620, voltage_v: 12.1, hardware_error: 0 }
+      - { joint: elbow, temp_c: 39, current_ma: 410, voltage_v: 12.1, hardware_error: 0 }
+      # 쥔 채 버티는 축이라 처음부터 뜨겁게 돈다. 이게 경고면 안 된다.
+      - { joint: gripper, temp_c: 58, current_ma: 1310, voltage_v: 12.1, hardware_error: 0 }
+
+  # 어깨가 오르기 시작한다. 아직 임계 아래다.
+  - robot: omx-01
+    action: servos
+    wait: 1
+    servos:
+      - { joint: shoulder_lift, temp_c: 58, current_ma: 980, voltage_v: 12.0, hardware_error: 0 }
+      - { joint: gripper, temp_c: 62, current_ma: 1400, voltage_v: 12.0, hardware_error: 0 }
+
+  # 어깨가 임계를 넘는다. 그리퍼는 66℃ 지만 자기 임계(70) 아래라 조용해야 한다.
+  - robot: omx-01
+    action: servos
+    wait: 1
+    servos:
+      - { joint: shoulder_lift, temp_c: 67, current_ma: 1120, voltage_v: 11.9, hardware_error: 0 }
+      - { joint: gripper, temp_c: 66, current_ma: 1450, voltage_v: 11.9, hardware_error: 0 }
+
+  # 계속 뜨겁다. 같은 사실을 다시 알리면 안 된다.
+  - robot: omx-01
+    action: servos
+    wait: 1
+    servos:
+      - { joint: shoulder_lift, temp_c: 69, current_ma: 1180, voltage_v: 11.9, hardware_error: 0 }
+
+  # 임계 아래로 내려왔지만 아직 경고선(55) 위다. 해제하지 않는다.
+  - robot: omx-01
+    action: servos
+    wait: 1
+    servos:
+      - { joint: shoulder_lift, temp_c: 60, current_ma: 700, voltage_v: 12.0, hardware_error: 0 }
+
+  # 식었다.
+  - robot: omx-01
+    action: servos
+    wait: 1
+    servos:
+      - { joint: shoulder_lift, temp_c: 51, current_ma: 430, voltage_v: 12.1, hardware_error: 0 }
+
+  # 온도는 멀쩡한데 에러 비트가 섰다. 서보가 이미 토크를 끊었을 수 있다.
+  - robot: omx-01
+    action: servos
+    wait: 1
+    servos:
+      - { joint: wrist, temp_c: 44, current_ma: 0, voltage_v: 12.1, hardware_error: 32 }
