@@ -413,10 +413,15 @@ class Harness:
         커밋이 갈린 상태를 실기로 만들려면 로봇 한 대에만 다른 브랜치를 배포하고
         재기동해야 한다. 한 줄로 재현되는 쪽이 낫다.
         """
+        commit_val = args.get("commit")
+        branch_val = args.get("branch", "main")
+        map_name_val = args.get("map_name")
+        map_hash_val = args.get("map_hash")
+
         workspace = {
-            "path": args.get("workspace", "/home/pinky/mingky_care_pro"),
-            "commit": args.get("commit"),
-            "branch": args.get("branch", "main"),
+            "path": str(args.get("workspace", "/home/pinky/mingky_care_pro")),
+            "commit": str(commit_val) if commit_val is not None else None,
+            "branch": str(branch_val) if branch_val is not None else None,
             "dirty": bool(args.get("dirty", False)),
             # 0 이면 서버가 '지금 도는 코드가 아니다' 로 걸러낸다.
             "process_count": int(args.get("process_count", 7)),
@@ -425,8 +430,8 @@ class Harness:
             "workspaces": [workspace],
             "node_graph": [],
             "processes": [],
-            "map_name": args.get("map_name"),
-            "map_hash": args.get("map_hash"),
+            "map_name": str(map_name_val) if map_name_val is not None else None,
+            "map_hash": str(map_hash_val) if map_hash_val is not None else None,
         }
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:8]
