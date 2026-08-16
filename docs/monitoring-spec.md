@@ -388,9 +388,16 @@ heartbeat payload 에 `{topic: age_sec}` 로 실어 보낸다. 도착하는 데�
   실제로 유니온을 세우자 배터리·세션·Nav2 를 팔에서도 읽고 있던 자리가 5개
   파일에서 컴파일 에러로 드러났다.
 - **선택기** — 로봇 선택기는 4대를 모두 보여주고 제어 패널만 타입에 따라 바꾼다.
-  현재 `SystemDashboard` 는 `filter(robot_type === 'mobile')`, `CameraDashboard`
-  는 `pinky-` 접두사로 팔을 화면에서 아예 뺀다. 카메라는 팔에 없으니 타당하지만,
-  `system` 탭에서 빠진 것은 **팔이 관제 대상이 아니라는 뜻**이라 고쳐야 한다.
+  `SystemDashboard` 가 `filter(robot_type === 'mobile')` 을 걷어냈다. 팔을 고르면
+  통합 시스템·주행 속도·화재 경보 대신 `ManipulatorPanel` 이 온다 — 조제 상태,
+  pick 성공률과 사이클 타임(§7.2), 정책 체크포인트(§4.4)다.
+
+  `CameraDashboard` 와 `WaypointDashboard` 는 계속 `pinky-` 만 본다. 팔에는
+  카메라도 웨이포인트도 없으므로 그건 사각지대가 아니라 해당 없음이다.
+
+  팔 패널에 **버튼은 없다.** §4.4 의 홈 복귀·재시도는 orders 큐의 이산 명령인데
+  그것을 받아 실행할 OMX 게이트웨이가 아직 없다(§6.2). 큐에만 쌓이고 아무 일도
+  일어나지 않는 버튼은 없는 것보다 나쁘다 — 로드맵 6 의 나머지 절반과 함께 붙인다.
 
 ---
 
@@ -633,7 +640,7 @@ heartbeat 는 팔에도 보낸다 — §4.3 의 공통 축이고 `type_mismatch.
 | ~~4~~ | ~~감사 로그 (actor) (§7.2)~~ | **완료** — `control_audit`(`011`) · `X-Actor` · teleop 점유. `test_control_audit.py` |
 | ~~5~~ | ~~세션 완주율 집계 + `fleet` 탭~~ | **완료** — `/slo/completion` · `fleet` 탭. 선행 지표 SLI 는 남음 |
 | 6 | `manipulator.*` 이벤트 코드 + 팔 게이트웨이 연결 (§6.2) | **정본·검증·하네스 완료.** 남은 것은 OMX 쪽 발행기 — ROS 가 없어 `mingky_event_gateway` 를 못 쓴다 |
-| 7 | `system` 탭 타입 분기 + 팔 패널 (§7.3) | 팔을 관제 안으로 |
+| ~~7~~ | ~~`system` 탭 타입 분기 + 팔 패널 (§7.3)~~ | **완료** — `RobotOut` 유니온 · `dispense.py` · `ManipulatorPanel`. 제어 버튼은 게이트웨이 대기 |
 | 9 | 토픽 주기(Hz) 감시 (§7.2) | 못 잡는 장애 모드를 잡음 |
 | 10 | 형상 패널 (SHA · 맵 해시 · 체크포인트) | 재현성 문제의 대부분 |
 | 11 | 서보 온도·전류 수집 (§4.4) | 유일한 실질 예지보전 신호 |

@@ -2524,3 +2524,121 @@
 .fleet-anon--warn { color: var(--warning); font-weight: 600; }
 
 .fleet-empty { margin: 0; color: var(--text-subtle); font-size: 0.85rem; }
+
+/* ── 조제 로봇 패널 (System 탭) ────────────────────────────────────────
+   §7.3: 선택기는 4대를 다 보여주고 제어 패널만 타입에 따라 바뀐다.
+   팔에는 3D 모델 자산이 없어 카드 왼쪽 자리를 글자로 채운다. */
+
+.waypoint-robot-card__glyph {
+  display: grid;
+  place-items: center;
+  width: 128px;
+  height: 104px;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #3f3b52 0%, #6b6486 100%);
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.72rem;
+  letter-spacing: 0.15em;
+  opacity: 0.75;
+}
+.waypoint-robot-card:hover .waypoint-robot-card__glyph,
+.waypoint-robot-card.selected .waypoint-robot-card__glyph { opacity: 1; }
+
+.manipulator-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.manipulator-state,
+.manipulator-policy { display: grid; gap: 10px; align-content: start; }
+.manipulator-performance { display: grid; gap: 12px; align-content: start; }
+
+.manipulator-state__headline {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.manipulator-state__headline strong { font-size: 1.5rem; font-weight: 700; }
+
+/* 빨강은 사람을 불러야 하는 상태에만 쓴다. 조제 중·대기는 정상이다. */
+.manipulator-state__headline strong[data-tone='error'] { color: var(--danger); }
+.manipulator-state__headline strong[data-tone='busy'] { color: var(--accent-strong); }
+.manipulator-state__headline strong[data-tone='idle'] { color: var(--text-muted); }
+
+.manipulator-alert {
+  margin: 0;
+  padding: 10px 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.manipulator-fault {
+  display: grid;
+  gap: 3px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+.manipulator-fault__title { color: var(--danger); font-weight: 700; }
+
+.manipulator-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.manipulator-meta strong { color: var(--text); font-weight: 600; }
+
+.manipulator-headline {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.manipulator-rate {
+  font-size: 2.2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+/* 표본 없음(—)을 실패와 같은 색으로 그리면 안 된다. 하나는 아직 판단할
+   근거가 없다는 뜻이고 하나는 한 번도 못 집었다는 뜻이다. */
+.manipulator-rate--known { color: var(--text); }
+.manipulator-rate--unknown { color: var(--text-subtle); }
+
+.manipulator-headline__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.manipulator-sample { color: var(--warning); font-weight: 600; }
+
+.manipulator-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+}
+.manipulator-metrics div { display: grid; gap: 3px; }
+.manipulator-metrics span { color: var(--text-muted); font-size: 0.76rem; }
+.manipulator-metrics strong { font-size: 1.05rem; font-weight: 600; }
+.manipulator-metrics strong[data-tone='error'] { color: var(--danger); }
+
+.manipulator-performance small { color: var(--text-subtle); font-size: 0.76rem; line-height: 1.5; }
+.manipulator-empty { margin: 0; color: var(--text-subtle); font-size: 0.85rem; line-height: 1.5; }
+
+@media (max-width: 1100px) {
+  .manipulator-grid { grid-template-columns: 1fr; }
+}
