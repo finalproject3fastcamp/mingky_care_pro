@@ -7,7 +7,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import db, heartbeat, inventory_rules, registry, servo_health, topic_watch
+from . import (
+    db, heartbeat, inventory_rules, notify, registry, servo_health,
+    topic_watch)
 from .routers import (
     events, fleet, maps, orders, patients, qr, robots, sessions, slo, teleop,
     waypoints)
@@ -144,6 +146,12 @@ async def lifespan(app: FastAPI):
 
     # 서보 온도 임계. 없으면 기본값으로 판정한다 (§4.4).
     servo_health.load()
+
+    # 알림 라우팅 (§8.4). URL 이 없으면 꺼진 채로 돈다 — 기본이 '안 보냄'
+    # 이어야 개발·CI 가 실수로 실제 채널에 쏘지 않는다.
+    notify.load()
+    log.info("알림 웹훅: %s",
+             notify.webhook_kind() if notify.enabled() else "꺼짐 (ALERT_WEBHOOK_URL 없음)")
 
     await db.connect()
     await _claim_single_instance()

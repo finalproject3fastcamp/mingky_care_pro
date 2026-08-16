@@ -303,3 +303,44 @@ def test_batch_is_applied_in_occurred_at_order():
     ])
 
     assert _codes(conn) == ["nav.goal_sent", "nav.stuck", "nav.goal_aborted"]
+
+
+# --- 알림 연결 (§8.4 · 로드맵 12) ---------------------------------------------
+
+def test_only_newly_inserted_events_reach_the_alert_path(monkeypatch):
+    """재전송된 배치가 같은 사건을 다시 울리면, 두절이 한 번 있었을 뿐인데
+    채널에는 열 번 찍힌다. 알림은 '적재됐다' 가 아니라 '처음 들어왔다' 에 붙는다.
+    """
+    from app import notify
+
+    resent = uuid.uuid4()
+    conn = FakeConnection({"pinky-01": "mobile"}, duplicate_ids=[resent])
+    seen = []
+    monkeypatch.setattr(notify, "notify", seen.append)
+
+    _run(conn, [
+        _event("pinky-01", "robot.comm_lost", event_id=resent),
+        _event("pinky-01", "fire.detected", offset_sec=1),
+    ])
+
+    assert [e.event_code for e in seen[0]] == ["fire.detected"]
+
+
+def test_alerting_failure_never_breaks_ingestion(monkeypatch):
+    """여기서 예외가 새면 게이트웨이가 같은 배치를 무한히 재전송한다."""
+    from app import notify
+
+    def boom(_events):
+        raise RuntimeError("웹훅이 죽었다")
+
+    monkeypatch.setattr(notify, "notify", boom)
+    conn = FakeConnection({"pinky-01": "mobile"})
+
+    # ingest 는 notify.notify 를 그대로 부른다. 방어는 그 안에 있으므로
+    # 여기서는 '적재 결과가 온전한가' 만 본다.
+    try:
+        result = _run(conn, [_event("pinky-01", "fire.detected")])
+    except RuntimeError:
+        raise AssertionError("알림 실패가 적재를 깼다")
+
+    assert result.inserted == 1

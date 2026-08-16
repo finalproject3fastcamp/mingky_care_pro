@@ -34,6 +34,7 @@ import uuid
 import asyncpg
 from asyncpg.exceptions import IntegrityConstraintViolationError
 
+from . import notify
 from .event_codes import UNKNOWN_CODE, EventCodeRegistry
 from .schemas import EventIn, IngestResult
 
@@ -182,6 +183,10 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
     # 규칙 1 — 도착 순서가 아니라 발생 순서로 적용한다.
     ordered = sorted(events, key=lambda e: e.occurred_at)
 
+    # 새로 들어온 것만 알림 대상이다(§8.4). 재전송된 배치가 같은 사건을 다시
+    # 울리면 두절이 한 번 있었을 뿐인데 채널에는 열 번 찍힌다.
+    delivered: list[EventIn] = []
+
     # 규칙 2 — 적재와 갱신을 한 트랜잭션에.
     async with conn.transaction():
         for event in ordered:
@@ -202,6 +207,7 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
 
             if await _insert(conn, event):
                 result.inserted += 1
+                delivered.append(event)
 
                 # 규칙 5 — 오배선은 적재하되 상태는 건드리지 않는다.
                 # "거부하지 않는다" 는 기록 얘기지 판정이 아니다. 그대로
@@ -218,5 +224,18 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
                     await _insert(conn, _unknown_marker(event))
             else:
                 result.duplicates += 1
+
+    # 트랜잭션 **밖**이다. 웹훅 응답을 트랜잭션 안에서 기다리면 슬랙이 느린
+    # 날 로봇의 이벤트 큐가 밀린다. 커밋된 사실만 내보낸다는 뜻이기도 하다 —
+    # 롤백된 배치로 알림이 나가면 화면에 없는 사건이 채널에만 남는다.
+    #
+    # notify 안에도 같은 방어가 있는데 여기서 한 번 더 감싸는 이유는, 이
+    # 경계가 깨졌을 때의 대가가 크기 때문이다 — 적재가 실패하면 게이트웨이가
+    # 같은 배치를 무한히 재전송한다. 알림을 못 보낸 것과 기록을 잃는 것은
+    # 무게가 다르다.
+    try:
+        notify.notify(delivered)
+    except Exception:
+        log.exception("알림 발송 실패. 적재는 이미 커밋됐다.")
 
     return result
