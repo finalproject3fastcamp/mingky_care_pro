@@ -173,6 +173,10 @@ def inventory_hash(payload: dict) -> str:
     "변할 때만 보낸다" 는 설계가 무의미해진다.
     """
     stable = {
+        "map_name": payload.get("map_name"),
+        # 맵이 바뀌면 본문이 다시 나가야 한다. 여기 없으면 로봇 한 대만
+        # 다른 맵으로 도는 상태가 다음 재기동까지 서버에 안 보인다.
+        "map_hash": payload.get("map_hash"),
         "node_graph": payload.get("node_graph", []),
         "processes": [
             {
@@ -194,6 +198,48 @@ def inventory_hash(payload: dict) -> str:
     }
     encoded = json.dumps(stable, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:8]
+
+
+def map_hash(info, data) -> str:
+    """지금 돌고 있는 맵의 지문 (monitoring-spec.md §7.2, 로드맵 10).
+
+    **파일이 아니라 map_server 가 실제로 실은 것을 해싱한다.** 디스크의 yaml
+    을 읽으면 "런치 인자가 가리키는 파일" 을 보는 것이고, 그건 지금 로봇이
+    쓰는 맵과 다를 수 있다 — map_server 가 다른 인자로 떴거나 로드에 실패한
+    경우다. 데모가 어제는 됐는데 오늘 안 되는 원인이 정확히 그런 종류다.
+
+    해상도·크기·원점까지 넣는 이유는 같은 격자라도 origin 이 다르면 다른
+    맵이기 때문이다. 좌표가 통째로 밀린 채 격자만 같은 경우가 실제로 있다.
+
+    ROS 메시지를 import 하지 않는다. 필드를 읽을 뿐이라 dict 든 메시지든
+    같은 답이 나오고, 그래야 ROS 없이 테스트할 수 있다.
+    """
+    def field(name):
+        return info[name] if isinstance(info, dict) else getattr(info, name)
+
+    origin = field("origin")
+    if not isinstance(origin, (list, tuple)):
+        position = origin.position
+        origin = [position.x, position.y, position.z]
+
+    header = json.dumps(
+        {
+            "resolution": round(float(field("resolution")), 6),
+            "width": int(field("width")),
+            "height": int(field("height")),
+            "origin": [round(float(v), 6) for v in origin],
+        },
+        sort_keys=True)
+
+    digest = hashlib.sha256(header.encode("utf-8"))
+    # 격자는 수십만 셀이다. rclpy 가 주는 array.array 는 버퍼 프로토콜을
+    # 지원하므로 통째로 넘겨 파이썬 루프를 피한다. 리스트로 오는 경우
+    # (테스트·구버전)만 손으로 채운다.
+    try:
+        digest.update(memoryview(data).tobytes())
+    except TypeError:
+        digest.update(bytes(bytearray(int(cell) & 0xFF for cell in data)))
+    return digest.hexdigest()[:12]
 
 
 class GitCache:

@@ -539,3 +539,35 @@ def test_topic_judgement_is_served_with_the_robot_list(backend):
     # 팔에는 토픽 축 자체가 없다. null 로 채워 보내면 화면이 '감시 중인데
     # 아무것도 안 온다' 로 읽는다.
     assert "topics" not in robots["omx-01"]
+
+
+def test_split_fleet_configuration_is_caught(backend):
+    """4대가 서로 다른 형상으로 도는 상태 (§7.2 · 로드맵 10).
+
+    §9.2 표의 "로봇 4대 SHA 동일 — 확인 안 함" 이 이 경로로 확인으로 바뀐다.
+    실기로 만들려면 로봇 한 대에만 다른 브랜치를 배포하고 재기동해야 한다.
+    """
+    play("fleet_config_split.yaml", backend)
+
+    config = get_json(backend, "/fleet/config")
+    robots = {robot["robot_id"]: robot for robot in config["robots"]}
+
+    # 커밋 안 된 변경은 커밋 해시만으로 재현이 불가능하다. 숨기면 안 된다.
+    assert robots["pinky-02"]["dirty"] is True
+    assert robots["pinky-02"]["branch"] == "hotfix/nav-timeout"
+
+    found = {m["axis"]: m for m in config["mismatches"]}
+
+    # "갈렸다" 만으로는 무엇을 되돌려야 할지 모른다. 몇 대 몇인지가 필요하다.
+    assert found["commit"]["values"] == {
+        "a1b2c3d4e5f6": ["pinky-01"], "999999999999": ["pinky-02"]}
+    # 이름은 둘 다 yun_map_highres_clean 이다. 이름으로 비교했으면 못 잡는다.
+    assert set(found["map"]["values"]) == {"7c9f1a2b3c4d", "ffffffffffff"}
+    assert robots["pinky-01"]["map_name"] == robots["pinky-02"]["map_name"]
+
+    # 팔은 코드 형상을 보고하지 않는다(게이트웨이가 아직 없다). 그건 불일치가
+    # 아니라 '모른다' 다 — 여기서 세면 패널이 영구히 빨갛다.
+    assert robots["omx-01"]["commit"] is None
+    assert "policy" not in found
+    # 앞선 시나리오들이 두 팔에 같은 체크포인트를 실어 뒀다.
+    assert robots["omx-01"]["policy_checkpoint_id"] == "act_omx_020000"

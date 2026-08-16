@@ -34,6 +34,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from nav_msgs.msg import OccupancyGrid
 from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
@@ -361,6 +362,10 @@ class EventGateway(Node):
         # 주기를 감시할 토픽 (§7.2). 빈 목록이면 감시하지 않는다 — 팔처럼
         # ROS 가 없는 구성이나, 토픽 구성이 다른 로봇을 위해 열어둔다.
         self.declare_parameter("watched_topics", DEFAULT_WATCHED_TOPICS)
+        # 형상 보고용 맵 이름 (§7.2 형상 패널). 지문은 /map 에서 직접 뜨고
+        # 이 값은 사람이 읽을 이름일 뿐이다 — 이름이 같아도 내용이 다를 수 있고,
+        # 판정은 지문으로 한다.
+        self.declare_parameter("map_name", "")
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -425,6 +430,18 @@ class EventGateway(Node):
                 f"watched_topics 형식 오류 (토픽:타입) — 감시에서 빠집니다: {malformed}")
         self._topic_ages = topic_watch.TopicAges([name for name, _ in watched])
         self._subscribe_watched(watched)
+
+        # 지금 돌고 있는 맵 (§7.2 형상 패널). map_server 가 latch 해두므로
+        # 구독하는 즉시 한 번 오고, 그 뒤로는 맵을 다시 실을 때만 온다.
+        # 디스크의 yaml 을 읽지 않는 이유는, 그건 런치 인자가 가리키는 파일이지
+        # map_server 가 실제로 실은 것이 아니기 때문이다.
+        self._map_name = self.get_parameter("map_name").value or None
+        self._map_hash = None
+        self.create_subscription(
+            OccupancyGrid, "/map", self._on_map,
+            QoSProfile(depth=1,
+                       reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
@@ -576,6 +593,17 @@ class EventGateway(Node):
                 "distance": distance,
             }
         self._qr_wake.set()
+
+    def _on_map(self, msg: OccupancyGrid) -> None:
+        """맵 지문. 격자 해싱은 몇 ms 지만 맵을 다시 실을 때만 일어난다."""
+        digest = inventory.map_hash(msg.info, msg.data)
+        with self._inventory_lock:
+            changed = digest != self._map_hash
+            self._map_hash = digest
+        if changed:
+            # 4대의 맵이 갈리는 사고는 대개 여기서 시작한다. 언제 바뀌었는지가
+            # 로그에 없으면 나중에 되짚을 수 없다.
+            self.get_logger().info(f"맵 지문 {digest} ({self._map_name or '이름 없음'})")
 
     def _on_guide_state(self, msg: GuideState) -> None:
         self._guide_robot_state = msg.robot_state
@@ -888,6 +916,7 @@ class EventGateway(Node):
         """이번 표본. 사실만 담는다 — 심각도 판정은 서버가 한다."""
         with self._inventory_lock:
             graph = list(self._graph_snapshot)
+            map_hash = self._map_hash
 
         processes = inventory.scan_processes()
         for process in processes:
@@ -901,6 +930,10 @@ class EventGateway(Node):
             "processes": processes,
             "workspaces": inventory.build_workspaces(processes, self._git_cache),
             "ros_domain_id": int(os.environ.get("ROS_DOMAIN_ID", 0)),
+            # 아직 /map 을 못 받았으면 None 이다. '맵이 없다' 가 아니라
+            # '아직 모른다' 이고, 서버가 그 둘을 구분해서 그린다.
+            "map_name": self._map_name,
+            "map_hash": map_hash,
         }
 
     def _inventory_loop(self) -> None:

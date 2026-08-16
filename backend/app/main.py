@@ -9,7 +9,8 @@ from fastapi import FastAPI
 
 from . import db, heartbeat, inventory_rules, registry, topic_watch
 from .routers import (
-    events, maps, orders, patients, qr, robots, sessions, slo, teleop, waypoints)
+    events, fleet, maps, orders, patients, qr, robots, sessions, slo, teleop,
+    waypoints)
 
 log = logging.getLogger("mingky")
 
@@ -189,6 +190,7 @@ app.include_router(patients.router)
 # robots.router 보다 뒤에 둔다. 경로 접두사가 같아 등록 순서가 매칭에 영향을 준다.
 app.include_router(orders.router)
 app.include_router(slo.router)
+app.include_router(fleet.router)
 app.include_router(maps.router)
 app.include_router(waypoints.router)
 app.include_router(teleop.router)

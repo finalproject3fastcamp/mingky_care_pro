@@ -192,3 +192,50 @@ def test_busiest_process_ignores_ones_without_a_reading():
 
     assert inventory.busiest_process(processes)['pid'] == 3
     assert inventory.busiest_process([{'pid': 1, 'cpu_pct': None}]) is None
+
+
+# --- 맵 지문 (monitoring-spec.md §7.2 형상 패널) ------------------------------
+
+def _grid(width=2, height=2, resolution=0.05, origin=(0.0, 0.0, 0.0)):
+    return {'width': width, 'height': height,
+            'resolution': resolution, 'origin': list(origin)}
+
+
+def test_same_map_gives_the_same_fingerprint_on_every_robot():
+    """4대가 같은 맵으로 도는지를 이 값으로 판정한다. 같은 입력에 같은 답이
+    안 나오면 판정 자체가 성립하지 않는다."""
+    first = inventory.map_hash(_grid(), [0, 0, 100, -1])
+    second = inventory.map_hash(_grid(), [0, 0, 100, -1])
+
+    assert first == second
+
+
+def test_a_different_grid_gives_a_different_fingerprint():
+    assert (inventory.map_hash(_grid(), [0, 0, 100, -1])
+            != inventory.map_hash(_grid(), [0, 0, 0, -1]))
+
+
+def test_a_shifted_origin_is_a_different_map():
+    """격자가 같아도 원점이 다르면 좌표가 통째로 밀린다. 실제로 있는 사고다."""
+    assert (inventory.map_hash(_grid(), [0, 0])
+            != inventory.map_hash(_grid(origin=(1.0, 0.0, 0.0)), [0, 0]))
+
+
+def test_signed_cells_from_rclpy_hash_the_same_as_a_plain_list():
+    """rclpy 는 int8[] 를 array.array('b') 로 준다. 미지의 셀(-1)이 있는
+    맵에서 버퍼 경로와 리스트 경로가 갈리면 로봇마다 다른 지문이 나온다."""
+    import array
+
+    cells = [0, 100, -1, 0]
+    assert (inventory.map_hash(_grid(), array.array('b', cells))
+            == inventory.map_hash(_grid(), cells))
+
+
+def test_map_fingerprint_moves_the_inventory_hash():
+    """맵이 바뀌면 본문이 다시 나가야 한다. 안 그러면 로봇 한 대만 다른 맵으로
+    도는 상태가 다음 재기동까지 서버에 안 보인다."""
+    payload = {'node_graph': [], 'processes': [], 'workspaces': [],
+               'map_name': 'yun_map', 'map_hash': 'aaaa'}
+
+    assert (inventory.inventory_hash(payload)
+            != inventory.inventory_hash({**payload, 'map_hash': 'bbbb'}))

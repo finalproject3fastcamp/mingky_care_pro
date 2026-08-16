@@ -528,6 +528,11 @@ class RobotInventoryIn(BaseModel):
     processes: list[ProcessInfo] = Field(default_factory=list)
     workspaces: list[WorkspaceInfo] = Field(default_factory=list)
     ros_domain_id: int | None = None
+    # 지금 map_server 가 실제로 실은 맵 (§7.2 형상 패널). 디스크의 yaml 이
+    # 아니라 /map 격자에서 뜬 지문이라, 런치 인자와 실제가 갈린 경우가 드러난다.
+    # 이름은 사람이 읽을 라벨일 뿐이고 판정은 지문으로 한다.
+    map_name: str | None = Field(default=None, max_length=100)
+    map_hash: str | None = Field(default=None, max_length=64)
     reported_at: datetime | None = None
 
 
@@ -559,6 +564,8 @@ class RobotInventoryOut(BaseModel):
     processes: list[ProcessInfo] = Field(default_factory=list)
     workspaces: list[WorkspaceInfo] = Field(default_factory=list)
     ros_domain_id: int | None = None
+    map_name: str | None = None
+    map_hash: str | None = None
     duplicates: list[DuplicateNodeOut] = Field(default_factory=list)
     # 정상 배치에서는 워크스페이스가 하나여야 한다. 둘 이상이면 서로 다른
     # 코드가 한 로봇에서 같이 도는 것이고, 그 상태로는 무엇을 고쳐야 하는지
@@ -644,6 +651,62 @@ class SloWindowOut(BaseModel):
     budget_remaining: int
     budget_exhausted: bool
     failed_sessions: list[SloSessionOut]
+
+
+class RobotConfigOut(BaseModel):
+    """로봇 한 대가 지금 무엇으로 돌고 있는가 (§7.2 형상 패널).
+
+    "데모가 어제는 됐는데 오늘 안 된다" 의 원인 대부분이 여기 있다. 그런데
+    지금까지 이 세 가지를 한 화면에서 볼 곳이 없었다 — 커밋은 인벤토리
+    안쪽에, 맵은 아무 데도, 체크포인트는 조제 패널에 흩어져 있었다.
+
+    타입별로 채워지는 칸이 다르다. mobile 은 코드·맵, manipulator 는
+    코드가 아니라 **정책 체크포인트와 데이터셋 revision** 이 버전이다(§4.4).
+    """
+
+    robot_id: str
+    robot_type: str
+    display_name: str
+    # 형상 보고를 마지막으로 받은 시각. None 이면 한 번도 보고하지 않았다 —
+    # OMX 는 게이트웨이가 아직 없어 정상적으로 None 이다(로드맵 6).
+    reported_at: datetime | None = None
+
+    # ---- mobile (ROS 워크스페이스와 맵)
+    commit: str | None = None
+    branch: str | None = None
+    # 커밋 안 된 변경이 있으면 커밋 해시만으로 재현이 불가능하다.
+    dirty: bool = False
+    workspace_path: str | None = None
+    map_name: str | None = None
+    # 판정은 이름이 아니라 지문으로 한다. 같은 이름의 다른 맵이 실제로 있다.
+    map_hash: str | None = None
+
+    # ---- manipulator (§4.4 — 버전의 의미가 다르다)
+    policy_checkpoint_id: str | None = None
+    policy_dataset_revision: str | None = None
+    policy_loaded_at: datetime | None = None
+
+
+class ConfigMismatchOut(BaseModel):
+    """4대 중 무엇이 갈렸는가 (§9.2 의 '로봇 4대 SHA 동일' 강제).
+
+    타입 안에서만 비교한다. OMX 의 코드 SHA 와 핑키의 코드 SHA 를 나란히
+    놓는 것은 의미가 없다 — 다른 저장소의 다른 수명주기다(§4.4).
+    """
+
+    axis: Literal["commit", "map", "policy", "dataset"]
+    robot_type: Literal["mobile", "manipulator"]
+    # 값 → 그 값으로 도는 로봇들. 몇 대 몇으로 갈렸는지가 바로 보여야 한다.
+    values: dict[str, list[str]]
+    # 비교에서 빠진 로봇. 이 판정이 몇 대를 본 것인지 같이 말하지 않으면
+    # "2대가 같다" 가 "4대가 같다" 로 읽힌다.
+    unreported: list[str] = Field(default_factory=list)
+
+
+class FleetConfigOut(BaseModel):
+    robots: list[RobotConfigOut]
+    # 갈린 축만 담는다. 비어 있으면 4대가 같은 형상으로 돌고 있다는 뜻이다.
+    mismatches: list[ConfigMismatchOut] = Field(default_factory=list)
 
 
 class ControlAuditOut(BaseModel):
