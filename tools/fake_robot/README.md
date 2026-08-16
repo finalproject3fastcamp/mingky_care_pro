@@ -27,6 +27,9 @@ python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/session_complet
 | `session_complete.yaml` | 정상 완주. arming 체인부터 충전소 복귀까지 |
 | `session_with_intervention.yaml` | 완주했지만 사람이 손댄 세션. §1.1 판정이 갈리는 지점 |
 | `type_mismatch.yaml` | 오배선 — 조제 스테이션이 주행 이벤트를 발행 |
+| `manipulator_cycle.yaml` | 조제 사이클 정상 완주. 세션 없이 도는 유일한 경로 |
+| `manipulator_pick_retry.yaml` | pick 실패 후 재시도로 완주. **이것은 성공이다**(§4.4) |
+| `manipulator_cycle_aborted.yaml` | 서보 결함으로 포기. 위와의 차이가 알림 등급을 가른다 |
 
 ```yaml
 name: 세션 완주 (p001, 3단계)
@@ -117,15 +120,25 @@ heartbeat 수신 → link_state 가 unknown 을 벗어남
 검사만 건너뛴다. 코드 존재와 `level` 은 그대로 본다 — 오배선 시나리오라고 아무
 코드나 쓸 수 있는 것은 아니다.
 
-## 왜 mobile 만 흉내내는가
+## 팔(manipulator)을 흉내낼 때
 
-팔은 지금 관제에 보고하는 채널이 없다. §6.2 의 `arm.*` 가 미정의고,
-[`backend/README.md`](../../backend/README.md) 가 적어둔 대로 OMX 는 관제 PC 에
-USB 직결이라 **잃을 네트워크 링크가 없어** heartbeat 대상도 아니다. 지금 팔을
-흉내내면 없는 규약을 지어내게 된다. `arm.*` 정본이 생기면(로드맵 6) 붙인다.
+§6.2 의 `manipulator.*` 정본이 서면서 흉내낼 규약이 생겼다. 실기(OMX)는 아직
+이 코드를 내보내지 않으므로 **지금은 이 하네스가 유일한 발행 측**이고, 팔
+게이트웨이를 기다리지 않고 조제 패널을 만들 수 있다.
 
-`type_mismatch.yaml` 은 예외다. 팔을 흉내내는 게 아니라 **팔을 잘못 배선했을 때**
-서버가 어떻게 반응하는지를 본다.
+팔의 어휘는 mobile 과 다르다. 시나리오를 쓸 때 걸리는 것들:
+
+- **arming 도 QR 스캔도 없다.** `activation.*` 는 mobile 전용이라 팔에서 내면
+  오배선으로 잡힌다. `arm` · `qr_scan` 액션을 쓰지 마라
+- **`session_id` 가 0 이다.** `qr_scan` 을 거치지 않으므로 세션이 안 붙는다.
+  백엔드가 NULL 로 저장한다 — 조제가 특정 안내에 딸리는 경우가 생기면 그때
+  채운다
+- **배터리 스텝이 없다.** OMX 는 유선 급전이다
+- **heartbeat 는 보낸다.** 공통 축이라 팔에도 나가지만, USB 직결이라
+  `link_state` 가 mobile 과 같은 뜻이 아니다
+
+`type_mismatch.yaml` 은 팔을 흉내내는 게 아니라 **팔을 잘못 배선했을 때** 서버가
+어떻게 반응하는지를 본다.
 
 ## 알아둘 것
 
