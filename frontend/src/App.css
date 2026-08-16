@@ -2642,3 +2642,53 @@
 @media (max-width: 1100px) {
   .manipulator-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 토픽 주기 감시 (§7.2) ──────────────────────────────────────────────
+   상태 글자와 색이 같은 근거를 말해야 한다. 색은 서버가 내려준 state 로만
+   칠한다 — 화면이 자기 임계로 칠하면 config/topic_watch.yaml 을 고쳐도
+   색이 안 바뀐다. */
+
+.topic-watch { display: grid; gap: 10px; align-content: start; }
+
+.topic-watch__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.topic-watch__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) 72px minmax(120px, 1fr) 92px;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+
+/* 끊긴 것만 테두리를 준다. 전부 강조하면 아무것도 강조되지 않는다. */
+.topic-watch__row--stale { background: var(--danger-bg); }
+
+.topic-watch__name { font-weight: 600; }
+.topic-watch__state { font-weight: 600; }
+.topic-watch__rate,
+.topic-watch__age { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.topic-watch__age { text-align: right; }
+
+/* 사유는 줄을 통째로 쓴다. 좁은 칸에 넣으면 두 글자씩 끊긴다. */
+.topic-watch__why {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.topic-watch small { color: var(--text-subtle); font-size: 0.76rem; line-height: 1.5; }
+
+@media (max-width: 720px) {
+  .topic-watch__row { grid-template-columns: 1fr auto; }
+  .topic-watch__age { grid-column: 2; }
+}

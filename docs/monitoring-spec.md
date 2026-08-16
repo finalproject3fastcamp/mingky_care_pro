@@ -168,7 +168,7 @@ heartbeat 를 이벤트 큐에 넣으면 안 된다. 두절 중 heartbeat 가 �
 | 생존 | heartbeat, `robot.comm_lost/restored` | — | 시리얼(U2D2) 응답 |
 | 형상 | git SHA, 부팅 경과 | 맵 파일 해시 | **정책 체크포인트 · 데이터셋 revision** |
 | 리소스 | CPU, 디스크 | Wi-Fi RSSI, 배터리 | 서보 온도 · 전류 |
-| 진행 | `session.*`, 이벤트 스트림 | `nav.*` `dock.*` `localize.*` `activation.*` | `manipulator.*` |
+| 진행 | `session.*`, 이벤트 스트림 | `nav.*` `dock.*` `localize.*` `activation.*`, 토픽 주기 | `manipulator.*` |
 | 제어 | orders + ack, 감사 로그 | system start/stop, teleop | 홈 복귀, 재시도 |
 | SLI | — | goal 성공률, stuck 빈도 | 사이클 타임, pick 성공률 |
 
@@ -223,7 +223,7 @@ pick 이 오늘 안 되는 원인은 코드가 아니라 체크포인트를 바�
 
 ## 6. 이벤트 코드 정본
 
-현재 55개. 영역별로 `qr` `patient` `fire` `nav` `waypoint` `localize` `dock`
+현재 57개. 영역별로 `qr` `patient` `fire` `nav` `waypoint` `localize` `dock`
 `session` `activation` `robot` `manipulator` `system`.
 
 ### 6.1 타입 제한 — `robot_types`
@@ -299,7 +299,7 @@ ROS 가 없어 `mingky_event_gateway`(ROS2 노드)를 재사용할 수 없다.
 | 탭 | 현재 | 추가 계획 |
 | --- | --- | --- |
 | `events` | 타임라인, 레벨·노드 필터, 미등록 코드 패널 | 세션 리플레이 (지도 + 이벤트 마커) |
-| `system` | systemd 유닛 제어, AMCL 재탐색, CPU·큐 적체 | **토픽 주기(Hz) 감시**, 형상 패널 |
+| `system` | systemd 유닛 제어, AMCL 재탐색, CPU·큐 적체, 토픽 주기(Hz) | 형상 패널 |
 | `waypoints` | waypoint 관리·테스트 | — |
 | `cameras` | MJPEG 프리뷰 | — |
 | `fleet` | **SLO 현황**, 오차 예산, 실패 세션, 4대 요약, 최근 개입 | 선행 지표 SLI 집계 |
@@ -321,14 +321,35 @@ ROS 가 없어 `mingky_event_gateway`(ROS2 노드)를 재사용할 수 없다.
 | 예산 잔량 0 | 예산 소진 | 잔량 0 은 아직 목표 안이다 (§1.2) |
 | 기록 안 함 | 익명 기록 | 후자는 명령은 갔고 이름만 없다 |
 
-**토픽 주기 감시** — 스펙에 "주기 이상 여부" 를 적어놓고 미구현이다. 현재
-`system` 탭은 systemd 유닛 상태만 본다. 실전 장애 모드는 **유닛은 active 인데
-`/scan` 이 안 나오는 것**이다. 라이다 USB 가 죽어도 노드는 살아있다.
+**토픽 주기 감시 — 구현됨.** `system` 탭이 systemd 유닛 상태만 보던 동안,
+실전 장애 모드인 **유닛은 active 인데 `/scan` 이 안 나오는 상태**가 관제에서
+정상으로 보였다. 라이다 USB 가 죽어도 노드는 살아있다.
 
-구현은 §3.3 의 두절 판정과 같은 구조다. 감시 노드가 `/scan` `/odom`
-`/amcl_pose` `/cmd_vel` 을 구독해 콜백에서 마지막 수신 시각만 갱신하고,
-heartbeat payload 에 `{topic: age_sec}` 로 실어 보낸다. 도착하는 데이터가
-아니라 **경과 시간**으로 판정한다. `ros2 topic hz` 를 서브프로세스로 돌리지 않는다.
+구조는 §3.3 의 두절 판정과 같다. 게이트웨이가 `/scan` `/odom` `/amcl_pose`
+`/cmd_vel` 을 구독해 콜백에서 **마지막 수신 시각만** 갱신하고(메시지 내용은
+보지 않는다) heartbeat 에 실어 보낸다. `ros2 topic hz` 를 서브프로세스로
+돌리지 않는다 — 호출마다 노드를 새로 띄우는 비용이 5초 주기에 안 맞는다.
+
+- **나이만 보내지 않는다.** 라이다가 USB 대역 부족으로 10Hz → 3Hz 가 되면
+  마지막 수신은 0.33초 전이라 어떤 나이 임계에도 안 걸린다. 창 안의 수신
+  횟수로 잰 Hz 를 같이 보내고, 기대의 `min_hz_ratio` 아래면 늦은 것으로 본다.
+- **한 번도 못 받은 토픽도 나이가 있다.** 감시 시작 시각부터 잰다. 그래야
+  '부팅 이후 라이다가 한 번도 안 떴다' 를 같은 임계 하나가 함께 잡는다.
+- **판정은 서버가 한다** — `config/topic_watch.yaml` · `app/topic_watch.py`.
+  로봇은 사실만 보고한다(`duplicate_node_severity.yaml` 과 같은 이유).
+  화면도 판정을 다시 하지 않는다 — 응답에 `state` 가 실려 온다.
+- **상시 발행이 아닌 토픽을 고장으로 그리지 않는다.** `/cmd_vel` 은 서 있는
+  로봇에서, `/amcl_pose` 는 AMCL 이 파티클을 갱신하지 않을 때 안 나오는 것이
+  정상이다. `always_on: false` 가 그 구분이고 이벤트를 발행하지 않는다. 단
+  **발행은 되는데 느린 경우**는 그대로 늦은 것으로 본다.
+- **끊기면 화면 밖으로 나간다** — `robot.topic_stale`(error) ·
+  `robot.topic_restored`(info). 발행 측은 로봇이 아니라 서버다
+  (`source_node: backend.topic_watch`). 진입·복귀에 한 번씩만 낸다.
+  두절된 로봇은 건너뛴다 — `robot.comm_lost` 가 이미 말한 사실이다.
+
+ROS 개념이라 `MobileRobotOut` 에만 있다. OMX 는 LeRobot 시리얼 직결이라 토픽이
+없고, 빈 목록을 내려보내면 화면이 "감시 중인데 아무것도 안 온다" 로 읽는다.
+`scenarios/topic_stale.yaml` 이 이 전체 경로를 실기 없이 재생한다.
 
 **형상 패널** — `schemas.py` 에 노드별 `commit` 이 있는데 "이 로봇이 지금 무슨
 커밋·무슨 맵·무슨 정책으로 도는가" 를 한눈에 보는 곳이 없다. 데모가 어제는
@@ -483,7 +504,9 @@ detach 는 구간 길이를 알고 싶을 때 쓰는 부가 정보다.
   6명 중 절반이 하드웨어 큐에서 빠진다
 - 실패 경로를 마음대로 만든다. `comm_lost` 를 보려고 Wi-Fi 를 끊을 필요가 없다.
   오배선(`scenarios/type_mismatch.yaml`)처럼 실기로는 게이트웨이를 잘못 물리거나
-  `robot_id` 를 오타내야 나오는 것도 한 줄로 재현된다
+  `robot_id` 를 오타내야 나오는 것도 한 줄로 재현된다. 라이다 두절
+  (`scenarios/topic_stale.yaml`)도 마찬가지다 — 실기로는 사람이 로봇 앞에 서서
+  USB 를 뽑아야 하고, 그건 CI 에서 못 한다
 - 그대로 **통합 테스트 픽스처**가 된다 — `backend/tests/e2e/` 가 이걸 쓴다 (§8.1)
 - **`manipulator.*` 를 팔 실기 없이 먼저 설계·검증**할 수 있다 (§6.2)
 - 발표용 데모 모드가 공짜로 따라온다
@@ -641,7 +664,7 @@ heartbeat 는 팔에도 보낸다 — §4.3 의 공통 축이고 `type_mismatch.
 | ~~5~~ | ~~세션 완주율 집계 + `fleet` 탭~~ | **완료** — `/slo/completion` · `fleet` 탭. 선행 지표 SLI 는 남음 |
 | 6 | `manipulator.*` 이벤트 코드 + 팔 게이트웨이 연결 (§6.2) | **정본·검증·하네스 완료.** 남은 것은 OMX 쪽 발행기 — ROS 가 없어 `mingky_event_gateway` 를 못 쓴다 |
 | ~~7~~ | ~~`system` 탭 타입 분기 + 팔 패널 (§7.3)~~ | **완료** — `RobotOut` 유니온 · `dispense.py` · `ManipulatorPanel`. 제어 버튼은 게이트웨이 대기 |
-| 9 | 토픽 주기(Hz) 감시 (§7.2) | 못 잡는 장애 모드를 잡음 |
+| ~~9~~ | ~~토픽 주기(Hz) 감시 (§7.2)~~ | **완료** — `topic_watch.py`(로봇·서버 양쪽) · `robot.topic_stale`. `test_topic_watch.py` |
 | 10 | 형상 패널 (SHA · 맵 해시 · 체크포인트) | 재현성 문제의 대부분 |
 | 11 | 서보 온도·전류 수집 (§4.4) | 유일한 실질 예지보전 신호 |
 | 12 | 알림 웹훅 (§8.4) | 원칙 4 |

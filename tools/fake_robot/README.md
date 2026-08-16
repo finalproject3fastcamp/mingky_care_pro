@@ -30,6 +30,7 @@ python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/session_complet
 | `manipulator_cycle.yaml` | 조제 사이클 정상 완주. 세션 없이 도는 유일한 경로 |
 | `manipulator_pick_retry.yaml` | pick 실패 후 재시도로 완주. **이것은 성공이다**(§4.4) |
 | `manipulator_cycle_aborted.yaml` | 서보 결함으로 포기. 위와의 차이가 알림 등급을 가른다 |
+| `topic_stale.yaml` | 라이다는 죽었는데 유닛은 active. 서버가 heartbeat 만 보고 판정한다 |
 
 ```yaml
 name: 세션 완주 (p001, 3단계)
@@ -58,11 +59,17 @@ steps:
 | `qr_scan` | `POST /qr/scan`. 돌려받은 `session_id` 를 **이후 이벤트에 자동으로 단다** |
 | `event` | `POST /events`. `level` 은 생략하면 정본에서 가져온다 |
 | `order` | `POST /robots/{id}/orders`. `command` · `argument` · `actor` |
+| `topics` | heartbeat 에 싣는 토픽 나이·주기를 갈아끼운다. `set: {/scan: 30}` |
 
 heartbeat 는 스텝이 아니라 백그라운드 스레드가 3초마다 계속 보낸다. 스텝으로
 두면 매 시나리오가 heartbeat 로 뒤덮인다. 본문에는 `system_state` 를 싣는데,
 기본값 `active` 가 아니면 서버가 제어 명령을 `robot system is …` 409 로 막는다.
 로봇마다 `system_state: inactive` 로 덮어써서 그 거부 경로를 만들 수도 있다.
+
+토픽 나이·주기(§7.2)도 같은 본문에 실린다. 로봇에 `topics` 를 적어 초기값을
+주고, `topics` 액션으로 시나리오 중간에 바꾼다. 나이만 필요하면 `/scan: 0.1`,
+주기까지 재현하려면 `/scan: {age_sec: 0.1, hz: 10}` 이다. 라이다가 절반 속도로
+도는 장애는 나이로는 절대 안 잡히므로 그때는 `hz` 를 같이 줘야 한다.
 
 ### `order` 는 로봇이 아니라 사람 쪽이다
 

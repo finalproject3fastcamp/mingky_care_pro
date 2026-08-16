@@ -106,8 +106,14 @@ class Robot:
     # 기본이 active 인 것은 그게 정상 가동 중인 게이트웨이가 보고하는 값이기
     # 때문이다. 예전처럼 빈 본문을 보내면 서버는 unknown 으로 기억하고,
     # 제어 명령(goto·localize 등)을 "robot system is unknown" 409 로 막는다 —
-    # 개입 시나리오 자체를 만들 수 없다.
+    # 개입 시나리오 자체를 막는다.
     system_state: str = "active"
+    # heartbeat 에 싣는 토픽 나이·주기 (§7.2). `{토픽: {age_sec, hz}}`.
+    #
+    # 라이다 USB 를 뽑지 않고도 `/scan` 두절을 재현하려면 이 값이 필요하다.
+    # 실기에서 이 장애를 만들려면 사람이 로봇 앞에 서서 케이블을 뽑아야 하고,
+    # 그건 CI 에서 못 한다.
+    topics: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -142,7 +148,7 @@ def _robot(entry: dict) -> Robot:
     """
     entry = dict(entry)
     unknown = set(entry) - {
-        "id", "type", "battery_percent", "voltage", "system_state"}
+        "id", "type", "battery_percent", "voltage", "system_state", "topics"}
     if unknown:
         raise ValueError(f"robots 에 모르는 키: {', '.join(sorted(unknown))}")
     return Robot(
@@ -151,7 +157,25 @@ def _robot(entry: dict) -> Robot:
         battery_percent=entry.get("battery_percent", 90),
         voltage=entry.get("voltage", 11.8),
         system_state=entry.get("system_state", "active"),
+        topics=_topics(entry.get("topics") or {}),
     )
+
+
+def _topics(raw: dict) -> dict:
+    """시나리오의 `topics` 를 heartbeat 본문 형태로 옮긴다.
+
+    사람이 쓰는 쪽은 `/scan: 0.1` 로 짧게 적고(나이만), 주기까지 재현할 때만
+    `/scan: {age_sec: 0.1, hz: 10}` 로 쓴다. 게이트웨이가 보내는 형태는
+    후자 하나뿐이므로 여기서 한 번에 맞춘다.
+    """
+    result = {}
+    for topic, value in raw.items():
+        if isinstance(value, dict):
+            result[topic] = {"age_sec": value.get("age_sec"),
+                             "hz": value.get("hz")}
+        else:
+            result[topic] = {"age_sec": float(value), "hz": None}
+    return result
 
 
 def load_scenario(path) -> Scenario:
@@ -297,7 +321,10 @@ class Harness:
             try:
                 request(self.base_url, "POST",
                         f"/robots/{robot.robot_id}/heartbeat",
-                        {"system_state": robot.system_state})
+                        # 토픽은 매번 현재값을 읽는다. topics 액션이 시나리오
+                        # 중간에 갈아끼우면 다음 heartbeat 부터 반영된다.
+                        {"system_state": robot.system_state,
+                         "topics": robot.topics})
             except Exception as exc:      # 진짜 로봇도 실패하면 그냥 버린다
                 self.log(f"  heartbeat 실패 {robot.robot_id}: {exc}")
             self._stop.wait(HEARTBEAT_INTERVAL_SEC)
@@ -375,8 +402,22 @@ class Harness:
         self.log(f"  명령 {body['command']}({body['argument']}) "
                  f"← {who} ({robot.robot_id}) order={result['order_id']}")
 
+    def do_topics(self, robot: Robot, args: dict) -> None:
+        """토픽 나이·주기를 갈아끼운다. 실기로는 케이블을 뽑아야 나오는 상태다.
+
+        기존 값에 덮어쓴다. 통째로 갈아치우면 `/scan` 하나를 죽이려고 나머지
+        세 토픽을 매번 다시 적어야 하고, 그러면 시나리오가 무엇을 바꾸려는
+        것인지 안 보인다.
+        """
+        merged = dict(robot.topics)
+        merged.update(_topics(args.get("set") or {}))
+        # 새 dict 를 통째로 건다. heartbeat 스레드가 같은 dict 를 읽는 중이다.
+        robot.topics = merged
+        self.log(f"  토픽 {sorted(args.get('set') or {})} ({robot.robot_id})")
+
     _ACTIONS = {
         "battery": do_battery,
+        "topics": do_topics,
         "arm": do_arm,
         "qr_scan": do_qr_scan,
         "event": do_event,

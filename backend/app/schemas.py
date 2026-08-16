@@ -284,6 +284,49 @@ class ManipulatorDetail(BaseModel):
     cycle_time_p95_ms: int | None = None
 
 
+class TopicSampleIn(BaseModel):
+    """로봇이 보고하는 토픽 하나의 사실 (§7.2, 로드맵 9).
+
+    판정은 담지 않는다. "몇 초 전에 마지막으로 받았고 최근 주기가 몇 Hz 였는가"
+    까지가 로봇의 몫이고, 그게 정상인지는 서버가 config/topic_watch.yaml 로
+    정한다 — 임계를 바꾸려고 로봇을 재배포하지 않는다.
+
+    age_sec 은 한 번도 못 받았어도 None 이 아니다. 감시를 시작한 시각부터
+    잰다 — 그래야 '부팅 이후 라이다가 한 번도 안 뜬' 경우가 시간이 갈수록
+    나빠지는 값으로 드러난다. None 은 구버전 게이트웨이 대비로만 열어둔다.
+    """
+
+    age_sec: float | None = Field(default=None, ge=0)
+    # 경과 시간만으로는 못 잡는 장애가 있다. 라이다가 USB 대역 부족으로
+    # 10Hz → 3Hz 가 되면 나이는 0.33초라 어떤 임계에도 안 걸린다.
+    hz: float | None = Field(default=None, ge=0)
+
+
+class TopicAgeOut(BaseModel):
+    """토픽 하나의 나이와 그 판정 (§7.2).
+
+    판정을 프론트가 다시 하지 않게 state 까지 실어 보낸다. 임계가 서버 설정
+    파일에 있는데 화면이 자기 숫자로 색을 칠하면 두 곳이 조용히 갈라진다.
+    """
+
+    topic: str
+    age_sec: float | None = None
+    hz: float | None = None
+    expected_hz: float | None = None
+    # fresh    정상
+    # slow     늦다 (warn 초과 또는 측정 Hz 가 기대의 min_hz_ratio 미만)
+    # stale    사실상 끊겼다
+    # idle     always_on 이 아닌 토픽이 안 오는 중. 대기 로봇의 정상 상태다
+    # missing  로봇이 나이를 못 냈다 (구버전 게이트웨이)
+    # unwatched 정본에 있는데 로봇이 보고하지 않는다 — 감시 노드가 안 보고 있다
+    # unrated  로봇이 보고했는데 정본에 임계가 없다. 표시만 하고 판정하지 않는다
+    state: Literal[
+        "fresh", "slow", "stale", "idle", "missing", "unwatched", "unrated"]
+    always_on: bool = False
+    # 이 토픽이 끊기면 무엇이 안 되는가. 화면이 문구를 만들지 않게 서버가 준다.
+    why: str = ""
+
+
 class RobotBase(BaseModel):
     """로봇 종류와 무관하게 성립하는 것만 (§4.3 의 공통 축).
 
@@ -338,6 +381,11 @@ class MobileRobotOut(RobotBase):
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
     ] | None = None
+    # 토픽 주기 감시 (§7.2). 공통 축이 아니라 여기 두는 이유는 ROS 개념이라서다
+    # — OMX 는 LeRobot 시리얼 직결이라 토픽 자체가 없고, 팔에 빈 목록을 내려
+    # 보내면 화면이 "감시 중인데 아무것도 안 온다" 로 읽는다.
+    # 나쁜 것부터 정렬돼 온다. 화면이 다시 정렬하지 않는다.
+    topics: list[TopicAgeOut] = Field(default_factory=list)
 
 
 class ManipulatorRobotOut(RobotBase):
@@ -407,6 +455,14 @@ class RobotHeartbeatIn(BaseModel):
     # 코어가 여러 개면 100 을 넘을 수 있으므로 상한을 두지 않는다.
     max_node_cpu_pct: float | None = Field(default=None, ge=0)
     max_node_cpu_name: str | None = Field(default=None, max_length=100)
+    # 토픽별 마지막 수신 경과와 최근 주기 (§7.2). 감시 노드가 콜백에서 시각만
+    # 갱신하고 게이트웨이가 여기 싣는다. `ros2 topic hz` 를 서브프로세스로
+    # 돌리지 않는다 — 호출마다 노드를 새로 띄우는 비용이 5초 주기에 안 맞는다.
+    #
+    # 개수를 제한하는 이유는 payload 방어다. 로봇이 토픽 200개를 실어 보내면
+    # 5초 × 로봇 수로 계속 들어온다. 정본(config/topic_watch.yaml)이 네 개고,
+    # 여유를 둬도 이 상한을 넘을 이유가 없다.
+    topics: dict[str, TopicSampleIn] = Field(default_factory=dict, max_length=20)
 
 
 class RobotHeartbeatOut(BaseModel):
