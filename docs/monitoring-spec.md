@@ -151,9 +151,12 @@ heartbeat 를 이벤트 큐에 넣으면 안 된다. 두절 중 heartbeat 가 �
 거르고 있어 손댈 곳이 없었다. 003 은 고치지 않았다: 적용된 마이그레이션은
 그 DB 가 실제로 무엇을 거쳤는지에 대한 기록이고, 004~009 가 전제하는 상태다.
 
-> 이 절을 고칠 때 `arm` 을 일괄 치환하지 않는다. `arming` 의 `arm` 과 §6.2 의
-> `arm.*` 이벤트 접두사까지 같이 바뀌면서 이 절이 자기 자신을 지운다.
-> 실제로 한 번 그렇게 깨졌다.
+이벤트 접두사도 같은 이유로 `manipulator.*` 로 갔다(§6.2). `robot_type` 값과
+글자가 같아져 §6.1 의 `robot_types` 검증과 대칭이 된다.
+
+> 이 절을 고칠 때 `arm` 을 일괄 치환하지 않는다. 남은 `arm` 은 전부 활성화
+> 쪽이다 — `POST /robots/{id}/arm` · `arming.py` · `activation.*`. 같이 바뀌면
+> 이 절이 자기 자신을 지운다. 실제로 한 번 그렇게 깨졌다.
 
 `activation.*` 는 `mobile` 전용으로 남는다. `routers/robots.py` 가
 `robot_type != 'mobile'` 인 로봇의 arming 을 이미 거부한다.
@@ -165,7 +168,7 @@ heartbeat 를 이벤트 큐에 넣으면 안 된다. 두절 중 heartbeat 가 �
 | 생존 | heartbeat, `robot.comm_lost/restored` | — | 시리얼(U2D2) 응답 |
 | 형상 | git SHA, 부팅 경과 | 맵 파일 해시 | **정책 체크포인트 · 데이터셋 revision** |
 | 리소스 | CPU, 디스크 | Wi-Fi RSSI, 배터리 | 서보 온도 · 전류 |
-| 진행 | `session.*`, 이벤트 스트림 | `nav.*` `dock.*` `localize.*` `activation.*` | `arm.*` (미정의) |
+| 진행 | `session.*`, 이벤트 스트림 | `nav.*` `dock.*` `localize.*` `activation.*` | `manipulator.*` |
 | 제어 | orders + ack, 감사 로그 | system start/stop, teleop | 홈 복귀, 재시도 |
 | SLI | — | goal 성공률, stuck 빈도 | 사이클 타임, pick 성공률 |
 
@@ -220,8 +223,8 @@ pick 이 오늘 안 되는 원인은 코드가 아니라 체크포인트를 바�
 
 ## 6. 이벤트 코드 정본
 
-현재 42개. 영역별로 `qr` `patient` `fire` `nav` `waypoint` `localize` `dock`
-`session` `activation` `robot` `system`.
+현재 55개. 영역별로 `qr` `patient` `fire` `nav` `waypoint` `localize` `dock`
+`session` `activation` `robot` `manipulator` `system`.
 
 ### 6.1 타입 제한 — `robot_types`
 
@@ -247,25 +250,40 @@ type_mismatches` 로 게이트웨이에도 돌려준다. 기록을 잃지 않으
 분류를 몰라서 판정할 수 없는 경우 — `robots` 에 없는 로봇 — 는 오배선이 아니다.
 등록 누락이라는 다른 문제이므로 경고하지 않는다.
 
-### 6.2 `arm.*` 신설 — 팔은 현재 아무것도 보고하지 않는다
+### 6.2 `manipulator.*` — 정본에 섰다
 
-정본에 팔 전용 코드가 **하나도 없다.** 조제 로봇 2대가 관제 시스템에 보이지
-않는다는 뜻이다. 최소 집합:
+정본에 팔 전용 코드가 하나도 없어 조제 로봇 2대가 관제에 보이지 않았다.
+9개로 최소 집합을 세웠다.
 
 | 코드 | level | payload |
 | --- | --- | --- |
-| `arm.cycle_started` | info | `order_id, medication_id` |
-| `arm.pick_succeeded` | info | `medication_id, attempt, duration_ms` |
-| `arm.pick_failed` | warning | `medication_id, attempt, reason` |
-| `arm.place_succeeded` | info | `tray_slot` |
-| `arm.cycle_completed` | info | `order_id, duration_ms` |
-| `arm.cycle_aborted` | error | `order_id, reason` |
-| `arm.servo_fault` | error | `joint, fault_bits, temp_c` |
-| `arm.policy_loaded` | info | `checkpoint_id, dataset_revision` |
-| `arm.homing_required` | warning | `reason` |
+| `manipulator.cycle_started` | info | `dispense_id, medication_id` |
+| `manipulator.pick_succeeded` | info | `medication_id, attempt, duration_ms` |
+| `manipulator.pick_failed` | warning | `medication_id, attempt, reason` |
+| `manipulator.place_succeeded` | info | `tray_slot` |
+| `manipulator.cycle_completed` | info | `dispense_id, duration_ms` |
+| `manipulator.cycle_aborted` | error | `dispense_id, reason` |
+| `manipulator.servo_fault` | error | `joint, fault_bits, temp_c` |
+| `manipulator.policy_loaded` | info | `checkpoint_id, dataset_revision` |
+| `manipulator.homing_required` | warning | `reason` |
 
-`arm.pick_failed` 는 `warning` 이다 — 확률적 실패는 정상 동작이므로 `error` 로
-올리면 안 된다(§4.4). `error` 는 사이클 포기와 서보 결함에만 쓴다.
+**접두사는 `arm.*` 이 아니다.** `robot_type` 값과 같은 글자로 맞춰 §6.1 검증과
+대칭이 되게 했고, `arming` 과의 충돌(§4.2)도 애초에 만들지 않는다.
+
+**조제 지시는 `order_id` 가 아니라 `dispense_id` 다.** `order_id` 는 제어 명령
+큐의 UUID 로 이미 쓰이고 있다(`app/orders.py` · `control_audit.order_id`).
+같은 이름을 주면 §4.2 와 같은 종류의 충돌이 하나 더 생긴다.
+
+`manipulator.pick_failed` 는 `warning` 이다 — 확률적 실패는 정상 동작이므로
+`error` 로 올리면 안 된다(§4.4). `error` 는 사이클 포기와 서보 결함에만 쓴다.
+
+**`session_id` 는 선택이다.** 조제가 특정 환자의 안내에 딸리면 채우고 아니면
+0 이다(`ingest` 가 NULL 로 바꾼다). §1.1 판정은 `robot.estop_engaged` ·
+`robot.paused` 두 코드만 보므로 어느 쪽이든 완주율에 섞이지 않는다.
+
+**발행 측은 아직 없다.** 정본과 검증 경로만 섰고, OMX 가 이 코드를 실제로
+내보내는 게이트웨이는 로드맵 6 의 남은 절반이다 — OMX 는 LeRobot 시리얼 직결에
+ROS 가 없어 `mingky_event_gateway`(ROS2 노드)를 재사용할 수 없다.
 
 ---
 
@@ -325,8 +343,8 @@ heartbeat payload 에 `{topic: age_sec}` 로 실어 보낸다. 도착하는 데�
 | 끼임 빈도 | `nav.stuck` / 세션 | mobile | 선행 지표 |
 | QR 성공률 | `qr.scan_ok / (ok + failed)` | mobile | 선행 지표 |
 | 구간 이동 시간 p50/p95 | `goal_sent → goal_succeeded` 간격 | mobile | 진단용 |
-| pick 성공률 | `arm.pick_succeeded / (succeeded + failed)` | manipulator | 선행 지표 |
-| 사이클 타임 p50/p95 | `arm.cycle_completed.duration_ms` | manipulator | 진단용 |
+| pick 성공률 | `manipulator.pick_succeeded / (succeeded + failed)` | manipulator | 선행 지표 |
+| 사이클 타임 p50/p95 | `manipulator.cycle_completed.duration_ms` | manipulator | 진단용 |
 
 선행 지표는 SLO 가 깨지기 **전에** 움직인다. 주행 성공률이 3일에 걸쳐 98%→85%
 로 내려가면 완주율이 곧 따라 내려온다 — 바퀴나 맵을 보라는 신호다.
@@ -392,7 +410,7 @@ OTA 보다 CI 가 병목이다. 순서대로 한다.
   mingky-*` 로 시작하고, 필요해지면 관제 서버로 포워딩한다. Loki 는 이 규모에 과하다.
 - **rosbag** — 상시 기록은 SD카드를 죽인다. **트리거 기반 링 버퍼**를 쓴다.
   최근 60초를 메모리에 물고 있다가 `nav.stuck` · `nav.goal_aborted` ·
-  `arm.cycle_aborted` 에서만 디스크로 덤프한다. 실패 순간 30초가 정상 주행
+  `manipulator.cycle_aborted` 에서만 디스크로 덤프한다. 실패 순간 30초가 정상 주행
   10시간보다 가치 있다. 덤프 경로를 이벤트 payload 에 넣으면 대시보드에서 바로 열린다.
 
 ### 8.3 원격 개입
@@ -417,10 +435,10 @@ detach 는 구간 길이를 알고 싶을 때 쓰는 부가 정보다.
 규모가 작으므로 도구보다 약속이 중요하다.
 
 1. **알림 라우팅** — `robot.comm_lost` · `robot.battery_low` ·
-   `robot.estop_engaged` · `fire.detected` · `arm.servo_fault` 는 화면 밖으로
+   `robot.estop_engaged` · `fire.detected` · `manipulator.servo_fault` 는 화면 밖으로
    나간다. Slack/Discord 웹훅 하나면 된다.
 2. **심각도 분리** — "즉시 사람 호출" 등급은 손에 꼽게 유지한다. 알림이 흔해지면
-   무시된다. 확률적 실패(`arm.pick_failed`)는 절대 이 등급에 넣지 않는다.
+   무시된다. 확률적 실패(`manipulator.pick_failed`)는 절대 이 등급에 넣지 않는다.
 3. **런북** — 증상별 1페이지. `nav2-debugging.md` 가 이미 그 형태다. 우선
    `comm_lost` · 끼임 · QR 실패 · pick 연속 실패 네 가지.
 4. **사후 기록** — 5줄 회고: 무엇이 보였나 / 왜 늦게 알았나 / 무슨 계기판이
@@ -451,7 +469,7 @@ detach 는 구간 길이를 알고 싶을 때 쓰는 부가 정보다.
   오배선(`scenarios/type_mismatch.yaml`)처럼 실기로는 게이트웨이를 잘못 물리거나
   `robot_id` 를 오타내야 나오는 것도 한 줄로 재현된다
 - 그대로 **통합 테스트 픽스처**가 된다 — `backend/tests/e2e/` 가 이걸 쓴다 (§8.1)
-- **`arm.*` 를 팔 실기 없이 먼저 설계·검증**할 수 있다 (§6.2)
+- **`manipulator.*` 를 팔 실기 없이 먼저 설계·검증**할 수 있다 (§6.2)
 - 발표용 데모 모드가 공짜로 따라온다
 
 시나리오는 YAML 로 두고 `event_codes.yaml` 을 참조한다. 코드가 정본에 있는지,
@@ -459,10 +477,17 @@ detach 는 구간 길이를 알고 싶을 때 쓰는 부가 정보다.
 정본이 바뀌면 가짜 로봇이 먼저 깨지므로 정본 준수 검사 역할까지 한다.
 `backend/tests/test_fake_robot_scenarios.py` 가 그 '먼저 깨진다' 를 CI 로 옮긴다.
 
-**mobile 만 흉내낸다.** 팔은 지금 관제에 보고하는 채널이 없다 — §6.2 의 `arm.*`
-가 미정의고, OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없어 heartbeat
-대상도 아니다(§4.3). 지금 흉내내면 없는 규약을 지어내게 된다. `arm.*` 정본이
-생기면(로드맵 6) 붙인다.
+**팔도 흉내낸다.** §6.2 정본이 서면서 규약이 생겼다 —
+`scenarios/manipulator_cycle.yaml`(정상 조제) ·
+`manipulator_pick_retry.yaml`(재시도 끝 성공) ·
+`manipulator_cycle_aborted.yaml`(포기 · 서보 결함)이 조제 사이클을 재생한다.
+실기가 아직 이 코드를 내보내지 않으므로, 지금은 **하네스가 유일한 발행 측**이다.
+
+heartbeat 는 팔에도 보낸다 — §4.3 의 공통 축이고 `type_mismatch.yaml` 이 이미
+그렇게 돌고 있다. 다만 **팔에서 `link_state` 가 뜻하는 바는 다르다.** OMX 는
+관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없고, 실제 생존 신호는 시리얼
+(U2D2) 응답이다. 화면이 이 둘을 같은 배지로 그리면 안 된다 — 로드맵 7 에서
+정한다.
 
 ### 9.2 전제를 코드가 강제하게 (원칙 5)
 
@@ -598,7 +623,7 @@ detach 는 구간 길이를 알고 싶을 때 쓰는 부가 정보다.
 | ~~8~~ | ~~CI 게이트 (§8.1)~~ | **완료** — `unit` · `e2e` 두 잡. `backend/tests/e2e/` |
 | ~~4~~ | ~~감사 로그 (actor) (§7.2)~~ | **완료** — `control_audit`(`011`) · `X-Actor` · teleop 점유. `test_control_audit.py` |
 | ~~5~~ | ~~세션 완주율 집계 + `fleet` 탭~~ | **완료** — `/slo/completion` · `fleet` 탭. 선행 지표 SLI 는 남음 |
-| 6 | `arm.*` 이벤트 코드 + 팔 게이트웨이 연결 (§6.2) | 조제 로봇 2대가 관제에 보이지 않는다. 하네스가 있으니 실기 없이 진행 |
+| 6 | `manipulator.*` 이벤트 코드 + 팔 게이트웨이 연결 (§6.2) | **정본·검증·하네스 완료.** 남은 것은 OMX 쪽 발행기 — ROS 가 없어 `mingky_event_gateway` 를 못 쓴다 |
 | 7 | `system` 탭 타입 분기 + 팔 패널 (§7.3) | 팔을 관제 안으로 |
 | 9 | 토픽 주기(Hz) 감시 (§7.2) | 못 잡는 장애 모드를 잡음 |
 | 10 | 형상 패널 (SHA · 맵 해시 · 체크포인트) | 재현성 문제의 대부분 |

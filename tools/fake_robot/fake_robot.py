@@ -13,12 +13,16 @@ session.started → nav.goal_sent → nav.goal_succeeded → … 를 시간 지�
     오배선처럼 실기로는 만들기 곤란한 것도 한 줄로 재현된다
   - 그대로 통합 테스트 픽스처가 된다 (로드맵 8)
 
-## 왜 mobile 만 흉내내는가
+## 팔(manipulator)도 흉내낸다
 
-지금 팔은 관제에 보고하는 채널이 없다. §6.2 의 arm.* 가 미정의고,
-backend/README.md 가 적어둔 대로 OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크
-링크가 없어 heartbeat 대상도 아니다. 팔을 흉내내면 흉내낼 것이 없는 게 아니라
-없는 규약을 지어내게 된다. arm.* 정본이 생기면(로드맵 6) 그때 붙인다.
+§6.2 의 manipulator.* 정본이 서면서 흉내낼 규약이 생겼다. 실기(OMX)는 아직 이
+코드를 내보내지 않으므로 지금은 이 하네스가 유일한 발행 측이고, 프론트·백엔드는
+팔 게이트웨이를 기다리지 않고 조제 패널을 만들 수 있다.
+
+주의할 것은 팔의 어휘가 mobile 과 다르다는 점이다. 팔에는 arming 도 QR 스캔도
+없고(activation.* 는 mobile 전용), 세션에 딸리지 않는 조제는 session_id 가 0 이다.
+heartbeat 는 공통 축이라 팔에도 보내지만, OMX 는 관제 PC 에 USB 직결이라
+link_state 가 뜻하는 바가 mobile 과 다르다(§4.3).
 
 ## 정본 준수 검사
 

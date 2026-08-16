@@ -385,3 +385,58 @@ def test_control_audit_api_exposes_the_anonymous_share(backend):
     assert actions["goto"]["actor"] is None
     assert actions["goto"]["actor_source"] == "absent"
     assert actions["goto"]["intervention"] is False
+
+
+def test_dispense_cycles_land_without_a_session(backend):
+    """조제 이벤트가 세션 없이 적재된다 (§6.2).
+
+    팔은 QR 도 arming 도 거치지 않는다. session_id 없이 이벤트가 들어오는
+    유일한 정상 경로이므로, 여기가 깨지면 NOT NULL 제약이나 판정 순서가
+    mobile 을 전제하고 있다는 뜻이다.
+    """
+    play("manipulator_cycle.yaml", backend)
+    play("manipulator_cycle_aborted.yaml", backend)
+
+    rows = query("""
+        SELECT event_code, level, robot_id, session_id, payload::text AS payload
+        FROM events
+        WHERE event_code LIKE 'manipulator.%'
+        ORDER BY occurred_at
+    """)
+    codes = [row["event_code"] for row in rows]
+
+    assert "manipulator.cycle_completed" in codes
+    assert "manipulator.cycle_aborted" in codes
+    # 팔은 세션에 딸리지 않는다. 0 이 아니라 NULL 로 저장돼야 인덱스와
+    # FK 가 의도대로 동작한다.
+    assert all(row["session_id"] is None for row in rows)
+    assert {row["robot_id"] for row in rows} == {"omx-01", "omx-02"}
+
+    levels = {row["event_code"]: row["level"] for row in rows}
+    # 확률적 실패가 error 로 올라가면 §8.4 알림이 무의미해진다 (§4.4).
+    assert levels["manipulator.pick_failed"] == "warning"
+    assert levels["manipulator.cycle_aborted"] == "error"
+    assert levels["manipulator.servo_fault"] == "error"
+
+    # 정본과 갈라졌으면 마커가 남는다. 오배선도 미등록도 없어야 한다.
+    assert scalar("""
+        SELECT count(*) FROM events
+        WHERE event_code IN ('system.unknown_event_code',
+                             'system.robot_type_mismatch')
+          AND robot_id IN ('omx-01', 'omx-02')
+          AND payload->>'received_code' LIKE 'manipulator.%'
+    """) == 0
+
+
+def test_dispense_events_do_not_move_the_slo(backend):
+    """조제는 안내 세션이 아니다.
+
+    §1.1 판정은 guidance_sessions 를 기준으로 돌고 개입 판정에 쓰는 코드는
+    robot.estop_engaged · robot.paused 뿐이다. 팔이 사이클을 포기해도(error)
+    환자 안내 완주율은 움직이면 안 된다 — 여기가 흔들리면 팔 하나가 SLO 를
+    끌어내리고 판정이 사람 손을 떠난다.
+    """
+    result = get_json(backend, "/slo/completion")
+
+    assert result["sessions_judged"] == 2
+    assert result["completion_rate"] == 0.5

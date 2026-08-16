@@ -178,6 +178,72 @@ def test_activation_is_mobile_only():
     assert result.type_mismatches == ["activation.armed"]
 
 
+def test_manipulator_codes_pass_from_the_arm():
+    """조제 사이클 전체가 경고 없이 지나가야 한다 (§6.2).
+
+    §4.3 분류에서 팔 전용 열이 비어 있던 동안 조제 로봇 2대는 관제에 아무것도
+    보고할 수 없었다. 이 테스트가 그 열이 다시 비는 것을 막는다.
+    """
+    conn = FakeConnection({"omx-01": "manipulator"})
+
+    result = _run(conn, [
+        _event("omx-01", "manipulator.policy_loaded", offset_sec=0),
+        _event("omx-01", "manipulator.cycle_started", offset_sec=1),
+        _event("omx-01", "manipulator.pick_failed", offset_sec=2),
+        _event("omx-01", "manipulator.pick_succeeded", offset_sec=3),
+        _event("omx-01", "manipulator.place_succeeded", offset_sec=4),
+        _event("omx-01", "manipulator.cycle_completed", offset_sec=5),
+    ])
+
+    assert result.type_mismatches == []
+    assert result.unknown_codes == []
+    assert MISMATCH_CODE not in _codes(conn)
+
+
+def test_manipulator_codes_are_a_mismatch_from_a_mobile_robot():
+    """오배선은 양방향이다.
+
+    type_mismatch.yaml 이 잠그는 것은 '팔이 nav 를 낸다' 쪽뿐이다. 반대
+    방향 — 핑키가 조제 이벤트를 낸다 — 도 배선 오류이고, 여기를 열어두면
+    §6.1 검증이 절반만 걸린 상태가 된다.
+    """
+    conn = FakeConnection({"pinky-01": "mobile"})
+
+    result = _run(conn, [_event("pinky-01", "manipulator.cycle_started")])
+
+    assert result.type_mismatches == ["manipulator.cycle_started"]
+    assert _codes(conn) == ["manipulator.cycle_started", MISMATCH_CODE]
+    # 팔 코드는 갱신하는 DB 컬럼이 없다(applies_to 없음). 오배선이든 아니든
+    # 상태를 건드리면 안 된다.
+    assert conn.updated == []
+
+
+def test_probabilistic_pick_failure_stays_a_warning():
+    """모방학습 pick 실패는 정상 동작 범위다 (§4.4).
+
+    여기가 error 로 올라가면 §8.4 의 알림 라우팅이 확률적 실패마다 사람을
+    깨우고, 그러면 팔의 알림 전체가 무시된다. error 는 사이클 포기와 서보
+    결함에만 쓴다.
+    """
+    registry = _registry()
+
+    assert registry.level_of("manipulator.pick_failed") == "warning"
+    assert registry.level_of("manipulator.homing_required") == "warning"
+    assert registry.level_of("manipulator.cycle_aborted") == "error"
+    assert registry.level_of("manipulator.servo_fault") == "error"
+
+
+def test_no_arm_prefixed_code_survives_in_the_canon():
+    """접두사는 manipulator.* 다. arm.* 은 arming 과 겹친다 (§4.2).
+
+    정본에 arm.* 이 하나라도 생기면 'arm robot arming' 이 되살아나고,
+    §4.2 가 금지한 일괄 치환이 다시 유혹이 된다.
+    """
+    registry = _registry()
+
+    assert [code for code in registry._codes if code.startswith("arm.")] == []
+
+
 def test_a_resent_event_does_not_emit_the_marker_again():
     """마커는 append-only 라 중복 발행하면 영원히 남는다.
 
