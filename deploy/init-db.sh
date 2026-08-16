@@ -15,6 +15,13 @@ set -eu
 
 MIGRATIONS_ONLY="${MINGKY_MIGRATIONS_ONLY:-0}"
 
+# 컨테이너 안에서는 compose 가 마운트한 경로를 그대로 쓴다. CI 러너처럼
+# 저장소를 체크아웃한 곳에서 직접 부를 때만 덮어쓴다 — 러너에 서비스 컨테이너로
+# 뜬 postgres 에는 저장소가 없어서 마운트 경로가 존재하지 않는다.
+# 접속 정보는 psql 이 PGHOST·PGPORT·PGPASSWORD 로 알아서 읽는다.
+MIGRATIONS_DIR="${MINGKY_MIGRATIONS_DIR:-/opt/mingky/migrations}"
+SEEDS_DIR="${MINGKY_SEEDS_DIR:-/opt/mingky/seeds}"
+
 psql_run() {
   psql \
     --set ON_ERROR_STOP=1 \
@@ -43,7 +50,7 @@ mark_applied() {
 }
 
 run_migrations() {
-  for sql_file in /opt/mingky/migrations/*.sql; do
+  for sql_file in "${MIGRATIONS_DIR}"/*.sql; do
     if [ ! -f "${sql_file}" ]; then
       continue
     fi
@@ -63,7 +70,7 @@ run_migrations() {
 
 # 시드는 전부 ON CONFLICT 로 멱등하므로 이력을 추적하지 않는다.
 run_seeds() {
-  for sql_file in /opt/mingky/seeds/*.sql; do
+  for sql_file in "${SEEDS_DIR}"/*.sql; do
     if [ ! -f "${sql_file}" ]; then
       continue
     fi
