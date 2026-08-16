@@ -2765,3 +2765,57 @@
 }
 
 .fleet-config small { color: var(--text-subtle); font-size: 0.76rem; line-height: 1.5; }
+
+/* ── 서보 온도·전류 (§4.4 · 로드맵 11) ─────────────────────────────────
+   지금 뜨거운 것(state)과 오르는 중인 것(rising)을 따로 그린다. 한 배지로
+   뭉개면 예지보전 신호가 사라지고 온도계 하나만 남는다. */
+
+.servo-health { display: grid; gap: 10px; align-content: start; }
+
+.servo-health__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.servo-health__row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.2fr) 88px 1fr 72px;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+}
+
+.servo-health__joint { font-weight: 600; }
+.servo-health__state { font-weight: 600; }
+.servo-health__temp,
+.servo-health__current { font-variant-numeric: tabular-nums; }
+.servo-health__current { text-align: right; color: var(--text-muted); }
+.servo-health__limit { color: var(--text-subtle); }
+
+/* 상승 중은 아직 경고가 아니다. 그러나 조용히 지나가서도 안 된다. */
+.servo-health__rising {
+  grid-column: 1 / -1;
+  color: var(--warning);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.servo-health__fault {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.servo-health small { color: var(--text-subtle); font-size: 0.76rem; line-height: 1.5; }
+
+@media (max-width: 720px) {
+  .servo-health__row { grid-template-columns: 1fr auto; }
+  .servo-health__current { grid-column: 2; }
+}

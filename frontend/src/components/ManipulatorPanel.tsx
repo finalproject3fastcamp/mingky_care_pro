@@ -24,7 +24,16 @@
 
 import { Freshness } from './Freshness'
 import { RobotResourceCard } from './RobotResourceCard'
+import { ServoHealthCard } from './ServoHealthCard'
+import { getServoHealth } from '../lib/api'
+import { usePolling } from '../lib/usePolling'
 import type { ManipulatorRobot } from '../types/monitoring'
+
+/**
+ * 서보 표본은 분 단위로 올라오고 추세는 몇 시간 창이다. 조제 상태(3초)와
+ * 같은 주기로 물어볼 이유가 없고, 그 주기로 물으면 추세 집계가 3초마다 돈다.
+ */
+const SERVO_POLL_MS = 60000
 
 /**
  * 조제 이력의 나이 기준. 실측 전 잠정값이다.
@@ -60,6 +69,13 @@ function cycleState(robot: ManipulatorRobot) {
 
 export function ManipulatorPanel({ robot }: { robot: ManipulatorRobot }) {
   const { detail } = robot
+  // key 를 주지 않으면 팔을 바꿔도 최대 1분간 이전 팔의 서보가 남는다.
+  // 그 사이 "이 팔은 정상" 으로 읽히면 카드의 존재 이유가 사라진다.
+  const servos = usePolling(
+    (signal) => getServoHealth(robot.robot_id, { signal }),
+    SERVO_POLL_MS,
+    robot.robot_id,
+  )
   const state = cycleState(robot)
   const picks = detail.pick_succeeded + detail.pick_failed
   // 보고가 하나도 없는 팔. 0% 나 0건으로 그리면 고장으로 읽힌다.
@@ -204,6 +220,10 @@ export function ManipulatorPanel({ robot }: { robot: ManipulatorRobot }) {
           </>
         )}
       </section>
+
+      {/* Dynamixel 이 공짜로 주는 예지보전 신호 (§4.4). mobile 에는 없다. */}
+      <ServoHealthCard health={servos.data ?? null} loading={servos.loading}
+        error={servos.error} />
 
       {/* 자원·큐는 종류와 무관한 공통 축이다 (§4.3). 팔도 heartbeat 를 보낸다. */}
       <RobotResourceCard robot={robot} />

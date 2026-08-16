@@ -32,6 +32,7 @@ python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/session_complet
 | `manipulator_cycle_aborted.yaml` | 서보 결함으로 포기. 위와의 차이가 알림 등급을 가른다 |
 | `topic_stale.yaml` | 라이다는 죽었는데 유닛은 active. 서버가 heartbeat 만 보고 판정한다 |
 | `fleet_config_split.yaml` | 커밋·맵이 갈린 2대. 형상 패널이 무엇을 잡는지 |
+| `servo_overheat.yaml` | 서보 과열·해제. 조인트별 임계와 히스테리시스 |
 
 ```yaml
 name: 세션 완주 (p001, 3단계)
@@ -62,6 +63,7 @@ steps:
 | `order` | `POST /robots/{id}/orders`. `command` · `argument` · `actor` |
 | `topics` | heartbeat 에 싣는 토픽 나이·주기를 갈아끼운다. `set: {/scan: 30}` |
 | `inventory` | `POST /robots/{id}/inventory`. `commit` · `branch` · `dirty` · `map_hash` |
+| `servos` | `POST /robots/{id}/servos`. 조인트별 `temp_c` · `current_ma` · `hardware_error` |
 
 heartbeat 는 스텝이 아니라 백그라운드 스레드가 3초마다 계속 보낸다. 스텝으로
 두면 매 시나리오가 heartbeat 로 뒤덮인다. 본문에는 `system_state` 를 싣는데,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -16,9 +17,12 @@ from .. import (
     inventory_rules,
     qr_runtime,
     robot_runtime,
+    servo_health,
     topic_watch,
 )
 from ..db import get_pool
+from ..ingest import ingest
+from ..registry import get_registry
 from ..schemas import (
     BatteryForecastOut,
     BatterySampleIn,
@@ -35,8 +39,12 @@ from ..schemas import (
     RobotInventoryIn,
     RobotInventoryOut,
     RobotOut,
+    ServoHealthOut,
+    ServoSampleIn,
     WorkspaceInfo,
 )
+
+log = logging.getLogger("mingky")
 
 router = APIRouter(prefix="/robots", tags=["robots"])
 
@@ -608,6 +616,69 @@ async def get_battery_forecast(
         sample_count=result.sample_count,
         reason=result.reason,
     )
+
+
+@router.post("/{robot_id}/servos", status_code=204)
+async def post_servos(robot_id: str, sample: ServoSampleIn) -> Response:
+    """서보 온도·전류 표본 (§4.4 · 로드맵 11).
+
+    배터리와 같은 성격이다 — 이벤트가 아니라 저빈도 추이 로그다. 1분마다
+    찍히는 온도를 events 에 넣으면 타임라인 필터가 쓸모없어진다.
+
+    **팔이 아닌 로봇은 거부한다.** 미등록 이벤트 코드를 적재하고 경고하는
+    §6.1 과 다른 판단이다. 저쪽은 기록을 잃으면 사건 자체가 사라지지만, 이건
+    주기 표본이라 하나 버려도 다음이 온다. 반대로 오배선을 그대로 쌓으면
+    서보가 없는 로봇의 행이 추이 판정에 섞인다.
+
+    임계 통과는 여기서 판정한다. 별도 감시 루프를 두지 않는 이유는 표본이
+    도착하는 순간이 곧 판정 시점이라서다 — heartbeat 처럼 '안 오는 것' 을
+    재는 판정이 아니다.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        robot_type = await conn.fetchval(
+            "SELECT robot_type FROM robots WHERE robot_id = $1 AND is_active",
+            robot_id)
+        if robot_type is None:
+            raise HTTPException(status_code=404, detail="unknown or inactive robot")
+        if robot_type != "manipulator":
+            raise HTTPException(
+                status_code=409, detail="only manipulators report servos")
+
+        async with conn.transaction():
+            await conn.executemany(servo_health.INSERT_SQL, [
+                (robot_id, reading.joint, reading.temp_c, reading.current_ma,
+                 reading.voltage_v, reading.hardware_error)
+                for reading in sample.servos
+            ])
+            events = servo_health.crossings(robot_id, sample.servos)
+            if events:
+                await ingest(conn, events, get_registry())
+
+    for event in events:
+        log.warning("%s robot=%s %s",
+                    event.event_code, event.robot_id, event.payload)
+    return Response(status_code=204)
+
+
+@router.get("/{robot_id}/servos", response_model=ServoHealthOut)
+async def get_servos(
+    robot_id: str,
+    window_min: int = Query(servo_health.DEFAULT_WINDOW_MIN, ge=10, le=1440),
+) -> ServoHealthOut:
+    """조인트별 최신값과 온도 추세.
+
+    로봇 목록에 얹지 않는다. 저쪽은 3초 폴링인데 추세는 몇 시간 창의 집계라
+    같이 두면 그 쿼리가 3초마다 돈다 — `/battery-forecast` 를 따로 뺀 것과
+    같은 이유다.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        latest = await conn.fetch(servo_health.LATEST_SQL, robot_id)
+        trend = await conn.fetch(
+            servo_health.TREND_SQL, robot_id, str(window_min))
+
+    return servo_health.summarize(robot_id, latest, trend, window_min)
 
 
 @router.post("/{robot_id}/qr-observation", status_code=204)

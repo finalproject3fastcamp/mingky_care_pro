@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import db, heartbeat, inventory_rules, registry, topic_watch
+from . import db, heartbeat, inventory_rules, registry, servo_health, topic_watch
 from .routers import (
     events, fleet, maps, orders, patients, qr, robots, sessions, slo, teleop,
     waypoints)
@@ -141,6 +141,9 @@ async def lifespan(app: FastAPI):
 
     # 토픽 임계도 같다. 없으면 나이만 보이고 판정이 빠질 뿐이다.
     topic_watch.load()
+
+    # 서보 온도 임계. 없으면 기본값으로 판정한다 (§4.4).
+    servo_health.load()
 
     await db.connect()
     await _claim_single_instance()

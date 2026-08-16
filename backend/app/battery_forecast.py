@@ -62,11 +62,14 @@ class Forecast:
     reason: str | None = None
 
 
-def _linear_fit(points: list[tuple[float, float]]) -> tuple[float, float, float]:
+def linear_fit(points: list[tuple[float, float]]) -> tuple[float, float, float]:
     """최소제곱 직선. (기울기, 절편, 결정계수).
 
     numpy 를 끌어오지 않는다. 표본이 수십 개짜리 1차 적합이라 표준
     라이브러리로 충분하고, 배포에 의존성을 더할 이유가 없다.
+
+    공개 함수인 이유는 서보 온도 추이(app/servo_health.py)가 같은 적합을
+    쓰기 때문이다. 최소제곱을 두 번 적어두면 한쪽만 고쳐지는 날이 온다.
     """
     n = len(points)
     mean_x = sum(x for x, _ in points) / n
@@ -110,7 +113,7 @@ def forecast(samples: list[tuple[datetime, float | None]]) -> Forecast | None:
         return None
 
     fit_points = [((at - origin).total_seconds(), v) for at, v in points]
-    slope_per_sec, _intercept, r_squared = _linear_fit(fit_points)
+    slope_per_sec, _intercept, r_squared = linear_fit(fit_points)
     slope_per_hour = slope_per_sec * 3600.0
 
     if abs(slope_per_hour) < MIN_SLOPE_V_PER_HOUR:

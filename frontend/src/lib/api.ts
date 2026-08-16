@@ -6,6 +6,7 @@ import type { ControlAuditPage, SloWindow } from '../types/slo'
 import type {
   ActiveSession,
   FleetConfig,
+  ServoHealth,
   QrObservation,
   MobileRobot,
   Robot,
@@ -242,6 +243,23 @@ export async function getSloCompletion(
   const { data } = await api.get<SloWindow>('/slo/completion', {
     signal: options.signal,
   })
+  return data
+}
+
+/**
+ * 팔의 서보 온도·전류와 추세 (§4.4 · 로드맵 11).
+ *
+ * 로봇 목록에 실려 오지 않는다. 저쪽은 3초 폴링인데 추세는 몇 시간 창의
+ * 집계라, 같이 두면 그 쿼리가 3초마다 돈다. 배터리 예상과 같은 구조다.
+ */
+export async function getServoHealth(
+  robotId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ServoHealth> {
+  const { data } = await api.get<ServoHealth>(
+    `/robots/${encodeURIComponent(robotId)}/servos`,
+    { signal: options.signal },
+  )
   return data
 }
 

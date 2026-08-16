@@ -88,3 +88,19 @@ def test_every_migration_is_named_so_the_runner_can_order_it():
     """러너가 파일명을 버전으로 쓴다. 접두사가 없으면 순서도 이력도 깨진다."""
     for migration in MIGRATIONS.glob("*.sql"):
         assert migration.stem[:3].isdigit(), migration.name
+
+
+def test_servo_log_keeps_unread_and_healthy_apart():
+    """hardware_error 의 0 과 NULL 은 다른 사실이다 (§4.4).
+
+    전자는 '정상이라고 읽었다', 후자는 '못 읽었다' 이고, NOT NULL 로 묶어
+    0 을 기본값으로 넣으면 통신이 죽은 서보가 정상으로 집계된다.
+    """
+    sql = (MIGRATIONS / "012_robot_servo_log.sql").read_text(encoding="utf-8")
+
+    assert "hardware_error SMALLINT" in sql
+    assert "hardware_error SMALLINT NOT NULL" not in sql
+    # 전부 비어 있는 행은 의미가 없다. robot_battery_log 와 같은 가드다.
+    assert "robot_servo_log_has_reading" in sql
+    # 추이 질의가 조인트 단위로 돈다. 인덱스가 그 순서여야 한다.
+    assert "(robot_id, joint, recorded_at DESC)" in sql
