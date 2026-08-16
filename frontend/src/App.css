@@ -2363,3 +2363,164 @@
   color: var(--text-subtle);
   font-weight: 400;
 }
+
+/* === Fleet — SLO 현황 ===================================================== */
+
+.fleet-slo__headline {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.fleet-slo__rate {
+  font-size: 2.6rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+/* 표본 없음(—)을 목표 미달과 같은 색으로 그리면 안 된다. 하나는 아직 판단할
+   근거가 없다는 뜻이고 하나는 이미 나쁘다는 뜻이다. */
+.fleet-slo__rate--ok { color: var(--success); }
+.fleet-slo__rate--error { color: var(--danger); }
+.fleet-slo__rate--unknown { color: var(--text-subtle); }
+
+.fleet-slo__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.fleet-slo__sample { color: var(--warning); font-weight: 600; }
+
+.fleet-budget { margin-top: 18px; }
+
+.fleet-budget__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--text-subtle);
+  font-size: 0.8rem;
+}
+
+.fleet-budget__head strong { font-size: 0.95rem; }
+.fleet-budget__head strong[data-tone='ok'] { color: var(--text); }
+.fleet-budget__head strong[data-tone='warning'] { color: var(--warning); }
+.fleet-budget__head strong[data-tone='error'] { color: var(--danger); }
+
+.fleet-budget__bar {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.fleet-budget__slot {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.fleet-budget__slot--used {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.fleet-budget__alert {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-left: 3px solid var(--danger);
+  font-size: 0.85rem;
+}
+
+.fleet-budget__note {
+  margin: 10px 0 0;
+  color: var(--warning);
+  font-size: 0.82rem;
+}
+
+.fleet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fleet-list__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.84rem;
+}
+
+.fleet-list__row:first-child { border-top: none; }
+.fleet-list__when { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+.fleet-list__actor { font-weight: 600; }
+.fleet-list__actor em { color: var(--warning); font-style: normal; }
+.fleet-list__reasons { display: flex; gap: 5px; flex-wrap: wrap; }
+.fleet-list__end { margin-left: auto; color: var(--text-subtle); font-size: 0.78rem; }
+
+.fleet-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.fleet-tag--fail { background: var(--danger-bg); color: var(--danger); }
+.fleet-tag--intervention { background: var(--warning-bg); color: var(--warning); }
+
+.fleet-robots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.fleet-robot {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  background: var(--surface-2);
+}
+
+.fleet-robot__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fleet-robot__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.fleet-robot__link { font-size: 0.72rem; font-weight: 600; }
+.fleet-robot__link--online { color: var(--success); }
+.fleet-robot__link--offline { color: var(--danger); }
+.fleet-robot__link--unknown { color: var(--text-subtle); }
+
+.fleet-anon {
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.fleet-anon--warn { color: var(--warning); font-weight: 600; }
+
+.fleet-empty { margin: 0; color: var(--text-subtle); font-size: 0.85rem; }

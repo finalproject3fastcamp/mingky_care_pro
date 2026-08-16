@@ -18,6 +18,10 @@ export function Layout() {
               <span aria-hidden="true">⌄</span>
             </NavLink>
             <div className="app-nav-menu__panel" aria-label="엔지니어 도구">
+              <NavLink to="/engineer/fleet">
+                <strong>Fleet</strong>
+                <small>완주율 · 오차 예산 · 개입</small>
+              </NavLink>
               <NavLink to="/engineer/events">
                 <strong>수집 이벤트</strong>
                 <small>로그와 상태 전이</small>

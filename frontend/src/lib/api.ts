@@ -2,6 +2,7 @@ import axios from 'axios'
 
 import { getActor } from './actor'
 import type { EventOut } from '../types/events'
+import type { ControlAuditPage, SloWindow } from '../types/slo'
 import type {
   ActiveSession,
   QrObservation,
@@ -221,5 +222,33 @@ export async function getBatteryForecast(
     `/robots/${encodeURIComponent(robotId)}/battery-forecast`,
     { signal: options.signal },
   )
+  return data
+}
+
+/**
+ * 직전 N세션의 완주율과 오차 예산 (§1.1 · §1.2).
+ *
+ * 폴링 주기를 로봇 상태(3~5초)와 같이 두면 안 된다. 세션 종료는 분 단위
+ * 사건이라 그 주기로 물어봐야 할 이유가 없고, 창이 50세션이라 값도 거의
+ * 안 움직인다.
+ */
+export async function getSloCompletion(
+  options: { signal?: AbortSignal } = {},
+): Promise<SloWindow> {
+  const { data } = await api.get<SloWindow>('/slo/completion', {
+    signal: options.signal,
+  })
+  return data
+}
+
+/** 최근 제어 개입. total·anonymous 는 limit 에 잘리지 않는 전체 건수다. */
+export async function getControlAudit(
+  limit = 20,
+  options: { signal?: AbortSignal } = {},
+): Promise<ControlAuditPage> {
+  const { data } = await api.get<ControlAuditPage>('/control-audit', {
+    params: { limit },
+    signal: options.signal,
+  })
   return data
 }
