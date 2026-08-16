@@ -69,6 +69,33 @@ interface RobotCommon {
 }
 
 /**
+ * 토픽 하나의 나이와 판정. schemas.py 의 TopicAgeOut 과 1:1 (§7.2).
+ *
+ * **state 를 프론트가 다시 계산하지 않는다.** 임계는 서버의
+ * config/topic_watch.yaml 에 있고, 화면이 자기 숫자로 색을 칠하면 설정을
+ * 고쳐도 화면 색이 안 바뀐다.
+ */
+export interface TopicAge {
+  topic: string
+  /** 마지막 수신으로부터 경과. 한 번도 못 받았으면 감시 시작부터 잰 값이다. */
+  age_sec: number | null
+  /** 측정 주기. 표본이 하나뿐이면 null 이다 — 0 과 구분해야 한다. */
+  hz: number | null
+  expected_hz: number | null
+  /**
+   * fresh 정상 · slow 늦음 · stale 사실상 끊김 ·
+   * idle 상시 발행이 아닌 토픽이 쉬는 중(정상) ·
+   * missing 로봇이 나이를 못 냄 · unwatched 감시 노드가 안 보고 있음 ·
+   * unrated 정본에 임계가 없어 판정하지 않음
+   */
+  state: 'fresh' | 'slow' | 'stale' | 'idle' | 'missing' | 'unwatched' | 'unrated'
+  /** 끊기면 이벤트를 발행하는 상시 토픽인가. */
+  always_on: boolean
+  /** 이 토픽이 끊기면 무엇이 안 되는가. 문구도 서버가 준다. */
+  why: string
+}
+
+/**
  * 주행 로봇(핑키). schemas.py 의 MobileRobotOut 과 1:1.
  *
  * 배터리는 2분 주기 로그의 최신값이지 실시간이 아니다.
@@ -95,6 +122,14 @@ export interface MobileRobot extends RobotCommon {
   guide_robot_state:
     | 'idle' | 'moving' | 'waiting' | 'charging' | 'battery_low'
     | 'comm_lost' | 'paused' | 'returning_to_dock' | null
+  /**
+   * 토픽 주기 감시 (§7.2). ROS 개념이라 팔에는 없다.
+   *
+   * 빈 배열은 "이 게이트웨이가 토픽을 감시하지 않는다" 는 뜻이지 토픽이
+   * 죽었다는 뜻이 아니다. 화면이 그 둘을 구분해서 그려야 한다.
+   * 나쁜 것부터 정렬돼 온다 — 다시 정렬하지 않는다.
+   */
+  topics: TopicAge[]
 }
 
 /** Dynamixel 이 직접 보고한 하드웨어 에러 (§4.4). */

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { ManipulatorPanel } from '../components/ManipulatorPanel'
 import { PinkyModel } from '../components/PinkyModelCard'
+import { TopicWatchCard } from '../components/TopicWatchCard'
 import { getRobots, sendOrder, type RobotCommand } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { useRobotMode } from '../lib/useRobotMode'
@@ -156,6 +157,10 @@ export function SystemDashboard() {
       {/* 제어 패널만 타입에 따라 바꾼다 (§7.3). 팔에는 Nav2 도 화재 감지도
           안내 세션도 없어서 아래 세 카드가 하나도 성립하지 않는다. */}
       {manipulatorRobot && <ManipulatorPanel robot={manipulatorRobot} />}
+
+      {/* 유닛 상태 위에 둔다. "가동 중" 이라는 글자보다 데이터가 흐르는지가
+          먼저 나와야 한다 — 실제 장애는 유닛이 active 인 채로 온다 (§7.2). */}
+      {mobileRobot && <TopicWatchCard robot={mobileRobot} />}
 
       {mobileRobot && <div className="system-control-grid">
         <section className="card waypoint-system-control">

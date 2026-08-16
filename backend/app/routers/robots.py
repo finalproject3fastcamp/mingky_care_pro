@@ -16,6 +16,7 @@ from .. import (
     inventory_rules,
     qr_runtime,
     robot_runtime,
+    topic_watch,
 )
 from ..db import get_pool
 from ..schemas import (
@@ -224,6 +225,9 @@ def _row_to_out(
         returning_to_dock=runtime.returning_to_dock if runtime else False,
         navigation_speed_mps=runtime.navigation_speed_mps if runtime else None,
         guide_robot_state=runtime.guide_robot_state if runtime else None,
+        # 판정은 서버가 한 번만 한다. 화면이 같은 임계를 다시 들고 있으면
+        # config/topic_watch.yaml 을 고쳐도 화면 색이 안 바뀐다.
+        topics=topic_watch.judge(runtime.topics) if runtime else [],
     )
 
 
@@ -412,6 +416,7 @@ async def post_heartbeat(
         queue_pending=body.queue_pending,
         max_node_cpu_pct=body.max_node_cpu_pct,
         max_node_cpu_name=body.max_node_cpu_name,
+        topics=body.topics,
     )
     if body.returning_to_dock:
         # 복귀 직전에 활성화된 경우에도 QR 스캔을 즉시 끈다.

@@ -359,6 +359,26 @@ robot.estop_released:
   level: warning
   payload: { source: string }
 
+robot.topic_stale:
+  robot_types: [mobile]
+  level: error
+  payload: { topic: string, age_sec: float, expected_hz: float }
+  # 로봇이 아니라 수집 서버가 발행한다(backend/app/topic_watch.py).
+  # 유닛은 active 인데 /scan 이 안 나오는 상태 — 라이다 USB 가 죽어도 노드는
+  # 살아 있고 systemd 는 초록이다. 지금까지 아무도 못 보던 장애 모드다.
+  #
+  # ROS 개념이라 mobile 전용이다. OMX 는 LeRobot 시리얼 직결이라 토픽이 없다.
+  #
+  # 상시 발행 토픽(config/topic_watch.yaml 의 always_on)만 발행한다.
+  # /cmd_vel 은 서 있는 로봇에서 안 나오는 것이 정상이라 여기 오지 않는다.
+
+robot.topic_restored:
+  robot_types: [mobile]
+  level: info
+  payload: { topic: string, hz: float }
+  # topic_stale 의 짝. 이것이 없으면 타임라인에 끊긴 기록만 남고 언제
+  # 돌아왔는지 알 수 없다 — robot.comm_restored 와 같은 이유다.
+
 robot.resumed:
   robot_types: [mobile, manipulator]
   level: info

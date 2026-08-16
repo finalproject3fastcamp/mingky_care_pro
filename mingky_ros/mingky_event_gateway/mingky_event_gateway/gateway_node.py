@@ -34,12 +34,13 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
 
 from mingky_interfaces.msg import Event, GuideState, QrObservation
 
-from . import inventory
+from . import inventory, topic_watch
 from .queue_store import QueueStore
 
 _LEVEL_NAME = {
@@ -78,6 +79,30 @@ MAX_CONSECUTIVE_REJECTS = 5
 # 발행 주기는 5초다. 세 번 연속 놓칠 때까지는 정상으로 보고, 그 뒤로는
 # 보내지 않는다. heartbeat 의 두절 판정(15초)과 같은 계산이다.
 BATTERY_STALE_AFTER_SEC = 20.0
+# 토픽 주기 감시 대상 (§7.2). `토픽:타입` 형식이고 파라미터로 덮어쓴다.
+#
+# 타입을 같이 적는 이유는 구독을 만들려면 타입이 필요하기 때문이다. 콜백은
+# 시각만 갱신하고 내용은 안 본다.
+#
+# 상시 발행 여부(그래서 끊기면 알릴지)는 여기서 정하지 않는다 — 서버의
+# config/topic_watch.yaml 이 정본이다. 로봇은 사실만 보고한다.
+DEFAULT_WATCHED_TOPICS = [
+    "/scan:sensor_msgs/msg/LaserScan",
+    "/odom:nav_msgs/msg/Odometry",
+    "/amcl_pose:geometry_msgs/msg/PoseWithCovarianceStamped",
+    "/cmd_vel:geometry_msgs/msg/Twist",
+]
+
+# 감시 구독의 QoS. 요구를 가장 낮게 잡아야 한다 — BEST_EFFORT 구독자는
+# RELIABLE 발행자(/odom, /amcl_pose)에도 붙지만, RELIABLE 구독자는 라이다처럼
+# BEST_EFFORT 로 내보내는 발행자에 **아예 안 붙는다.** 그러면 화면에는 라이다가
+# 죽은 것과 똑같이 보인다.
+WATCH_QOS = QoSProfile(
+    depth=1,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
+
 DEFAULT_NAVIGATION_SPEED_MPS = 0.20
 MIN_NAVIGATION_SPEED_MPS = 0.05
 MAX_NAVIGATION_SPEED_MPS = 0.25
@@ -333,6 +358,9 @@ class EventGateway(Node):
         # heartbeat 와 달리 느려도 된다 — 노드 목록과 커밋은 몇 시간에 한 번
         # 바뀐다. 내용이 바뀌었을 때만 전송하므로 이 주기는 '확인 주기' 다.
         self.declare_parameter("inventory_interval_sec", 30.0)
+        # 주기를 감시할 토픽 (§7.2). 빈 목록이면 감시하지 않는다 — 팔처럼
+        # ROS 가 없는 구성이나, 토픽 구성이 다른 로봇을 위해 열어둔다.
+        self.declare_parameter("watched_topics", DEFAULT_WATCHED_TOPICS)
 
         base = self.get_parameter("backend_url").value.rstrip("/")
         self.url = base + "/events"
@@ -387,6 +415,16 @@ class EventGateway(Node):
         self.create_subscription(
             Bool, "/fire_evac/alarm_active", self._on_fire_alarm_active, state_qos)
         self.create_subscription(String, "/mode", self._on_mode, state_qos)
+
+        # 토픽 주기 감시 (§7.2). 구독 콜백은 시각만 갱신하고 메시지는 안 본다.
+        watched, malformed = topic_watch.parse_watch_spec(
+            self.get_parameter("watched_topics").value)
+        if malformed:
+            # 조용히 빠지면 감시가 없는 채로 화면이 정상으로 보인다.
+            self.get_logger().error(
+                f"watched_topics 형식 오류 (토픽:타입) — 감시에서 빠집니다: {malformed}")
+        self._topic_ages = topic_watch.TopicAges([name for name, _ in watched])
+        self._subscribe_watched(watched)
 
         self._battery_lock = threading.Lock()
         self._battery_voltage = None
@@ -765,6 +803,27 @@ class EventGateway(Node):
 
         session.close()
 
+    def _subscribe_watched(self, watched) -> None:
+        """감시 대상 토픽을 구독한다. 콜백은 수신 시각만 남긴다.
+
+        타입 해석에 실패해도 게이트웨이는 계속 떠야 한다. 관측 기능 하나가
+        빠지는 것과 로봇이 관제에 안 붙는 것은 무게가 다르다. 대신 조용히
+        빠지지 않게 error 로 남긴다.
+        """
+        for topic, type_name in watched:
+            try:
+                msg_type = get_message(type_name)
+            except Exception as exc:
+                self.get_logger().error(
+                    f"토픽 감시 제외 {topic}: 메시지 타입 '{type_name}' 을 "
+                    f"불러오지 못했습니다 ({exc})")
+                continue
+            self.create_subscription(
+                msg_type, topic,
+                # 기본 인자로 묶지 않으면 마지막 토픽 이름이 전부에 잡힌다.
+                lambda _msg, name=topic: self._topic_ages.record(name),
+                WATCH_QOS)
+
     def _heartbeat_payload(self) -> dict:
         """5초마다 나가는 본문. 작고 자주 바뀌는 것만 싣는다.
 
@@ -788,6 +847,9 @@ class EventGateway(Node):
         # 큐 적체는 통신 두절이나 서버 거부가 진행 중이라는 신호다.
         # 상한(max_queue_rows)에 가까우면 이미 데이터가 버려지는 중이다.
         payload["queue_pending"] = self.queue.count()
+        # 토픽 나이·주기 (§7.2). 감시 대상이 없으면 빈 객체이고, 서버는 그걸
+        # '감시 안 함' 으로 그린다 — 토픽이 죽은 것과 구분해야 한다.
+        payload["topics"] = self._topic_ages.snapshot()
         return payload
 
     def _consume_heartbeat_response(self, response) -> None:

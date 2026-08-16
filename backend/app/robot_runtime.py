@@ -11,8 +11,10 @@ heartbeat.py 는 '언제 마지막으로 들었는가' 만 다룬다(생존 판�
 재는 값이고, 후자는 로봇이 말해준 값이다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+from .schemas import TopicSampleIn
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,9 @@ class RuntimeState:
     queue_pending: int | None = None
     max_node_cpu_pct: float | None = None
     max_node_cpu_name: str | None = None
+    # 토픽별 마지막 수신 경과와 최근 주기 (§7.2). 판정은 여기서 하지 않는다 —
+    # 로봇이 보고한 사실만 들고 있고, 임계 대조는 topic_watch 가 한다.
+    topics: dict[str, TopicSampleIn] = field(default_factory=dict)
 
 
 _states: dict[str, RuntimeState] = {}
@@ -59,6 +64,7 @@ def update(
     queue_pending: int | None = None,
     max_node_cpu_pct: float | None = None,
     max_node_cpu_name: str | None = None,
+    topics: dict[str, TopicSampleIn] | None = None,
 ) -> None:
     now = _now()
     previous = _states.get(robot_id)
@@ -80,6 +86,7 @@ def update(
         queue_pending=queue_pending,
         max_node_cpu_pct=max_node_cpu_pct,
         max_node_cpu_name=max_node_cpu_name,
+        topics=dict(topics or {}),
     )
 
 

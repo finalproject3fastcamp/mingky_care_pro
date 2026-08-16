@@ -483,3 +483,59 @@ def test_robot_list_splits_by_type(backend):
     assert aborted["last_servo_fault"]["joint"] == "shoulder_lift"
     # 팔 하나의 결함이 다른 팔의 지표에 새면 안 된다.
     assert robots["omx-01"]["detail"]["last_servo_fault"] is None
+
+
+def test_dead_lidar_is_caught_while_the_unit_still_looks_healthy(backend):
+    """유닛은 active 인데 /scan 이 안 나오는 상태 (§7.2 · 로드맵 9).
+
+    이 장애 모드가 여기까지 오지 못하면 관제는 계속 정상으로 보인다 —
+    systemd 도 heartbeat 도 초록이기 때문이다. 실기로 재현하려면 사람이 로봇
+    앞에서 라이다 USB 를 뽑아야 하므로 하네스가 유일한 재현 수단이다.
+
+    판정 전체가 서버 안에서 일어나는지도 같이 본다. 시나리오는 이벤트를 하나도
+    쏘지 않고 heartbeat 만 보낸다.
+    """
+    play("topic_stale.yaml", backend)
+
+    events = query("""
+        SELECT event_code, level, payload::text AS payload FROM events
+        WHERE event_code LIKE 'robot.topic_%' AND robot_id = 'pinky-01'
+        ORDER BY occurred_at
+    """)
+    codes = [row["event_code"] for row in events]
+
+    # 끊김과 복구가 한 번씩. 매 주기 반복 발행하면 타임라인이 한 사건으로 덮인다.
+    assert codes == ["robot.topic_stale", "robot.topic_restored"], codes
+    assert events[0]["level"] == "error"
+    assert '"/scan"' in events[0]["payload"]
+
+    # /cmd_vel 은 900초째 비어 있지만 서 있는 로봇의 정상 상태다. 이게 알림에
+    # 섞이면 대기 중인 로봇 2대가 항상 경고가 되고 진짜 두절이 그 속에 묻힌다.
+    assert "cmd_vel" not in events[0]["payload"]
+
+    # 발행 측이 서버라는 사실이 타임라인에 남아야 한다. 로봇이 낸 것으로 보이면
+    # 조사할 때 게이트웨이 로그부터 뒤지게 된다.
+    assert scalar("""
+        SELECT source_node FROM events
+        WHERE event_code = 'robot.topic_stale' LIMIT 1
+    """) == "backend.topic_watch"
+
+
+def test_topic_judgement_is_served_with_the_robot_list(backend):
+    """화면이 임계를 다시 들고 있지 않다는 계약 (§7.2).
+
+    시나리오가 끝난 뒤 마지막 heartbeat 는 정상값이므로 /scan 은 fresh 다.
+    상태가 응답에 실려 오지 않으면 프론트가 자기 숫자로 색을 칠하게 되고,
+    그때부터 config/topic_watch.yaml 을 고쳐도 화면이 안 바뀐다.
+    """
+    robots = {robot["robot_id"]: robot for robot in get_json(backend, "/robots")}
+    topics = {t["topic"]: t for t in robots["pinky-01"]["topics"]}
+
+    assert topics["/scan"]["state"] == "fresh"
+    assert topics["/scan"]["expected_hz"] == 10
+    # 상시 발행이 아닌 토픽은 쉬는 것이지 고장이 아니다.
+    assert topics["/cmd_vel"]["state"] == "idle"
+    assert topics["/cmd_vel"]["always_on"] is False
+    # 팔에는 토픽 축 자체가 없다. null 로 채워 보내면 화면이 '감시 중인데
+    # 아무것도 안 온다' 로 읽는다.
+    assert "topics" not in robots["omx-01"]

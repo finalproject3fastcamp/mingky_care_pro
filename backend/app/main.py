@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import db, heartbeat, inventory_rules, registry
+from . import db, heartbeat, inventory_rules, registry, topic_watch
 from .routers import (
     events, maps, orders, patients, qr, robots, sessions, slo, teleop, waypoints)
 
@@ -138,6 +138,9 @@ async def lifespan(app: FastAPI):
     # 중복 노드 심각도. 없어도 기본 등급으로 동작하므로 기동을 막지 않는다.
     inventory_rules.load()
 
+    # 토픽 임계도 같다. 없으면 나이만 보이고 판정이 빠질 뿐이다.
+    topic_watch.load()
+
     await db.connect()
     await _claim_single_instance()
 
@@ -145,11 +148,13 @@ async def lifespan(app: FastAPI):
     # 첫 heartbeat 를 받은 로봇부터 감시에 들어가므로 기동 직후 전원이
     # 두절로 찍히는 일은 없고, 별도 유예 로직도 필요 없다.
     monitor = asyncio.create_task(heartbeat.monitor())
+    # 살아 있는 로봇 안에서 데이터가 흐르는지는 다른 질문이다 (§7.2).
+    topics = asyncio.create_task(topic_watch.monitor())
     lock_watch = asyncio.create_task(_hold_single_instance())
     try:
         yield
     finally:
-        for task in (monitor, lock_watch):
+        for task in (monitor, topics, lock_watch):
             task.cancel()
             try:
                 await task
