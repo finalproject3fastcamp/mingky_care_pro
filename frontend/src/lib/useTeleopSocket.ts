@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { getActor } from './actor'
 import type { RobotMode } from './api'
 
 const MODE_STATUS_STALE_MS = 4000
@@ -52,7 +53,16 @@ function socketUrl(robotId: string): string {
   const absolute = base.startsWith('http')
     ? base
     : `${window.location.origin}${base}`
-  return `${absolute.replace(/^http/, 'ws')}/robots/${robotId}/teleop/operator`
+  const url =
+    `${absolute.replace(/^http/, 'ws')}/robots/${robotId}/teleop/operator`
+
+  // teleop 만 헤더가 아니라 쿼리다. 브라우저 WebSocket 생성자에는 커스텀
+  // 헤더를 실을 방법이 없다. 서버는 두 경로를 같은 정규화 함수로 처리한다
+  // (backend/app/actor.py).
+  //
+  // 점유 자체가 §1.1 의 개입이므로, 이름이 없어도 붙는 순간 감사 행은 남는다.
+  const actor = getActor()
+  return actor ? `${url}?actor=${encodeURIComponent(actor)}` : url
 }
 
 export function useTeleopSocket(robotId: string | null): TeleopState & {

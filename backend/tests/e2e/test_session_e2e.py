@@ -36,6 +36,7 @@ sys.path.insert(0, str(HARNESS_DIR))
 import fake_robot  # noqa: E402
 
 from app.config import database_url  # noqa: E402
+from app.control_audit import INTERVENTION_ACTIONS  # noqa: E402
 
 pytestmark = pytest.mark.e2e
 
@@ -217,3 +218,97 @@ def test_mismatched_robot_type_is_recorded_without_touching_state(backend):
         SELECT count(*) FROM events
         WHERE robot_id = 'omx-01' AND event_code = 'robot.comm_restored'
     """) >= 1
+
+
+# §1.1 의 개입 판정. PR 3-2 의 SLO API 가 이 모양을 그대로 쓴다.
+#
+# 여기서 한 번 실제 DB 로 통과시켜 두면, 나중에 API 가 다른 답을 낼 때
+# 원인이 SQL 인지 집계 로직인지 가를 수 있다.
+_INTERVENED_SQL = """
+    SELECT EXISTS (
+        SELECT 1 FROM control_audit
+        WHERE session_id = $1 AND action = ANY($2::text[])
+    )
+"""
+
+
+def test_completed_session_with_an_intervention_is_not_a_clean_run(backend):
+    """완주가 성공을 뜻하지 않는다 (§1.1).
+
+    end_reason 만 보면 이 세션은 성공이다. 3단계를 다 돌고 completed 로
+    끝났다. 그런데 1단계 도착 직후에 사람이 로컬라이제이션 재요청을 넣었다 —
+    로봇이 스스로 못 한 것을 사람이 대신했다는 뜻이므로 SLO 는 실패로 센다.
+
+    감사 로그가 없으면 이 구분 자체가 불가능하다. 그래서 로드맵 4번이 5번의
+    선행 조건이다.
+    """
+    play("session_with_intervention.yaml", backend)
+
+    session = query("""
+        SELECT session_id, end_reason FROM guidance_sessions
+        ORDER BY session_id DESC LIMIT 1
+    """)[0]
+
+    # 완주는 했다. 여기까지만 보면 성공이다.
+    assert session["end_reason"] == "completed"
+
+    intervention = query("""
+        SELECT action, argument, actor, actor_source, order_id
+        FROM control_audit
+        WHERE session_id = $1 ORDER BY audit_id
+    """, session["session_id"])
+
+    assert [row["action"] for row in intervention] == ["localize"]
+    # 헤더가 latin-1 로 디코딩되는 구간을 지나 이름이 살아 있어야 한다.
+    assert intervention[0]["actor"] == "정민경"
+    assert intervention[0]["actor_source"] == "header"
+    assert intervention[0]["argument"] == "run"
+    # 감사 행이 명령을 가리킨다. put() 보다 먼저 기록하면서도 잃지 않은 값이다.
+    assert intervention[0]["order_id"] is not None
+
+    assert scalar(_INTERVENED_SQL,
+                  session["session_id"], sorted(INTERVENTION_ACTIONS)) is True
+
+
+def test_a_clean_session_is_still_judged_clean(backend):
+    """개입 판정이 모든 세션을 실패로 만들지 않는지 본다.
+
+    한쪽만 확인하면 "항상 True 를 돌려주는 쿼리" 도 통과한다. 앞선 완주
+    세션이 여전히 깨끗하게 나와야 판정에 의미가 있다.
+    """
+    clean = scalar("""
+        SELECT session_id FROM guidance_sessions
+        WHERE end_reason = 'completed' ORDER BY session_id LIMIT 1
+    """)
+
+    assert scalar(_INTERVENED_SQL, clean, sorted(INTERVENTION_ACTIONS)) is False
+
+
+def test_order_without_the_actor_header_is_recorded_anonymously(backend):
+    """헤더가 없어도 거부하지 않는다. 익명으로 남기고 드러낸다.
+
+    422 로 막으면 감사 문제가 가용성 문제가 된다 — 프론트 버그 하나로
+    조작자가 명령을 못 내리게 된다. 대신 익명 행이 집계 가능해야 한다.
+
+    그리고 이 goto 는 정상 주행이라 기록은 되지만 개입 판정에는 안 잡혀야
+    한다. "기록은 넓게, 판정은 좁게" 가 실제로 그렇게 도는지 여기서 본다.
+    """
+    anonymous = query("""
+        SELECT action, actor, actor_source, session_id FROM control_audit
+        WHERE action = 'goto' ORDER BY audit_id DESC LIMIT 1
+    """)[0]
+
+    assert anonymous["actor"] is None
+    assert anonymous["actor_source"] == "absent"
+    # 세션이 끝난 뒤 내린 명령이라 붙을 세션이 없다.
+    assert anonymous["session_id"] is None
+    assert "goto" not in INTERVENTION_ACTIONS
+
+    # 익명 비율을 세는 질의. fleet 탭이 이 숫자를 띄운다.
+    counts = query("""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE actor IS NULL) AS anonymous
+        FROM control_audit
+    """)[0]
+    assert counts["anonymous"] >= 1
+    assert counts["total"] > counts["anonymous"]

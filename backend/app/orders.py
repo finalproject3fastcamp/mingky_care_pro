@@ -103,8 +103,14 @@ def _slot(command: str) -> dict[str, OrderOut]:
     return _pending
 
 
-def put(robot_id: str, command: str, argument: str) -> OrderOut:
-    """명령을 걸어둔다. 같은 종류의 기존 대기 명령만 덮어쓴다."""
+def put(robot_id: str, command: str, argument: str,
+        order_id: uuid.UUID | None = None) -> OrderOut:
+    """명령을 걸어둔다. 같은 종류의 기존 대기 명령만 덮어쓴다.
+
+    order_id 를 밖에서 받을 수 있는 것은 감사 로그 때문이다. 개입 기록은
+    명령이 걸리기 **전에** 남기므로(control_audit 참고), 감사 행이 명령을
+    가리키려면 식별자가 효과보다 먼저 존재해야 한다. 안 주면 여기서 만든다.
+    """
     slot = _slot(command)
     previous = slot.get(robot_id)
     if previous is not None:
@@ -113,7 +119,7 @@ def put(robot_id: str, command: str, argument: str) -> OrderOut:
                     previous.order_id)
 
     order = OrderOut(
-        order_id=uuid.uuid4(),
+        order_id=order_id or uuid.uuid4(),
         robot_id=robot_id,
         command=command,
         argument=argument,

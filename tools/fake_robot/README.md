@@ -22,6 +22,12 @@ python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/session_complet
 
 ## 시나리오
 
+| 파일 | 무엇을 재현하나 |
+| --- | --- |
+| `session_complete.yaml` | 정상 완주. arming 체인부터 충전소 복귀까지 |
+| `session_with_intervention.yaml` | 완주했지만 사람이 손댄 세션. §1.1 판정이 갈리는 지점 |
+| `type_mismatch.yaml` | 오배선 — 조제 스테이션이 주행 이벤트를 발행 |
+
 ```yaml
 name: 세션 완주 (p001, 3단계)
 
@@ -48,9 +54,35 @@ steps:
 | `arm` | `POST /robots/{id}/arm` |
 | `qr_scan` | `POST /qr/scan`. 돌려받은 `session_id` 를 **이후 이벤트에 자동으로 단다** |
 | `event` | `POST /events`. `level` 은 생략하면 정본에서 가져온다 |
+| `order` | `POST /robots/{id}/orders`. `command` · `argument` · `actor` |
 
 heartbeat 는 스텝이 아니라 백그라운드 스레드가 3초마다 계속 보낸다. 스텝으로
-두면 매 시나리오가 heartbeat 로 뒤덮인다.
+두면 매 시나리오가 heartbeat 로 뒤덮인다. 본문에는 `system_state` 를 싣는데,
+기본값 `active` 가 아니면 서버가 제어 명령을 `robot system is …` 409 로 막는다.
+로봇마다 `system_state: inactive` 로 덮어써서 그 거부 경로를 만들 수도 있다.
+
+### `order` 는 로봇이 아니라 사람 쪽이다
+
+```yaml
+- robot: pinky-01
+  action: order
+  command: localize
+  argument: run
+  actor: 정민경        # 생략하면 X-Actor 없이 보낸다
+```
+
+하네스는 이미 `arm` 으로 대시보드 역할을 겸하고 있다 — 그것도 의료진이 누르는
+버튼이다. 개입(§1.1)을 재현하려면 누르는 쪽이 필요하고, 그 호출을 테스트 코드에
+흩어 놓으면 시나리오 파일만 봐서는 무슨 일이 벌어지는지 알 수 없다.
+
+`actor` 를 생략하는 것은 실수가 아니라 검증 대상이다. 서버는 헤더가 없어도
+거부하지 않고 익명으로 남겨야 한다 (`backend/app/actor.py`). 헤더 값은 UTF-8
+바이트로 보낸다 — 브라우저와 같은 바이트라야 서버의 latin-1 복구 경로가 실제로
+검증된다.
+
+`command` 는 정본 대조 대상이 아니다. 이벤트 코드와 달리 명령 목록의 정본은
+`backend/app/schemas.py` 의 `OrderIn` 인데, 하네스는 백엔드를 import 하지 않는다.
+오타는 서버가 422 로 잡는다.
 
 ### 순서를 지켜야 하는 이유
 

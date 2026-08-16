@@ -1,5 +1,6 @@
 import axios from 'axios'
 
+import { getActor } from './actor'
 import type { EventOut } from '../types/events'
 import type {
   ActiveSession,
@@ -13,6 +14,27 @@ const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 export const api = axios.create({
   baseURL,
   timeout: 5000,
+})
+
+/**
+ * 상태를 바꾸는 요청에 조작자 이름을 붙인다 (`X-Actor`).
+ *
+ * 엔드포인트마다 헤더를 적지 않고 인터셉터로 한 번에 거는 이유는, actor 가
+ * 명령의 속성이 아니라 요청의 부속물이기 때문이다. 감사 범위가 넓어져도
+ * (arm/disarm, waypoint 편집) 이 파일을 다시 고칠 일이 없다.
+ *
+ * GET 은 제외한다. 조회는 감사 대상이 아니고, 폴링이 3~5초마다 도는 화면에서
+ * 매 요청에 헤더를 실어 보낼 이유가 없다.
+ *
+ * 이름이 비어 있으면 헤더를 안 보낸다. 서버는 거부하지 않고 익명으로 남긴다
+ * (backend/app/actor.py) — 감사 누락이 제어를 막으면 안 된다.
+ */
+api.interceptors.request.use((config) => {
+  if ((config.method ?? 'get').toLowerCase() === 'get') return config
+
+  const actor = getActor()
+  if (actor) config.headers.set('X-Actor', actor)
+  return config
 })
 
 export async function getActiveSessions(

@@ -97,6 +97,13 @@ class Robot:
     robot_type: str = "mobile"
     battery_percent: int = 90
     voltage: float = 11.8
+    # heartbeat 에 싣는 통합 launch 상태.
+    #
+    # 기본이 active 인 것은 그게 정상 가동 중인 게이트웨이가 보고하는 값이기
+    # 때문이다. 예전처럼 빈 본문을 보내면 서버는 unknown 으로 기억하고,
+    # 제어 명령(goto·localize 등)을 "robot system is unknown" 409 로 막는다 —
+    # 개입 시나리오 자체를 만들 수 없다.
+    system_state: str = "active"
 
 
 @dataclass
@@ -130,7 +137,8 @@ def _robot(entry: dict) -> Robot:
     id/type 이 내장 이름과 겹쳐서 읽기 나빠진다. 여기서 한 번만 옮긴다.
     """
     entry = dict(entry)
-    unknown = set(entry) - {"id", "type", "battery_percent", "voltage"}
+    unknown = set(entry) - {
+        "id", "type", "battery_percent", "voltage", "system_state"}
     if unknown:
         raise ValueError(f"robots 에 모르는 키: {', '.join(sorted(unknown))}")
     return Robot(
@@ -138,6 +146,7 @@ def _robot(entry: dict) -> Robot:
         robot_type=entry.get("type", "mobile"),
         battery_percent=entry.get("battery_percent", 90),
         voltage=entry.get("voltage", 11.8),
+        system_state=entry.get("system_state", "active"),
     )
 
 
@@ -221,14 +230,22 @@ class HttpError(RuntimeError):
         self.body = body
 
 
-def request(base_url: str, method: str, path: str, payload=None, timeout=5.0):
+def request(base_url: str, method: str, path: str, payload=None, timeout=5.0,
+            extra_headers=None):
     """의존성 없이 stdlib 만 쓴다.
 
     하네스를 돌리려고 requirements 를 늘리지 않는다. 로봇을 흉내내는 데 필요한
     건 JSON 을 POST 하는 것뿐이다.
+
+    extra_headers 는 제어 명령의 X-Actor 때문에 있다. 헤더 값을 UTF-8 로
+    encode 해서 넘긴다 — 서버가 latin-1 로 디코딩하는 것을 되살리는 쪽이
+    backend/app/actor.py 라, 여기서는 브라우저와 같은 바이트를 보내야 그
+    경로가 실제로 검증된다.
     """
     data = None
     headers = {}
+    for key, value in (extra_headers or {}).items():
+        headers[key] = value.encode("utf-8") if isinstance(value, str) else value
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -275,7 +292,8 @@ class Harness:
         while not self._stop.is_set():
             try:
                 request(self.base_url, "POST",
-                        f"/robots/{robot.robot_id}/heartbeat", {})
+                        f"/robots/{robot.robot_id}/heartbeat",
+                        {"system_state": robot.system_state})
             except Exception as exc:      # 진짜 로봇도 실패하면 그냥 버린다
                 self.log(f"  heartbeat 실패 {robot.robot_id}: {exc}")
             self._stop.wait(HEARTBEAT_INTERVAL_SEC)
@@ -329,11 +347,36 @@ class Harness:
         self.last_ingest = request(self.base_url, "POST", "/events", [event])
         self.log(f"  이벤트 {code} ({robot.robot_id})")
 
+    def do_order(self, robot: Robot, args: dict) -> None:
+        """관제가 로봇에 명령을 건다. 로봇이 아니라 **사람** 쪽 동작이다.
+
+        하네스는 이미 `arm` 으로 대시보드 역할을 하고 있다 — 그것도 의료진이
+        누르는 버튼이다. 개입을 재현하려면 누르는 쪽이 있어야 하고, 그걸
+        테스트 코드에 흩어 놓으면 시나리오 파일만 봐서는 무슨 일이 벌어지는지
+        알 수 없다.
+
+        actor 를 생략하면 헤더 없이 보낸다. 그건 실수가 아니라 검증 대상이다 —
+        서버가 거부하지 않고 익명으로 남기는지(backend/app/actor.py) 확인하는
+        경로다.
+        """
+        body = {
+            "command": args["command"],
+            "argument": str(args.get("argument", "run")),
+        }
+        headers = {"X-Actor": args["actor"]} if args.get("actor") else {}
+        result = request(
+            self.base_url, "POST", f"/robots/{robot.robot_id}/orders", body,
+            extra_headers=headers)
+        who = args.get("actor") or "익명"
+        self.log(f"  명령 {body['command']}({body['argument']}) "
+                 f"← {who} ({robot.robot_id}) order={result['order_id']}")
+
     _ACTIONS = {
         "battery": do_battery,
         "arm": do_arm,
         "qr_scan": do_qr_scan,
         "event": do_event,
+        "order": do_order,
     }
 
     def run(self) -> None:
