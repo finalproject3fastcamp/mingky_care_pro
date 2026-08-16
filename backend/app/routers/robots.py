@@ -504,6 +504,8 @@ async def get_inventory(robot_id: str) -> RobotInventoryOut:
         processes=[ProcessInfo(**item) for item in payload.get("processes", [])],
         workspaces=workspaces,
         ros_domain_id=payload.get("ros_domain_id"),
+        map_name=payload.get("map_name"),
+        map_hash=payload.get("map_hash"),
         duplicates=inventory_rules.duplicates(node_graph),
         mixed_workspaces=inventory_rules.has_mixed_workspaces(workspaces),
     )

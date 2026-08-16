@@ -2692,3 +2692,76 @@
   .topic-watch__row { grid-template-columns: 1fr auto; }
   .topic-watch__age { grid-column: 2; }
 }
+
+/* ── 형상 패널 (§7.2 · 로드맵 10) ───────────────────────────────────────
+   '다르다' 와 '모른다' 를 다른 색으로 그린다. 보고 없음을 불일치와 같은
+   빨강으로 칠하면 팔 2대 때문에 패널이 영구히 경고 상태가 된다. */
+
+.fleet-config { display: grid; gap: 12px; align-content: start; }
+
+.fleet-config__mismatches {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.fleet-config__mismatch {
+  padding: 10px 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+.fleet-config__mismatch strong { color: var(--danger); }
+.fleet-config__mismatch ul { margin: 4px 0 0; padding-left: 18px; }
+.fleet-config__mismatch small { color: var(--text-muted); }
+
+.fleet-config__ok { margin: 0; color: var(--text-muted); font-size: 0.82rem; line-height: 1.5; }
+
+/* 값이 길어 좁은 화면에서 표가 넘친다. 페이지가 아니라 표만 스크롤한다. */
+.fleet-config__scroll { overflow-x: auto; }
+
+.fleet-config__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.fleet-config__table th,
+.fleet-config__table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.fleet-config__table thead th { color: var(--text-muted); font-weight: 600; }
+.fleet-config__table tbody th { font-weight: 600; white-space: nowrap; }
+
+.fleet-config__id {
+  display: block;
+  color: var(--text-subtle);
+  font-size: 0.74rem;
+  font-weight: 400;
+}
+.fleet-config__branch {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+/* 보고가 없는 것은 경고가 아니다. 회색으로 둔다. */
+.fleet-config__unknown,
+.fleet-config__na { color: var(--text-subtle); font-size: 0.78rem; }
+
+/* 커밋 해시만으로 재현이 불가능한 상태. 이건 경고가 맞다. */
+.fleet-config__dirty {
+  display: inline-block;
+  margin-top: 3px;
+  color: var(--warning);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.fleet-config small { color: var(--text-subtle); font-size: 0.76rem; line-height: 1.5; }

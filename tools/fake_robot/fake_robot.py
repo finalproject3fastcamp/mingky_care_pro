@@ -45,6 +45,7 @@ ROS 게이트웨이(mingky_guide_manager/event_publisher.py)도 같은 파일을
 """
 
 import argparse
+import hashlib
 import json
 import sys
 import threading
@@ -402,6 +403,38 @@ class Harness:
         self.log(f"  명령 {body['command']}({body['argument']}) "
                  f"← {who} ({robot.robot_id}) order={result['order_id']}")
 
+    def do_inventory(self, robot: Robot, args: dict) -> None:
+        """형상 보고 — 지금 무슨 커밋·무슨 맵으로 도는가 (§7.2 형상 패널).
+
+        실기에서는 게이트웨이가 /proc 과 git 을 훑고 /map 격자를 해싱해 만든다.
+        여기서는 그 결과값만 준다 — 하네스가 검증하려는 것은 수집 방법이 아니라
+        **4대의 형상이 갈렸을 때 서버가 그걸 잡아내는가** 이기 때문이다.
+
+        커밋이 갈린 상태를 실기로 만들려면 로봇 한 대에만 다른 브랜치를 배포하고
+        재기동해야 한다. 한 줄로 재현되는 쪽이 낫다.
+        """
+        workspace = {
+            "path": args.get("workspace", "/home/pinky/mingky_care_pro"),
+            "commit": args.get("commit"),
+            "branch": args.get("branch", "main"),
+            "dirty": bool(args.get("dirty", False)),
+            # 0 이면 서버가 '지금 도는 코드가 아니다' 로 걸러낸다.
+            "process_count": int(args.get("process_count", 7)),
+        }
+        payload = {
+            "workspaces": [workspace],
+            "node_graph": [],
+            "processes": [],
+            "map_name": args.get("map_name"),
+            "map_hash": args.get("map_hash"),
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:8]
+        request(self.base_url, "POST", f"/robots/{robot.robot_id}/inventory",
+                {**payload, "inventory_hash": digest})
+        self.log(f"  형상 commit={workspace['commit']} "
+                 f"map={payload['map_hash']} ({robot.robot_id})")
+
     def do_topics(self, robot: Robot, args: dict) -> None:
         """토픽 나이·주기를 갈아끼운다. 실기로는 케이블을 뽑아야 나오는 상태다.
 
@@ -418,6 +451,7 @@ class Harness:
     _ACTIONS = {
         "battery": do_battery,
         "topics": do_topics,
+        "inventory": do_inventory,
         "arm": do_arm,
         "qr_scan": do_qr_scan,
         "event": do_event,

@@ -5,6 +5,7 @@ import type { EventOut } from '../types/events'
 import type { ControlAuditPage, SloWindow } from '../types/slo'
 import type {
   ActiveSession,
+  FleetConfig,
   QrObservation,
   MobileRobot,
   Robot,
@@ -239,6 +240,21 @@ export async function getSloCompletion(
   options: { signal?: AbortSignal } = {},
 ): Promise<SloWindow> {
   const { data } = await api.get<SloWindow>('/slo/completion', {
+    signal: options.signal,
+  })
+  return data
+}
+
+/**
+ * 4대가 지금 무엇으로 돌고 있는가 — 커밋·맵 지문·정책 체크포인트 (§7.2).
+ *
+ * 로봇 목록과 같은 주기로 물어보지 않는다. 몇 시간에 한 번 바뀌는 값이고,
+ * 팔의 정책은 events 집계라 3초마다 돌릴 쿼리가 아니다.
+ */
+export async function getFleetConfig(
+  options: { signal?: AbortSignal } = {},
+): Promise<FleetConfig> {
+  const { data } = await api.get<FleetConfig>('/fleet/config', {
     signal: options.signal,
   })
   return data

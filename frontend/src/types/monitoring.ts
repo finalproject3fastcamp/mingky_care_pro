@@ -252,6 +252,47 @@ export interface RobotInventory {
   mixed_workspaces: boolean
 }
 
+/**
+ * 로봇 한 대가 지금 무엇으로 돌고 있는가. schemas.py 의 RobotConfigOut 과 1:1.
+ *
+ * 타입별로 채워지는 칸이 다르다. mobile 은 코드·맵, manipulator 는 코드가
+ * 아니라 정책 체크포인트와 데이터셋 revision 이 버전이다 (§4.4).
+ */
+export interface RobotConfig {
+  robot_id: string
+  robot_type: string
+  display_name: string
+  /** null 이면 한 번도 형상을 보고하지 않았다. OMX 는 정상적으로 null 이다. */
+  reported_at: string | null
+  commit: string | null
+  branch: string | null
+  /** 커밋 안 된 변경. 해시만으로 재현이 불가능하다는 뜻이다. */
+  dirty: boolean
+  workspace_path: string | null
+  map_name: string | null
+  /** 판정은 이름이 아니라 지문으로 한다. 같은 이름의 다른 맵이 실제로 있다. */
+  map_hash: string | null
+  policy_checkpoint_id: string | null
+  policy_dataset_revision: string | null
+  policy_loaded_at: string | null
+}
+
+/** 무엇이 갈렸는가. schemas.py 의 ConfigMismatchOut 과 1:1 (§9.2). */
+export interface ConfigMismatch {
+  axis: 'commit' | 'map' | 'policy' | 'dataset'
+  robot_type: 'mobile' | 'manipulator'
+  /** 값 → 그 값으로 도는 로봇들. 몇 대 몇인지가 바로 보여야 한다. */
+  values: Record<string, string[]>
+  /** 비교에서 빠진 로봇. 판정이 몇 대를 본 것인지 같이 말해야 한다. */
+  unreported: string[]
+}
+
+export interface FleetConfig {
+  robots: RobotConfig[]
+  /** 비어 있으면 4대가 같은 형상으로 돌고 있다는 뜻이다. */
+  mismatches: ConfigMismatch[]
+}
+
 export interface QrObservation {
   robot_id: string
   visible: boolean

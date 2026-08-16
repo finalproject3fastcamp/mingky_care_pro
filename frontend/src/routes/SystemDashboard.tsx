@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { FleetConfigCard } from '../components/FleetConfigCard'
 import { ManipulatorPanel } from '../components/ManipulatorPanel'
 import { PinkyModel } from '../components/PinkyModelCard'
 import { TopicWatchCard } from '../components/TopicWatchCard'
-import { getRobots, sendOrder, type RobotCommand } from '../lib/api'
+import { getFleetConfig, getRobots, sendOrder, type RobotCommand } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { useRobotMode } from '../lib/useRobotMode'
 import { isManipulator, isMobile, type Robot } from '../types/monitoring'
 
 const POLL_MS = 3000
+// 형상은 몇 시간에 한 번 바뀐다. 로봇 상태와 같은 주기로 물으면 팔 2대분
+// events 집계가 3초마다 돈다.
+const CONFIG_POLL_MS = 30000
 const MIN_NAVIGATION_SPEED = 0.05
 const MAX_NAVIGATION_SPEED = 0.25
 const DEFAULT_NAVIGATION_SPEED = 0.20
@@ -39,6 +43,7 @@ function systemStateLabel(state: string) {
 
 export function SystemDashboard() {
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
+  const config = usePolling((signal) => getFleetConfig({ signal }), CONFIG_POLL_MS)
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -157,6 +162,11 @@ export function SystemDashboard() {
       {/* 제어 패널만 타입에 따라 바꾼다 (§7.3). 팔에는 Nav2 도 화재 감지도
           안내 세션도 없어서 아래 세 카드가 하나도 성립하지 않는다. */}
       {manipulatorRobot && <ManipulatorPanel robot={manipulatorRobot} />}
+
+      {/* 형상 불일치는 로봇 한 대의 문제가 아니라 4대의 문제라 선택과 무관하게
+          늘 보인다. "어제는 됐는데" 의 원인 대부분이 여기 있다 (§7.2). */}
+      <FleetConfigCard config={config.data ?? null} loading={config.loading}
+        error={config.error} />
 
       {/* 유닛 상태 위에 둔다. "가동 중" 이라는 글자보다 데이터가 흐르는지가
           먼저 나와야 한다 — 실제 장애는 유닛이 active 인 채로 온다 (§7.2). */}
