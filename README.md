@@ -3,6 +3,8 @@
 Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연동하여
 환자의 병원 이용 전 과정을 지원하는 AI 기반 스마트 병원 서비스 프로젝트입니다.
 
+> **라이브 데모:** [https://mingkycarepro.site/medical](https://mingkycarepro.site/medical) — 의료진 대시보드
+
 ## 1. 프로젝트 개요
 
 대학병원은 진료과와 검사실이 다양하고 건물이 복잡하여 초진 환자나 고령 환자가
