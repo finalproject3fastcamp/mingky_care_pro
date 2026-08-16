@@ -1,10 +1,10 @@
 import { useState } from 'react'
 
 import { disarmRobot } from '../lib/api'
-import type { Robot } from '../types/monitoring'
+import type { MobileRobot } from '../types/monitoring'
 
 interface Props {
-  robot: Robot
+  robot: MobileRobot
   /** 선택한 로봇의 전방 QR 카메라 MJPEG 경로. */
   cameraStreamUrl: string
   onDisarmed?: () => void

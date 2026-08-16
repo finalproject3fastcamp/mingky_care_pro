@@ -22,7 +22,7 @@ import { useMemo } from 'react'
 
 import { getControlAudit, getRobots, getSloCompletion } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
-import type { Robot } from '../types/monitoring'
+import { isMobile, type Robot } from '../types/monitoring'
 import type { ControlAuditEntry, SloFailure, SloWindow } from '../types/slo'
 
 // 세션 종료는 분 단위 사건이다. 로봇 상태와 같은 3~5초로 물어볼 이유가 없다.
@@ -167,17 +167,29 @@ function RobotSummary({ robots }: { robots: Robot[] }) {
               <code>{robot.robot_id}</code>
               <span>{robot.robot_type}</span>
             </div>
-            <div className="fleet-robot__meta">
-              {/* 팔에는 배터리가 없다. null 과 0% 를 구분해 그린다. */}
-              <span>
-                배터리 {robot.battery_percent === null ? '—' : `${robot.battery_percent}%`}
-              </span>
-              <span>
-                {robot.active_session_id === null
-                  ? '유휴'
-                  : `세션 #${robot.active_session_id}`}
-              </span>
-            </div>
+            {/* 두 줄의 뜻이 종류마다 다르다. 팔에 '배터리 —' 를 그리면
+                "보고가 없다" 로 읽히지만 사실은 배터리가 없는 로봇이다. */}
+            {isMobile(robot) ? (
+              <div className="fleet-robot__meta">
+                <span>
+                  배터리 {robot.battery_percent === null ? '—' : `${robot.battery_percent}%`}
+                </span>
+                <span>
+                  {robot.active_session_id === null
+                    ? '유휴'
+                    : `세션 #${robot.active_session_id}`}
+                </span>
+              </div>
+            ) : (
+              <div className="fleet-robot__meta">
+                <span>유선 급전</span>
+                <span>
+                  {robot.detail.active_dispense_id === null
+                    ? '조제 대기'
+                    : `조제 중 ${robot.detail.active_dispense_id}`}
+                </span>
+              </div>
+            )}
           </div>
         ))}
       </div>

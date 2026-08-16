@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from .. import (
     arming,
     battery_forecast,
+    dispense,
     heartbeat,
     inventory_rules,
     qr_runtime,
@@ -20,6 +21,9 @@ from ..db import get_pool
 from ..schemas import (
     BatteryForecastOut,
     BatterySampleIn,
+    ManipulatorDetail,
+    ManipulatorRobotOut,
+    MobileRobotOut,
     NodeGraphInfo,
     ProcessInfo,
     QrObservationIn,
@@ -144,29 +148,25 @@ async def _insert_activation_event(
     )
 
 
-def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -> RobotOut:
-    """DB 행에 메모리에만 있는 두 가지(활성화·생존)를 얹는다.
+def _common(row, seen: dict | None) -> dict:
+    """종류와 무관한 필드 (§4.3 의 공통 축) — 생존·형상·리소스.
 
     seen 을 넘기지 않으면 link_state 는 unknown 으로 나간다. arm/disarm 응답처럼
     그 순간의 생존 여부가 관심사가 아닌 경로에서 굳이 조회하지 않기 위해서다.
     """
     last_seen, offline = (seen or {}).get(row["robot_id"], (None, False))
     runtime = robot_runtime.snapshot().get(row["robot_id"])
-    return RobotOut(
-        **dict(row),
-        armed_at=armed_map.get(row["robot_id"]),
+    return dict(
+        robot_id=row["robot_id"],
+        display_name=row["display_name"],
+        domain_id=row["domain_id"],
+        is_active=row["is_active"],
         last_seen_at=last_seen,
         # 한 번도 신호를 안 보낸 로봇은 offline 이 아니라 unknown 이다.
         # OMX 는 관제 PC 에 USB 직결된 LeRobot 프로세스라 잃을 네트워크
         # 링크가 없다. 이걸 두절로 표시하면 타임라인이 오탐으로 덮인다.
         link_state=("unknown" if last_seen is None
                     else "offline" if offline else "online"),
-        system_state=runtime.system_state if runtime else "unknown",
-        localization_active=runtime.localization_active if runtime else False,
-        fire_alarm_active=runtime.fire_alarm_active if runtime else None,
-        returning_to_dock=runtime.returning_to_dock if runtime else False,
-        navigation_speed_mps=runtime.navigation_speed_mps if runtime else None,
-        guide_robot_state=runtime.guide_robot_state if runtime else None,
         runtime_reported_at=runtime.reported_at if runtime else None,
         # 구버전 게이트웨이는 안 보낸다. None 이 정상이고, 화면은 값이 없는
         # 것과 0 인 것을 구분해서 그려야 한다.
@@ -178,20 +178,80 @@ def _row_to_out(row, armed_map: dict[str, datetime], seen: dict | None = None) -
     )
 
 
+def _row_to_out(
+    row,
+    armed_map: dict[str, datetime],
+    seen: dict | None = None,
+    details: dict[str, ManipulatorDetail] | None = None,
+) -> MobileRobotOut | ManipulatorRobotOut:
+    """DB 행을 타입별 응답으로 만든다 (§7.3).
+
+    분기가 여기 한 곳뿐인 것이 핵심이다. 팔에 없는 것(배터리·arming·Nav2)을
+    null 로 채워 내보내면 프론트가 그 null 을 '보고 안 함' 과 구분하지 못하고,
+    타입별 화면이 결국 런타임 if 로 흩어진다.
+    """
+    if row["robot_type"] == "manipulator":
+        return ManipulatorRobotOut(
+            **_common(row, seen),
+            # 아직 아무것도 보고하지 않은 팔은 dispense.summarize 에 안 담긴다.
+            # 그건 정상 초기 상태이지 로봇이 없는 것이 아니므로 빈 창을 채운다.
+            detail=(details or {}).get(row["robot_id"]) or ManipulatorDetail(
+                window=dispense.DEFAULT_WINDOW,
+                window_cycles=0,
+                sample_complete=False,
+                cycles_completed=0,
+                cycles_aborted=0,
+                pick_succeeded=0,
+                pick_failed=0,
+                pick_retried=0,
+            ),
+        )
+
+    runtime = robot_runtime.snapshot().get(row["robot_id"])
+    return MobileRobotOut(
+        **_common(row, seen),
+        battery_voltage=row["battery_voltage"],
+        battery_percent=row["battery_percent"],
+        battery_recorded_at=row["battery_recorded_at"],
+        active_session_id=row["active_session_id"],
+        active_patient_id=row["active_patient_id"],
+        last_session_ended_at=row["last_session_ended_at"],
+        last_session_end_reason=row["last_session_end_reason"],
+        armed_at=armed_map.get(row["robot_id"]),
+        system_state=runtime.system_state if runtime else "unknown",
+        localization_active=runtime.localization_active if runtime else False,
+        fire_alarm_active=runtime.fire_alarm_active if runtime else None,
+        returning_to_dock=runtime.returning_to_dock if runtime else False,
+        navigation_speed_mps=runtime.navigation_speed_mps if runtime else None,
+        guide_robot_state=runtime.guide_robot_state if runtime else None,
+    )
+
+
 @router.get("", response_model=list[RobotOut])
-async def list_robots() -> list[RobotOut]:
-    """모든 로봇 목록 + 최근 배터리 + 활성 세션 + 활성화 여부."""
+async def list_robots() -> list[MobileRobotOut | ManipulatorRobotOut]:
+    """모든 로봇 목록 + 타입별 상세.
+
+    팔의 조제 지표를 별도 엔드포인트로 빼지 않는다. 화면이 로봇 목록을 이미
+    3초로 폴링하는데 팔만 따로 물으면 두 응답의 시각이 어긋나고, 그 어긋남은
+    "사이클이 끝났는데 유휴로 안 바뀐다" 같은 형태로만 보인다.
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(_SQL)
+        # 팔이 한 대도 없으면 쿼리를 아예 보내지 않는다. mobile 만 있는
+        # 설치에서 이 경로가 비용이 되면 안 된다.
+        details = {}
+        if any(row["robot_type"] == "manipulator" for row in rows):
+            details = dispense.summarize(
+                await conn.fetch(dispense.DETAIL_SQL, dispense.EVENT_LIMIT))
     # 활성화·생존 둘 다 DB 가 아니라 메모리에 있다 (arming.py / heartbeat.py).
     armed_map = arming.snapshot()
     seen = heartbeat.snapshot()
-    return [_row_to_out(row, armed_map, seen) for row in rows]
+    return [_row_to_out(row, armed_map, seen, details) for row in rows]
 
 
-@router.post("/{robot_id}/arm", response_model=RobotOut)
-async def arm_robot(robot_id: str) -> RobotOut:
+@router.post("/{robot_id}/arm", response_model=MobileRobotOut)
+async def arm_robot(robot_id: str) -> MobileRobotOut:
     """의료진 대시보드가 로봇 하나를 골라 활성화한다.
 
     검증:
@@ -278,11 +338,12 @@ async def arm_robot(robot_id: str) -> RobotOut:
                     conn, robot_id, "activation.armed", {})
 
     armed_map = arming.snapshot()
+    # 위에서 mobile 이 아닌 로봇을 거부했으므로 여기 오는 것은 항상 mobile 이다.
     return _row_to_out(row, armed_map)
 
 
 @router.delete("/{robot_id}/arm", response_model=RobotOut)
-async def disarm_robot(robot_id: str) -> RobotOut:
+async def disarm_robot(robot_id: str) -> MobileRobotOut | ManipulatorRobotOut:
     """의료진이 활성화를 취소.
 
     로봇이 없으면 404. 원래 disarmed 였으면 200 + 이벤트 없음.

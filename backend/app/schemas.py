@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -230,12 +230,91 @@ class UnknownCodeOut(BaseModel):
     last_seen: datetime
 
 
-class RobotOut(BaseModel):
+class ServoFault(BaseModel):
+    """Dynamixel 이 직접 보고한 하드웨어 에러 (§4.4).
+
+    해소를 알리는 이벤트가 없다. 그래서 occurred_at 을 반드시 같이 내려보낸다 —
+    화면이 "3일 전 결함" 과 "방금 결함" 을 같은 빨강으로 그리면 안 된다.
+    """
+
+    joint: str
+    fault_bits: int | None = None
+    temp_c: float | None = None
+    occurred_at: datetime
+
+
+class ManipulatorDetail(BaseModel):
+    """팔 전용 지표 (§7.3 의 `detail`). app/dispense.py 가 events 에서 만든다.
+
+    저장된 컬럼이 아니다. 같은 사실을 컬럼으로 한 번 더 들고 있으면 events 와
+    갈라지고, 그때 어느 쪽이 맞는지 판단할 근거가 없다.
+    """
+
+    # ---- 지금 상태 (창과 무관하다)
+    #
+    # 어제 되던 pick 이 오늘 안 되는 원인은 대개 코드가 아니라 체크포인트다.
+    # 팔의 '무엇이 돌고 있나' 는 git SHA 만으로 답이 안 된다 (§4.4).
+    policy_checkpoint_id: str | None = None
+    policy_dataset_revision: str | None = None
+    policy_loaded_at: datetime | None = None
+    # 시작만 하고 아직 끝나지 않은 사이클. 없으면 유휴다.
+    active_dispense_id: str | None = None
+    active_started_at: datetime | None = None
+    # 사람이 홈 복귀를 지시해야 다음 사이클이 시작된다 (§4.4).
+    homing_required: bool = False
+    homing_reason: str | None = None
+    last_servo_fault: ServoFault | None = None
+
+    # ---- 직전 N 사이클 이동창 (§7.2)
+    window: int
+    # 창을 못 채운 표본. 3건에 1건 실패면 66.7% 지만 신뢰구간이 창만큼 넓다.
+    window_cycles: int
+    sample_complete: bool
+    cycles_completed: int
+    cycles_aborted: int
+    last_cycle_ended_at: datetime | None = None
+    pick_succeeded: int
+    pick_failed: int
+    # 재시도로 성공한 건. 한 번에 집은 것과 세 번 만에 집은 것을 구분하지
+    # 못하면 성공률이 정책 품질을 반영하지 못한다.
+    pick_retried: int
+    # 표본이 0 이면 성공률은 존재하지 않는다. 0.0 과 구분해야 한다.
+    pick_success_rate: float | None = None
+    cycle_time_p50_ms: int | None = None
+    cycle_time_p95_ms: int | None = None
+
+
+class RobotBase(BaseModel):
+    """로봇 종류와 무관하게 성립하는 것만 (§4.3 의 공통 축).
+
+    생존·형상·리소스는 mobile 이든 manipulator 든 같은 질문이다. 나머지는
+    타입별 모델로 내려간다 — 배터리를 여기 두면 팔의 배터리가 항상 null 로
+    나가고, 화면은 그 null 을 '아직 보고 안 함' 과 구분하지 못한다.
+    """
+
     robot_id: str
-    robot_type: str
     display_name: str
     domain_id: int | None = None
     is_active: bool
+    # 생존 여부는 DB 가 아니라 백엔드 메모리에서 온다(app/heartbeat.py).
+    # unknown 은 '한 번도 heartbeat 를 안 보낸 로봇' 이다. offline 과 다르다 —
+    # OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없다.
+    last_seen_at: datetime | None = None
+    link_state: Literal["online", "offline", "unknown"] = "unknown"
+    runtime_reported_at: datetime | None = None
+    # 로봇이 보고한 자원·큐 상태. 전부 인메모리(robot_runtime)이고 DB 에
+    # 저장하지 않는다. 구버전 게이트웨이는 안 보내므로 None 이 정상이다.
+    cpu_total_pct: float | None = None
+    queue_pending: int | None = None
+    max_node_cpu_pct: float | None = None
+    max_node_cpu_name: str | None = None
+    inventory_hash: str | None = None
+
+
+class MobileRobotOut(RobotBase):
+    """주행 로봇(핑키). 안내 세션·배터리·Nav2 가 여기 있다."""
+
+    robot_type: Literal["mobile"] = "mobile"
     # 배터리는 저장된 마지막 표본이다. 실시간 값이 아니다.
     battery_voltage: float | None = None
     battery_percent: int | None = None
@@ -247,11 +326,7 @@ class RobotOut(BaseModel):
     # 의료진이 이 로봇을 활성화한 시각. NULL = 대기 중.
     # DB 컬럼이 아니라 app/arming.py 인메모리 레지스트리에서 조립한다.
     armed_at: datetime | None = None
-    # 생존 여부는 DB 가 아니라 백엔드 메모리에서 온다(app/heartbeat.py).
-    # unknown 은 '한 번도 heartbeat 를 안 보낸 로봇' 이다. offline 과 다르다 —
-    # OMX 는 관제 PC 에 USB 직결이라 잃을 네트워크 링크가 없다.
-    last_seen_at: datetime | None = None
-    link_state: Literal["online", "offline", "unknown"] = "unknown"
+    # ROS 2 라이프사이클이다. OMX 는 LeRobot 시리얼 직결이라 이 축이 없다.
     system_state: Literal[
         "active", "activating", "deactivating", "inactive", "failed", "unknown"
     ] = "unknown"
@@ -263,14 +338,25 @@ class RobotOut(BaseModel):
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
     ] | None = None
-    runtime_reported_at: datetime | None = None
-    # 로봇이 보고한 자원·큐 상태. 전부 인메모리(robot_runtime)이고 DB 에
-    # 저장하지 않는다. 구버전 게이트웨이는 안 보내므로 None 이 정상이다.
-    cpu_total_pct: float | None = None
-    queue_pending: int | None = None
-    max_node_cpu_pct: float | None = None
-    max_node_cpu_name: str | None = None
-    inventory_hash: str | None = None
+
+
+class ManipulatorRobotOut(RobotBase):
+    """조제 로봇(OMX). arming 도 세션도 배터리도 없다.
+
+    없는 필드를 null 로 채워 보내지 않는 것이 이 분리의 전부다. mobile 전용
+    필드가 응답에 없으면 프론트의 discriminated union 이 컴파일 타임에
+    "팔에 배터리 카드를 렌더" 를 막는다 (§7.3).
+    """
+
+    robot_type: Literal["manipulator"] = "manipulator"
+    detail: ManipulatorDetail
+
+
+# robot_type 이 discriminant 다. FastAPI 가 이 어노테이션으로 스키마를
+# 갈라주고, 프론트의 `type Robot = MobileRobot | ManipulatorRobot` 과 1:1 이 된다.
+RobotOut = Annotated[
+    MobileRobotOut | ManipulatorRobotOut, Field(discriminator="robot_type")
+]
 
 
 class RobotArmingOut(BaseModel):

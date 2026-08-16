@@ -440,3 +440,46 @@ def test_dispense_events_do_not_move_the_slo(backend):
 
     assert result["sessions_judged"] == 2
     assert result["completion_rate"] == 0.5
+
+
+def test_robot_list_splits_by_type(backend):
+    """GET /robots 가 타입별로 다른 모양을 돌려준다 (§7.3).
+
+    단위 테스트는 dispense.summarize 에 손으로 만든 행을 먹인다. 여기서는
+    DETAIL_SQL 이 진짜 DB 에서 그 행을 만들어내는지를 본다 — 실패하면 원인이
+    접기 규칙이 아니라 쿼리다.
+
+    앞선 두 테스트가 omx-01 완주 1건과 omx-02 포기 1건을 이미 만들어 뒀다.
+    여기서 재시도 사이클을 하나 더 얹어 pick 성공률이 1.0 에서 내려오게 한다.
+    """
+    play("manipulator_pick_retry.yaml", backend)
+
+    robots = {robot["robot_id"]: robot for robot in get_json(backend, "/robots")}
+
+    # 팔에 없는 것은 null 로 채우지 않고 아예 안 보낸다. 이게 프론트의
+    # discriminated union 이 "팔에 배터리 카드를 렌더" 를 컴파일 타임에
+    # 막을 수 있는 근거다.
+    assert "battery_percent" not in robots["omx-01"]
+    assert "armed_at" not in robots["omx-01"]
+    assert "detail" not in robots["pinky-01"]
+    assert robots["pinky-01"]["battery_percent"] is not None
+
+    detail = robots["omx-01"]["detail"]
+    assert detail["cycles_completed"] == 2
+    assert detail["cycles_aborted"] == 0
+    # 완주 2건 안에서 pick 3성공 1실패. 재시도가 끼었어도 사이클은 완주다.
+    assert detail["pick_succeeded"] == 3
+    assert detail["pick_failed"] == 1
+    assert detail["pick_success_rate"] == 0.75
+    assert detail["pick_retried"] == 1
+    assert detail["sample_complete"] is False
+    # 어느 체크포인트로 돈 사이클인지가 실패를 조사할 때의 첫 질문이다 (§4.4).
+    assert detail["policy_checkpoint_id"] == "act_omx_020000"
+
+    aborted = robots["omx-02"]["detail"]
+    assert aborted["cycles_aborted"] == 1
+    assert aborted["pick_success_rate"] == 0.0
+    assert aborted["homing_required"] is True
+    assert aborted["last_servo_fault"]["joint"] == "shoulder_lift"
+    # 팔 하나의 결함이 다른 팔의 지표에 새면 안 된다.
+    assert robots["omx-01"]["detail"]["last_servo_fault"] is None
