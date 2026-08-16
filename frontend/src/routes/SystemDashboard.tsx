@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { ManipulatorPanel } from '../components/ManipulatorPanel'
 import { PinkyModel } from '../components/PinkyModelCard'
 import { getRobots, sendOrder, type RobotCommand } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { useRobotMode } from '../lib/useRobotMode'
+import { isManipulator, isMobile, type Robot } from '../types/monitoring'
 
 const POLL_MS = 3000
 const MIN_NAVIGATION_SPEED = 0.05
@@ -16,6 +18,13 @@ function clampNavigationSpeed(value: number) {
     MAX_NAVIGATION_SPEED,
     Math.max(MIN_NAVIGATION_SPEED, Math.round(value * 100) / 100),
   )
+}
+
+/** 선택기 카드의 아랫줄. 종류마다 '지금 무엇을 하고 있나' 의 답이 다르다. */
+function cardStatus(robot: Robot): string {
+  if (isMobile(robot)) return systemStateLabel(robot.system_state)
+  if (robot.detail.homing_required) return '홈 복귀 필요'
+  return robot.detail.active_dispense_id === null ? '조제 대기' : '조제 중'
 }
 
 function systemStateLabel(state: string) {
@@ -34,24 +43,35 @@ export function SystemDashboard() {
   const [notice, setNotice] = useState<string | null>(null)
   const [speedDraft, setSpeedDraft] = useState(DEFAULT_NAVIGATION_SPEED)
 
-  const robotList = useMemo(
-    () => (robots.data ?? []).filter((robot) => robot.robot_type === 'mobile'),
-    [robots.data],
-  )
+  // §7.3: 선택기는 4대를 모두 보여주고 제어 패널만 타입에 따라 바꾼다.
+  // 여기서 팔을 거르면 "팔은 관제 대상이 아니다" 라는 뜻이 되고, 실제로
+  // 조제 로봇 2대가 그 이유로 관제 사각지대에 있었다.
+  const robotList = useMemo(() => robots.data ?? [], [robots.data])
   useEffect(() => {
     if (robotList.length === 0) return
     if (selectedRobotId && robotList.some((robot) => robot.robot_id === selectedRobotId)) return
-    setSelectedRobotId(robotList[0].robot_id)
+    // 첫 화면은 주행 로봇이다. 목록은 robot_id 순이라 omx-* 가 pinky-* 앞에
+    // 오는데, 이 탭에 오는 이유는 대개 Nav2·통합 시스템 제어라 팔이 기본으로
+    // 잡히면 매번 한 번 더 클릭하게 된다. 팔만 있는 설치에서는 팔을 고른다.
+    const first = robotList.find(isMobile) ?? robotList[0]
+    setSelectedRobotId(first.robot_id)
   }, [robotList, selectedRobotId])
 
   const selectedRobot = robotList.find((robot) => robot.robot_id === selectedRobotId) ?? null
-  const mode = useRobotMode(selectedRobotId, POLL_MS)
-  const activeSession = selectedRobot?.active_session_id != null
+  // 아래 제어 카드는 전부 주행 로봇 것이다. 한 번 좁혀두면 팔이 선택된 동안
+  // mobile 필드를 읽는 자리가 컴파일 타임에 막힌다.
+  const mobileRobot = selectedRobot && isMobile(selectedRobot) ? selectedRobot : null
+  const manipulatorRobot = selectedRobot && isManipulator(selectedRobot)
+    ? selectedRobot : null
+  // 주행 모드는 팔에 없는 개념이다. 팔을 고른 동안 폴링하면 없는 이벤트를
+  // 3초마다 묻게 된다.
+  const mode = useRobotMode(mobileRobot?.robot_id ?? null, POLL_MS)
+  const activeSession = mobileRobot?.active_session_id != null
   const online = selectedRobot?.link_state === 'online'
-  const appliedSpeed = selectedRobot?.navigation_speed_mps ?? null
+  const appliedSpeed = mobileRobot?.navigation_speed_mps ?? null
   const speedBlocked = busy || activeSession || !online || mode !== 'auto'
-    || selectedRobot?.system_state !== 'active' || selectedRobot?.localization_active
-    || selectedRobot?.fire_alarm_active === true || appliedSpeed == null
+    || mobileRobot?.system_state !== 'active' || mobileRobot?.localization_active
+    || mobileRobot?.fire_alarm_active === true || appliedSpeed == null
 
   useEffect(() => {
     setSpeedDraft(appliedSpeed ?? DEFAULT_NAVIGATION_SPEED)
@@ -99,14 +119,18 @@ export function SystemDashboard() {
       <section className="waypoint-robot-picker" aria-label="관리할 로봇 선택">
         <div className="waypoint-robot-picker__heading">
           <strong>관리할 로봇 선택</strong>
-          <span>명령을 보낼 Pinky를 확인하세요.</span>
+          <span>주행 로봇과 조제 로봇을 모두 관리합니다.</span>
         </div>
         <div className="waypoint-robot-cards">
           {robotList.map((robot) => (
             <button key={robot.robot_id} type="button"
               className={`waypoint-robot-card${robot.robot_id === selectedRobotId ? ' selected' : ''}`}
               onClick={() => setSelectedRobotId(robot.robot_id)}>
-              <PinkyModel />
+              {/* OMX 3D 모델이 없다. 핑키 모델을 팔 자리에 놓으면 어느 쪽을
+                  고르는지가 화면에서 거짓이 된다. */}
+              {isMobile(robot)
+                ? <PinkyModel />
+                : <span className="waypoint-robot-card__glyph">OMX</span>}
               <span className="waypoint-robot-card__content">
                 <span className="waypoint-robot-card__top">
                   <strong>{robot.display_name}</strong>
@@ -116,8 +140,9 @@ export function SystemDashboard() {
                 </span>
                 <span className="waypoint-robot-card__meta">
                   <code>{robot.robot_id}</code>
-                  <span>{systemStateLabel(robot.system_state)}</span>
-                  {robot.active_session_id != null && <span>환자 안내 중</span>}
+                  <span>{cardStatus(robot)}</span>
+                  {isMobile(robot) && robot.active_session_id != null
+                    && <span>환자 안내 중</span>}
                 </span>
               </span>
             </button>
@@ -128,25 +153,29 @@ export function SystemDashboard() {
       {notice && <div className="waypoint-notice" role="status">{notice}</div>}
       {activeSession && <div className="waypoint-safety-banner" role="alert">환자 안내 중에는 시스템 중지·재시작이 차단됩니다.</div>}
 
-      <div className="system-control-grid">
+      {/* 제어 패널만 타입에 따라 바꾼다 (§7.3). 팔에는 Nav2 도 화재 감지도
+          안내 세션도 없어서 아래 세 카드가 하나도 성립하지 않는다. */}
+      {manipulatorRobot && <ManipulatorPanel robot={manipulatorRobot} />}
+
+      {mobileRobot && <div className="system-control-grid">
         <section className="card waypoint-system-control">
           <div className="card-title">통합 시스템</div>
           <div className="waypoint-system-status">
             <span>상태</span>
-            <strong data-state={selectedRobot?.system_state ?? 'unknown'}>
-              {systemStateLabel(selectedRobot?.system_state ?? 'unknown')}
+            <strong data-state={mobileRobot?.system_state ?? 'unknown'}>
+              {systemStateLabel(mobileRobot?.system_state ?? 'unknown')}
             </strong>
           </div>
           <p>Nav2·안내 상태머신·카메라를 함께 관리합니다. 관제 통신과 배터리 보고는 계속 유지됩니다.</p>
           <div className="waypoint-system-actions">
             <button type="button" className="btn primary"
-              disabled={busy || !online || selectedRobot?.system_state === 'active'}
+              disabled={busy || !online || mobileRobot?.system_state === 'active'}
               onClick={() => issue('system_start', '시스템 가동', `${selectedRobotId} 통합 시스템을 가동할까요?`)}>가동</button>
             <button type="button" className="btn"
-              disabled={busy || activeSession || !online || selectedRobot?.system_state !== 'active' || selectedRobot?.localization_active}
+              disabled={busy || activeSession || !online || mobileRobot?.system_state !== 'active' || mobileRobot?.localization_active}
               onClick={() => issue('system_restart', '시스템 재시작', `${selectedRobotId} 통합 시스템을 재시작할까요?`)}>재시작</button>
             <button type="button" className="btn danger"
-              disabled={busy || activeSession || !online || selectedRobot?.system_state === 'inactive' || selectedRobot?.localization_active}
+              disabled={busy || activeSession || !online || mobileRobot?.system_state === 'inactive' || mobileRobot?.localization_active}
               onClick={() => issue('system_stop', '시스템 중지', `${selectedRobotId} 통합 시스템을 중지할까요?`)}>중지</button>
           </div>
         </section>
@@ -176,15 +205,15 @@ export function SystemDashboard() {
 
         <section className="card waypoint-localize-control">
           <div className="card-title">화재 경보</div>
-          <strong className={selectedRobot?.fire_alarm_active ? 'waypoint-localize-running' : ''}>
-            {selectedRobot?.fire_alarm_active === true
+          <strong className={mobileRobot?.fire_alarm_active ? 'waypoint-localize-running' : ''}>
+            {mobileRobot?.fire_alarm_active === true
               ? '경보 발동 중'
-              : selectedRobot?.fire_alarm_active === false ? '정상' : '상태 확인 중'}
+              : mobileRobot?.fire_alarm_active === false ? '정상' : '상태 확인 중'}
           </strong>
           <p>현장에 불이 없고 대피가 끝난 것을 직접 확인한 뒤에만 해제하세요. 해제 후에는 새 화재를 다시 감지할 수 있습니다.</p>
           <button type="button" className="btn danger"
-            disabled={busy || !online || selectedRobot?.system_state !== 'active'
-              || selectedRobot?.fire_alarm_active !== true}
+            disabled={busy || !online || mobileRobot?.system_state !== 'active'
+              || mobileRobot?.fire_alarm_active !== true}
             onClick={() => issue(
               'fire_alarm_reset',
               '화재 경보 해제',
@@ -193,7 +222,7 @@ export function SystemDashboard() {
             화재 경보 해제
           </button>
         </section>
-      </div>
+      </div>}
     </div>
   )
 }
