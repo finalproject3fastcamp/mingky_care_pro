@@ -232,6 +232,7 @@ def _row_to_out(
         fire_alarm_active=runtime.fire_alarm_active if runtime else None,
         returning_to_dock=runtime.returning_to_dock if runtime else False,
         navigation_speed_mps=runtime.navigation_speed_mps if runtime else None,
+        low_obstacle_mode=runtime.low_obstacle_mode if runtime else None,
         guide_robot_state=runtime.guide_robot_state if runtime else None,
         # 판정은 서버가 한 번만 한다. 화면이 같은 임계를 다시 들고 있으면
         # config/topic_watch.yaml 을 고쳐도 화면 색이 안 바뀐다.
@@ -418,6 +419,7 @@ async def post_heartbeat(
         body.fire_alarm_active,
         body.returning_to_dock,
         body.navigation_speed_mps,
+        body.low_obstacle_mode,
         guide_robot_state=body.guide_robot_state,
         inventory_hash=body.inventory_hash,
         cpu_total_pct=body.cpu_total_pct,

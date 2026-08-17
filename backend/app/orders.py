@@ -43,7 +43,9 @@ log = logging.getLogger("mingky")
 _SAFETY_COMMANDS = frozenset({"set_mode"})
 _FIRE_COMMANDS = frozenset({"fire_alarm_reset"})
 _SYSTEM_COMMANDS = frozenset({"system_start", "system_stop", "system_restart"})
-_CONFIG_COMMANDS = frozenset({"set_navigation_speed"})
+_CONFIG_COMMANDS = frozenset({
+    "set_navigation_speed", "set_low_obstacle_mode",
+})
 _SESSION_COMMANDS = frozenset({"cancel_guidance"})
 
 # robot_id → 대기 중인 주행 명령. 로봇당 하나만 둔다.

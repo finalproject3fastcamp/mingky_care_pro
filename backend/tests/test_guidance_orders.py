@@ -227,6 +227,32 @@ def test_navigation_speed_uses_a_separate_order_slot():
     assert orders._slot('set_navigation_speed') is not orders._slot('set_mode')
 
 
+def test_low_obstacle_mode_command_is_part_of_the_contract():
+    command = OrderIn(command='set_low_obstacle_mode', argument='sidestep')
+
+    assert command.command == 'set_low_obstacle_mode'
+    assert command.argument == 'sidestep'
+
+
+def test_low_obstacle_mode_shares_the_config_slot_only():
+    assert orders._slot('set_low_obstacle_mode') is orders._slot(
+        'set_navigation_speed')
+    assert orders._slot('set_low_obstacle_mode') is not orders._slot('goto')
+
+
+@pytest.mark.parametrize('argument', ['disabled', 'sidestep'])
+def test_low_obstacle_mode_accepts_supported_strategies(argument):
+    orders_router._validate_low_obstacle_mode(argument)
+
+
+@pytest.mark.parametrize('argument', ['enabled', 'stop_only', 'range_layer', ''])
+def test_low_obstacle_mode_rejects_unknown_strategies(argument):
+    with pytest.raises(HTTPException) as raised:
+        orders_router._validate_low_obstacle_mode(argument)
+
+    assert raised.value.status_code == 422
+
+
 @pytest.mark.parametrize('argument', ['0.04', '0.251', '0.26', 'nan', 'fast'])
 def test_navigation_speed_rejects_values_outside_safe_steps(argument):
     with pytest.raises(HTTPException) as raised:
