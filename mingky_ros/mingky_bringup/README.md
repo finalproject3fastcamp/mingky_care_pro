@@ -113,6 +113,10 @@ ros2 param set /guide_manager low_obstacle_mode sidestep
 ros2 param set /guide_manager low_obstacle_mode disabled
 ```
 
+운영에서는 관제의 **로봇 시스템 관리 → 저상 장애물 대응**에서 같은 값을
+선택할 수 있습니다. 안내 세션이 시작되기 전에만 변경되며, 화면의 현재 적용값은
+로봇 게이트웨이가 `guide_manager`의 파라미터 적용 성공을 확인한 뒤 보고합니다.
+
 `sidestep`은 안내 목표를 취소하고 좌우 탐색과 단계 전진을 완료한 뒤 원래 목표를
 다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며, LiDAR가 오래됐거나
 초음파가 끊기면 직접 회피를 시작하지 않습니다. `RangeSensorLayer` 방식은 넓은

@@ -94,6 +94,7 @@ export type RobotCommand =
   | 'system_restart'
   | 'fire_alarm_reset'
   | 'set_navigation_speed'
+  | 'set_low_obstacle_mode'
 
 /** mode_manager 가 인정하는 값. 그 외는 로봇이 무시한다. */
 export type RobotMode = 'auto' | 'manual' | 'estop'
