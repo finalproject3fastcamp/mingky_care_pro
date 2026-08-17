@@ -1,9 +1,8 @@
 """저상 장애물 판별과 직접 옆걸음 전략의 ROS 비의존 핵심 로직."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Generator, Literal, Sequence
-
 
 MotionKind = Literal['spin', 'drive']
 

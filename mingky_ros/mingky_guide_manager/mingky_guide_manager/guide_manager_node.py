@@ -19,22 +19,18 @@
 
 import json
 import math
-from pathlib import Path
 import threading
+from pathlib import Path
 from typing import Mapping
 
 import rclpy
 import yaml
-from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+from action_msgs.msg import GoalStatus
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import ComputePathToPose, NavigateToPose
-from rclpy.action import ActionClient
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool, Float32, String
-from std_srvs.srv import SetBool
-
 from mingky_interfaces.msg import GuideState, SessionStart
 from mingky_smart_recovery.selector import (
     EscapeCandidate,
@@ -42,9 +38,24 @@ from mingky_smart_recovery.selector import (
     select_diverse_candidates,
     select_escape_candidates,
 )
+from nav2_msgs.action import ComputePathToPose, DriveOnHeading, NavigateToPose, Spin
+from rcl_interfaces.msg import SetParametersResult
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import LaserScan, Range
+from std_msgs.msg import Bool, Float32, String
+from std_srvs.srv import SetBool
 
 from .arrival_chime import play_arrival_chime
 from .event_publisher import EventPublisher
+from .low_obstacle import (
+    LowObstacleConfig,
+    SidestepOutcome,
+    is_low_obstacle,
+    lidar_sector_min_range,
+)
+from .low_obstacle_driver import SidestepActionDriver
 
 
 def _yaw_to_quat(yaw: float):
@@ -84,6 +95,26 @@ class GuideManager(Node):
         self.declare_parameter('recovery_retry_delay_sec', 5.0)
         self.declare_parameter('arrival_notice_sec', 3.0)
         self.declare_parameter('use_arrival_chime', True)
+        # disabled 는 기존 동작을 그대로 유지한다. range_layer 는 후속 검증 뒤
+        # 추가하고, 현재는 실로봇에서 검증한 sidestep 만 선택할 수 있다.
+        self.declare_parameter('low_obstacle_mode', 'disabled')
+        self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
+        self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
+        self.declare_parameter('low_obstacle_confirmations', 2)
+        self.declare_parameter('low_obstacle_max_sidesteps', 3)
+        self.declare_parameter('low_obstacle_trigger_distance', 0.25)
+        self.declare_parameter('low_obstacle_lidar_margin', 0.15)
+        self.declare_parameter('low_obstacle_lidar_front_center_deg', 180.0)
+        self.declare_parameter('low_obstacle_lidar_half_width_deg', 15.0)
+        self.declare_parameter('low_obstacle_probe_step_deg', 10.0)
+        self.declare_parameter('low_obstacle_probe_max_steps', 4)
+        self.declare_parameter('low_obstacle_probe_clearance', 0.45)
+        self.declare_parameter('low_obstacle_body_margin_deg', 15.0)
+        self.declare_parameter('low_obstacle_drive_step', 0.08)
+        self.declare_parameter('low_obstacle_drive_total', 0.35)
+        self.declare_parameter('low_obstacle_drive_speed', 0.12)
+        self.declare_parameter('low_obstacle_min_drive_clearance', 0.10)
+        self.declare_parameter('low_obstacle_range_timeout_sec', 0.8)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
@@ -127,6 +158,46 @@ class GuideManager(Node):
             0.0, float(self.get_parameter('arrival_notice_sec').value))
         self.use_arrival_chime = bool(
             self.get_parameter('use_arrival_chime').value)
+        self.low_obstacle_mode = str(
+            self.get_parameter('low_obstacle_mode').value).lower()
+        if self.low_obstacle_mode not in ('disabled', 'sidestep'):
+            self.get_logger().warn(
+                f'지원하지 않는 low_obstacle_mode={self.low_obstacle_mode!r}; '
+                'disabled 를 사용합니다.')
+            self.low_obstacle_mode = 'disabled'
+        self.low_obstacle_scan_stale_sec = max(
+            0.1, float(self.get_parameter(
+                'low_obstacle_scan_stale_sec').value))
+        self.low_obstacle_confirmations = max(
+            1, int(self.get_parameter('low_obstacle_confirmations').value))
+        self.low_obstacle_max_sidesteps = max(
+            1, int(self.get_parameter('low_obstacle_max_sidesteps').value))
+        self.low_obstacle_config = LowObstacleConfig(
+            trigger_distance_m=float(self.get_parameter(
+                'low_obstacle_trigger_distance').value),
+            lidar_margin_m=float(self.get_parameter(
+                'low_obstacle_lidar_margin').value),
+            lidar_front_center_deg=float(self.get_parameter(
+                'low_obstacle_lidar_front_center_deg').value),
+            lidar_half_width_deg=float(self.get_parameter(
+                'low_obstacle_lidar_half_width_deg').value),
+            probe_step_deg=float(self.get_parameter(
+                'low_obstacle_probe_step_deg').value),
+            probe_max_steps=max(1, int(self.get_parameter(
+                'low_obstacle_probe_max_steps').value)),
+            probe_clearance_m=float(self.get_parameter(
+                'low_obstacle_probe_clearance').value),
+            body_clearance_margin_deg=float(self.get_parameter(
+                'low_obstacle_body_margin_deg').value),
+            drive_step_m=float(self.get_parameter(
+                'low_obstacle_drive_step').value),
+            drive_total_m=float(self.get_parameter(
+                'low_obstacle_drive_total').value),
+            drive_speed_mps=float(self.get_parameter(
+                'low_obstacle_drive_speed').value),
+            minimum_drive_clearance_m=float(self.get_parameter(
+                'low_obstacle_min_drive_clearance').value),
+        )
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -165,6 +236,11 @@ class GuideManager(Node):
         self._maintenance_nav_active = False
         self._localization_active = False
         self._fire_evacuating = False
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = None
+        self._pending_low_obstacle_context = None
+        self._low_obstacle_confirmed_count = 0
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -178,6 +254,8 @@ class GuideManager(Node):
         self.state_pub = self.create_publisher(GuideState, '~/state', state_qos)
         self.navigation_cancel_pub = self.create_publisher(
             Bool, '/navigation_manager/cancel', 10)
+        self.obstacle_stop_pub = self.create_publisher(
+            Bool, '/emergency_stop/obstacle', 10)
 
         self.create_subscription(Float32, '/battery/voltage', self._on_voltage, 10)
         self.create_subscription(Float32, '/battery/percent', self._on_percent, 10)
@@ -196,6 +274,14 @@ class GuideManager(Node):
             str(self.get_parameter('recovery_scan_topic').value),
             self._on_scan,
             10,
+        )
+        range_qos = QoSProfile(depth=5)
+        range_qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        self.create_subscription(
+            Range,
+            str(self.get_parameter('low_obstacle_range_topic').value),
+            self._on_low_obstacle_range,
+            range_qos,
         )
         self.create_subscription(
             Bool, '/navigation_manager/active',
@@ -233,14 +319,56 @@ class GuideManager(Node):
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.path_planner = ActionClient(
             self, ComputePathToPose, 'compute_path_to_pose')
+        self.low_obstacle_spin = ActionClient(self, Spin, 'spin')
+        self.low_obstacle_drive = ActionClient(
+            self, DriveOnHeading, 'drive_on_heading')
+        self.low_obstacle_driver = SidestepActionDriver(
+            self,
+            self.low_obstacle_spin,
+            self.low_obstacle_drive,
+            self.low_obstacle_config,
+            self._on_low_obstacle_sidestep_complete,
+            range_timeout_sec=float(self.get_parameter(
+                'low_obstacle_range_timeout_sec').value),
+        )
+        self.add_on_set_parameters_callback(self._on_set_parameters)
 
         self.create_timer(1.0, self._publish_state)
         self.get_logger().info(
             f'guide_manager 시작 (robot_id={self.robot_id}, '
             f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint}, '
-            f'recovery={self.recovery_mode}, planner={self.planner_mode})')
+            f'recovery={self.recovery_mode}, planner={self.planner_mode}, '
+            f'low_obstacle={self.low_obstacle_mode})')
 
     # ------------------------------------------------------------------ 설정
+
+    def _on_set_parameters(self, parameters) -> SetParametersResult:
+        requested_mode = next(
+            (str(parameter.value).lower() for parameter in parameters
+             if parameter.name == 'low_obstacle_mode'),
+            None,
+        )
+        if requested_mode is None:
+            return SetParametersResult(successful=True)
+        if requested_mode not in ('disabled', 'sidestep'):
+            return SetParametersResult(
+                successful=False,
+                reason='low_obstacle_mode은 disabled 또는 sidestep이어야 합니다.',
+            )
+        if (
+                self._active_nav_context is not None
+                or self._pending_low_obstacle_context is not None
+                or self.low_obstacle_driver.active
+                or self.robot_state == GuideState.ROBOT_MOVING):
+            return SetParametersResult(
+                successful=False,
+                reason='주행 중에는 저상 장애물 모드를 변경할 수 없습니다.',
+            )
+        self.low_obstacle_mode = requested_mode
+        self._low_obstacle_confirmed_count = 0
+        self.get_logger().info(
+            f'저상 장애물 대응 모드 변경: {self.low_obstacle_mode}')
+        return SetParametersResult(successful=True)
 
     def _find_behavior_tree_dir(self) -> Path | None:
         try:
@@ -380,6 +508,7 @@ class GuideManager(Node):
 
         self._cancel_arrival_notice()
         self._cancel_adaptive_retry()
+        self._cancel_low_obstacle_operation()
         active_session_id = self.session_id
         self.robot_state = GuideState.ROBOT_BATTERY_LOW
         self.events.publish(
@@ -441,6 +570,7 @@ class GuideManager(Node):
 
         active_session_id = self.session_id
         self._nav_generation += 1
+        self._cancel_low_obstacle_operation()
         self._cancel_arrival_notice()
         self._cancel_adaptive_retry()
         self._cancel_dock_retry()
@@ -478,6 +608,7 @@ class GuideManager(Node):
             active_session_id = self.session_id
             # 이후 도착하는 기존 안내 목표 결과는 상태와 이벤트에 반영하지 않는다.
             self._nav_generation += 1
+            self._cancel_low_obstacle_operation()
             self._cancel_arrival_notice()
             self._cancel_adaptive_retry()
             self._cancel_dock_retry()
@@ -521,6 +652,7 @@ class GuideManager(Node):
             # 진행 중인 Nav2 콜백은 EmergencyStop 이 취소한 뒤 늦게 도착할 수 있다.
             # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
             self._nav_generation += 1
+            self._cancel_low_obstacle_operation()
             self._cancel_arrival_notice()
             self._cancel_adaptive_retry()
             self._cancel_dock_retry()
@@ -824,6 +956,173 @@ class GuideManager(Node):
         self._latest_scan = msg
         self._latest_scan_received_ns = self.get_clock().now().nanoseconds
 
+    def _on_low_obstacle_range(self, msg: Range) -> None:
+        """초음파 관측을 회피 드라이버와 저상 장애물 판정에 전달한다."""
+        self.low_obstacle_driver.update_range(msg.range)
+        if self.low_obstacle_mode != 'sidestep':
+            self._low_obstacle_confirmed_count = 0
+            return
+        if (
+                self.low_obstacle_driver.active
+                or self._pending_low_obstacle_context is not None
+                or self._active_nav_goal_handle is None
+                or self._active_nav_context is None
+                or self._battery_alarm
+                or self._emergency_engaged
+                or self._fire_evacuating):
+            self._low_obstacle_confirmed_count = 0
+            return
+        now_ns = self.get_clock().now().nanoseconds
+        stale_ns = int(self.low_obstacle_scan_stale_sec * 1_000_000_000)
+        if (
+                self._latest_scan is None
+                or now_ns - self._latest_scan_received_ns > stale_ns):
+            self._low_obstacle_confirmed_count = 0
+            return
+        scan = self._latest_scan
+        lidar_range = lidar_sector_min_range(
+            scan.ranges,
+            angle_min=float(scan.angle_min),
+            angle_increment=float(scan.angle_increment),
+            range_min=float(scan.range_min),
+            range_max=float(scan.range_max),
+            center_deg=self.low_obstacle_config.lidar_front_center_deg,
+            half_width_deg=self.low_obstacle_config.lidar_half_width_deg,
+        )
+        detected = is_low_obstacle(
+            float(msg.range),
+            lidar_range,
+            trigger_distance_m=self.low_obstacle_config.trigger_distance_m,
+            lidar_margin_m=self.low_obstacle_config.lidar_margin_m,
+        )
+        if not detected:
+            self._low_obstacle_confirmed_count = 0
+            return
+        self._low_obstacle_confirmed_count += 1
+        if self._low_obstacle_confirmed_count < self.low_obstacle_confirmations:
+            return
+        self._low_obstacle_confirmed_count = 0
+        self._request_low_obstacle_avoidance(float(msg.range), lidar_range)
+
+    def _request_low_obstacle_avoidance(
+            self, ultrasonic_range: float, lidar_range: float) -> None:
+        handle = self._active_nav_goal_handle
+        result_future = self._active_nav_result_future
+        context = self._active_nav_context
+        if handle is None or result_future is None or context is None:
+            return
+        self.get_logger().warn(
+            f'저상 장애물 감지(초음파={ultrasonic_range:.2f}m, '
+            f'LiDAR={lidar_range:.2f}m); 현재 안내 목표를 일시 취소합니다.')
+        self._nav_generation += 1
+        self._pending_low_obstacle_context = dict(context)
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = None
+        cancel = handle.cancel_goal_async()
+        cancel.add_done_callback(
+            lambda done: self._on_low_obstacle_cancel_response(
+                done, result_future, dict(context)))
+
+    def _on_low_obstacle_cancel_response(
+            self, future, result_future, context: dict) -> None:
+        if self._pending_low_obstacle_context is None:
+            return
+        try:
+            response = future.result()
+            accepted = bool(response.goals_canceling)
+        except Exception as exc:  # noqa: BLE001 - 안전 정지로 전환
+            self._low_obstacle_cancel_failed(
+                context, f'안내 목표 취소 요청 실패: {exc}')
+            return
+        if not accepted:
+            self._low_obstacle_cancel_failed(
+                context, 'Nav2가 안내 목표 취소를 수락하지 않았습니다.')
+            return
+        result_future.add_done_callback(
+            lambda done: self._on_low_obstacle_nav_cancelled(done, context))
+
+    def _on_low_obstacle_nav_cancelled(self, future, context: dict) -> None:
+        if self._pending_low_obstacle_context is None:
+            return
+        try:
+            status = int(future.result().status)
+        except Exception as exc:  # noqa: BLE001 - 취소 확인 실패
+            self._low_obstacle_cancel_failed(
+                context, f'안내 목표 취소 결과 확인 실패: {exc}')
+            return
+        if status != GoalStatus.STATUS_CANCELED:
+            self._low_obstacle_cancel_failed(
+                context, f'안내 목표가 취소 상태로 끝나지 않았습니다(status={status}).')
+            return
+        attempts = int(context.get('low_obstacle_attempts', 0))
+        if attempts >= self.low_obstacle_max_sidesteps:
+            self._fail_low_obstacle_context(
+                context, '저상 장애물 최대 회피 횟수에 도달했습니다.')
+            return
+        self.robot_state = GuideState.ROBOT_MOVING
+        self.get_logger().info(
+            f'안내 목표 취소 완료; 옆걸음 회피 {attempts + 1}/'
+            f'{self.low_obstacle_max_sidesteps}회를 시작합니다.')
+        self.low_obstacle_driver.start(context.get('low_obstacle_side'))
+
+    def _low_obstacle_cancel_failed(self, context: dict, message: str) -> None:
+        self.get_logger().error(message)
+        # 목표가 실제로 멈췄는지 확인할 수 없으므로 직접 회피를 시작하지 않고
+        # 기존 안전 게이트를 잠근다.
+        self.obstacle_stop_pub.publish(Bool(data=True))
+        self._pending_low_obstacle_context = None
+        self._fail_low_obstacle_context(context, message)
+
+    def _on_low_obstacle_sidestep_complete(
+            self, outcome: SidestepOutcome) -> None:
+        context = self._pending_low_obstacle_context
+        if context is None:
+            return
+        self._pending_low_obstacle_context = None
+        if not outcome.succeeded:
+            self._fail_low_obstacle_context(
+                context, f'저상 장애물 회피 실패: {outcome.reason}')
+            return
+        if self._battery_alarm or self._emergency_engaged or self._fire_evacuating:
+            return
+        attempts = int(context.get('low_obstacle_attempts', 0)) + 1
+        self.get_logger().info(
+            f'옆걸음 회피 완료; 원래 목표를 다시 전송합니다 '
+            f'(attempt={attempts}, side={outcome.side}).')
+        self._send_nav_goal(
+            context['waypoint_name'],
+            is_dock=context['is_dock'],
+            session_id=context['session_id'],
+            is_waiting=context['is_waiting'],
+            recovery_attempt=context['recovery_attempt'],
+            recovery_failures=context['recovery_failures'],
+            announce=False,
+            low_obstacle_attempts=attempts,
+            low_obstacle_side=outcome.side,
+        )
+
+    def _fail_low_obstacle_context(self, context: dict, message: str) -> None:
+        self._pending_low_obstacle_context = None
+        self._goal_failed(
+            context['waypoint_name'],
+            context['is_dock'],
+            context['session_id'],
+            -8,
+            message,
+            is_waiting=context['is_waiting'],
+        )
+
+    def _cancel_low_obstacle_operation(self) -> None:
+        self.low_obstacle_driver.cancel()
+        if self._active_nav_goal_handle is not None:
+            self._active_nav_goal_handle.cancel_goal_async()
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = None
+        self._pending_low_obstacle_context = None
+        self._low_obstacle_confirmed_count = 0
+
     def _on_nav_feedback(self, feedback_msg, generation: int) -> None:
         if generation != self._nav_generation:
             return
@@ -1036,7 +1335,9 @@ class GuideManager(Node):
             is_waiting: bool = False,
             recovery_attempt: int = 0,
             recovery_failures: Mapping[str, int] | None = None,
-            announce: bool = True) -> None:
+            announce: bool = True,
+            low_obstacle_attempts: int = 0,
+            low_obstacle_side: int | None = None) -> None:
         wp = self.waypoints.get(waypoint_name)
         if wp is None:
             self.get_logger().error(f'알 수 없는 waypoint: {waypoint_name}')
@@ -1080,6 +1381,19 @@ class GuideManager(Node):
 
         self._nav_generation += 1
         generation = self._nav_generation
+        context = {
+            'waypoint_name': waypoint_name,
+            'is_dock': is_dock,
+            'session_id': session_id,
+            'is_waiting': is_waiting,
+            'recovery_attempt': recovery_attempt,
+            'recovery_failures': dict(recovery_failures or {}),
+            'low_obstacle_attempts': low_obstacle_attempts,
+            'low_obstacle_side': low_obstacle_side,
+        }
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = context
         if is_dock:
             self.current_visit = waypoint_name
             self.robot_state = (
@@ -1109,18 +1423,21 @@ class GuideManager(Node):
         future.add_done_callback(
             lambda done: self._on_goal_response(
                 done, generation, waypoint_name, is_dock, session_id,
-                is_waiting, recovery_attempt, dict(recovery_failures or {})))
+                is_waiting, recovery_attempt, dict(recovery_failures or {}),
+                context))
 
     def _on_goal_response(
             self, future, generation: int, waypoint_name: str,
             is_dock: bool, session_id: int, is_waiting: bool = False,
             recovery_attempt: int = 0,
-            recovery_failures: Mapping[str, int] | None = None):
+            recovery_failures: Mapping[str, int] | None = None,
+            nav_context: dict | None = None):
         try:
             handle = future.result()
         except Exception as exc:  # noqa: BLE001 - Nav2 오류를 이벤트로 보고
             if generation != self._nav_generation:
                 return
+            self._active_nav_context = None
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -4,
                 f'목표 전송 중 예외: {exc}', is_waiting=is_waiting)
@@ -1133,11 +1450,15 @@ class GuideManager(Node):
                 handle.cancel_goal_async()
             return
         if not handle.accepted:
+            self._active_nav_context = None
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -1,
                 'Nav2 가 목표를 거부했습니다.', is_waiting=is_waiting)
             return
+        self._active_nav_goal_handle = handle
+        self._active_nav_context = nav_context
         result = handle.get_result_async()
+        self._active_nav_result_future = result
         result.add_done_callback(
             lambda done: self._on_goal_result(
                 done, generation, waypoint_name, is_dock, session_id,
@@ -1150,6 +1471,9 @@ class GuideManager(Node):
             recovery_failures: Mapping[str, int] | None = None):
         if generation != self._nav_generation:
             return
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = None
         try:
             status = future.result().status
         except Exception as exc:  # noqa: BLE001

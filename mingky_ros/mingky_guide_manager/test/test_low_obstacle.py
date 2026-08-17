@@ -3,7 +3,6 @@
 import math
 
 import pytest
-
 from mingky_guide_manager.low_obstacle import (
     LowObstacleConfig,
     MotionResult,
