@@ -18,6 +18,7 @@ from mingky_event_gateway.gateway_node import (
     isolate_rejected,
     matches_guided_patient,
     parse_navigation_speed,
+    parse_low_obstacle_mode,
     send_outcome,
 )
 from mingky_interfaces.msg import GuideState, QrObservation
@@ -43,6 +44,13 @@ def test_navigation_speed_rejects_out_of_range_or_off_step_values():
     assert parse_navigation_speed('0.26') is None
     assert parse_navigation_speed('nan') is None
     assert parse_navigation_speed('fast') is None
+
+
+def test_low_obstacle_mode_only_accepts_implemented_strategies():
+    assert parse_low_obstacle_mode('disabled') == 'disabled'
+    assert parse_low_obstacle_mode('sidestep') == 'sidestep'
+    assert parse_low_obstacle_mode('enabled') is None
+    assert parse_low_obstacle_mode('range_layer') is None
 
 
 class _Logger:
@@ -80,6 +88,26 @@ def test_navigation_speed_keeps_previous_value_after_parameter_rejection():
     gateway._on_navigation_speed_response(_Future(False), 0.24)
 
     assert gateway._navigation_speed_mps == 0.20
+
+
+def test_low_obstacle_mode_updates_reported_value_after_parameter_success():
+    gateway = object.__new__(EventGateway)
+    gateway._low_obstacle_mode = 'disabled'
+    gateway.get_logger = lambda: _Logger()
+
+    gateway._on_low_obstacle_mode_response(_Future(True), 'sidestep')
+
+    assert gateway._low_obstacle_mode == 'sidestep'
+
+
+def test_low_obstacle_mode_keeps_previous_value_after_parameter_rejection():
+    gateway = object.__new__(EventGateway)
+    gateway._low_obstacle_mode = 'disabled'
+    gateway.get_logger = lambda: _Logger()
+
+    gateway._on_low_obstacle_mode_response(_Future(False), 'sidestep')
+
+    assert gateway._low_obstacle_mode == 'disabled'
 
 
 def test_active_guidance_states_cover_confirmation_through_room_waiting():

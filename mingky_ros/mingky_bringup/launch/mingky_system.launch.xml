@@ -144,6 +144,7 @@
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="backend_url" value="$(var backend_url)"/>
+        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
         <!-- 형상 패널이 읽는 이름. 지문은 /map 에서 직접 뜬다. -->
         <param name="map_name" value="$(var map_name)"/>
     </node>

@@ -108,6 +108,7 @@ DEFAULT_NAVIGATION_SPEED_MPS = 0.20
 MIN_NAVIGATION_SPEED_MPS = 0.05
 MAX_NAVIGATION_SPEED_MPS = 0.25
 NAVIGATION_SPEED_STEP_MPS = 0.01
+LOW_OBSTACLE_MODES = frozenset({"disabled", "sidestep"})
 
 
 def parse_navigation_speed(argument: str) -> float | None:
@@ -125,6 +126,11 @@ def parse_navigation_speed(argument: str) -> float | None:
     if not MIN_NAVIGATION_SPEED_MPS <= normalized <= MAX_NAVIGATION_SPEED_MPS:
         return None
     return normalized
+
+
+def parse_low_obstacle_mode(argument: str) -> str | None:
+    """관제에서 선택 가능한 구현된 전략만 통과시킨다."""
+    return argument if argument in LOW_OBSTACLE_MODES else None
 
 
 def matches_guided_patient(
@@ -355,6 +361,9 @@ class EventGateway(Node):
         # 흐른다. 왕복이 200ms 인 것에 비하면 대기가 지연의 대부분이었다.
         # 서버 상한이 50초이고, 중간 프록시가 먼저 끊지 않도록 그보다 짧게 둔다.
         self.declare_parameter("order_wait_sec", 25.0)
+        # guide_manager와 같은 시작값을 알아야 heartbeat가 관제 화면에 실제
+        # 적용 상태를 보고할 수 있다. 운영 환경에서는 robot.env 값을 넘긴다.
+        self.declare_parameter("low_obstacle_mode", "disabled")
         # 인벤토리(실행 중인 코드 버전·노드 목록) 수집 주기. 0 이면 끈다.
         # heartbeat 와 달리 느려도 된다 — 노드 목록과 커밋은 몇 시간에 한 번
         # 바뀐다. 내용이 바뀌었을 때만 전송하므로 이 주기는 '확인 주기' 다.
@@ -467,6 +476,11 @@ class EventGateway(Node):
         # Nav2 설정의 기본 목표속도다. 통합 시스템이 재시작되면 동적 설정도
         # 이 값으로 돌아가므로 게이트웨이 상태 역시 함께 초기화한다.
         self._navigation_speed_mps = DEFAULT_NAVIGATION_SPEED_MPS
+        configured_low_obstacle_mode = str(
+            self.get_parameter("low_obstacle_mode").value)
+        self._default_low_obstacle_mode = (
+            parse_low_obstacle_mode(configured_low_obstacle_mode) or "disabled")
+        self._low_obstacle_mode = self._default_low_obstacle_mode
 
         # 인벤토리 수집 상태.
         #
@@ -507,6 +521,7 @@ class EventGateway(Node):
             Trigger, "/fire_evac/reset_alarm")
         self._controller_parameters = AsyncParameterClient(
             self, "controller_server")
+        self._guide_parameters = AsyncParameterClient(self, "guide_manager")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -866,6 +881,7 @@ class EventGateway(Node):
                 "fire_alarm_active": self._fire_alarm_active,
                 "returning_to_dock": self._returning_to_dock,
                 "navigation_speed_mps": self._navigation_speed_mps,
+                "low_obstacle_mode": self._low_obstacle_mode,
                 "guide_robot_state": self._guide_robot_state,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
@@ -1315,6 +1331,36 @@ class EventGateway(Node):
             self.get_logger().info(f"주행 속도 변경 요청: {speed:.2f} m/s")
             return True
 
+        if command == "set_low_obstacle_mode":
+            mode = parse_low_obstacle_mode(argument)
+            if mode is None:
+                self.get_logger().error(
+                    f"잘못된 저상 장애물 회피 모드: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if self._system_state() != "active":
+                self.get_logger().error(
+                    "통합 시스템이 가동 중이 아니라 회피 모드 변경을 거부했습니다.")
+                return True
+            if (self._clinical_active or self._localization_active
+                    or self._fire_alarm_active is True):
+                self.get_logger().error(
+                    "안내 또는 안전 동작 중이라 회피 모드 변경을 거부했습니다.")
+                return True
+            if not self._guide_parameters.services_are_ready():
+                self.get_logger().warn(
+                    "guide_manager 파라미터 서비스가 아직 준비되지 않았습니다. "
+                    "명령을 유지합니다.")
+                return False
+            future = self._guide_parameters.set_parameters([
+                Parameter("low_obstacle_mode", value=mode),
+            ])
+            future.add_done_callback(
+                lambda result, requested=mode: self._on_low_obstacle_mode_response(
+                    result, requested))
+            self.get_logger().info(f"저상 장애물 회피 모드 변경 요청: {mode}")
+            return True
+
         if command == "cancel_guidance":
             try:
                 session_id = int(argument)
@@ -1366,6 +1412,7 @@ class EventGateway(Node):
         self.get_logger().info(f"통합 시스템 제어 완료: {action}")
         if action in ("start", "stop", "restart"):
             self._navigation_speed_mps = DEFAULT_NAVIGATION_SPEED_MPS
+            self._low_obstacle_mode = self._default_low_obstacle_mode
         return True
 
     def _on_localize_response(self, future) -> None:
@@ -1405,6 +1452,22 @@ class EventGateway(Node):
             return
         self._navigation_speed_mps = requested
         self.get_logger().info(f"주행 속도 적용 완료: {requested:.2f} m/s")
+
+    def _on_low_obstacle_mode_response(self, future, requested: str) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"저상 장애물 회피 모드 변경 실패: {exc}")
+            return
+        results = response.results if response is not None else []
+        if not results or not all(result.successful for result in results):
+            reasons = ", ".join(
+                result.reason for result in (results or []) if result.reason)
+            self.get_logger().error(
+                f"저상 장애물 회피 모드 변경 거부: {reasons or '원인 확인 불가'}")
+            return
+        self._low_obstacle_mode = requested
+        self.get_logger().info(f"저상 장애물 회피 모드 적용 완료: {requested}")
 
     # ------------------------------------------------------------------ 종료
 

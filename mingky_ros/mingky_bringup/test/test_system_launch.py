@@ -122,6 +122,16 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     }
     assert params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
 
+    event_gateway = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'event_gateway'
+    )
+    gateway_params = {
+        item.get('name'): item.get('value')
+        for item in event_gateway.findall('param')
+    }
+    assert gateway_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
     assert 'low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled}' in unit
