@@ -234,10 +234,23 @@ def test_low_obstacle_mode_command_is_part_of_the_contract():
     assert command.argument == 'sidestep'
 
 
-def test_low_obstacle_mode_shares_the_config_slot_only():
-    assert orders._slot('set_low_obstacle_mode') is orders._slot(
+def test_low_obstacle_mode_has_an_independent_config_slot():
+    assert orders._slot('set_low_obstacle_mode') is not orders._slot(
         'set_navigation_speed')
     assert orders._slot('set_low_obstacle_mode') is not orders._slot('goto')
+
+
+def test_low_obstacle_mode_does_not_overwrite_pending_speed_change():
+    orders.reset()
+    try:
+        orders.put('pinky-01', 'set_navigation_speed', '0.15')
+        orders.put('pinky-01', 'set_low_obstacle_mode', 'sidestep')
+
+        pending = orders.snapshot()['pinky-01']
+        assert [order.command for order in pending] == [
+            'set_navigation_speed', 'set_low_obstacle_mode']
+    finally:
+        orders.reset()
 
 
 @pytest.mark.parametrize('argument', ['disabled', 'sidestep'])
