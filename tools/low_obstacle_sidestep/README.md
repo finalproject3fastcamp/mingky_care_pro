@@ -5,6 +5,11 @@
 여러 번 검증한 참고 구현입니다. 프로덕션에 그대로 붙이는 코드가 아니라
 **"이 방식이면 실제로 된다"는 걸 증명한 프로토타입**입니다.
 
+검증된 동작은 `mingky_guide_manager.low_obstacle`의 선택형 `sidestep` 전략으로
+옮겨졌습니다. 운영 통합은 `mingky_system.launch.xml`의
+`low_obstacle_mode:=sidestep`으로 명시적으로 켜며, 이 디렉터리는 좌표를 직접
+넣어 재현할 때 사용하는 원본 참고 스크립트로 유지합니다.
+
 ## 왜 이렇게 만들었는가
 
 원래 시도했던 방법은 `nav2_costmap_2d::RangeSensorLayer`를 로컬+글로벌

@@ -10,6 +10,8 @@
     <arg name="charging_waypoint" default=""/>
     <arg name="recovery_mode" default="adaptive"/>
     <arg name="planner_mode" default="navfn"/>
+    <!-- 실로봇 검증 전까지 기존 주행을 유지한다. 지원값: disabled, sidestep -->
+    <arg name="low_obstacle_mode" default="disabled"/>
     <arg name="backend_url" default="http://192.168.0.10:8000"/>
 
     <arg name="start_robot_base" default="true"/>
@@ -114,6 +116,7 @@
         <param name="charging_waypoint" value="$(var charging_waypoint)" type="str"/>
         <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
         <param name="arrival_notice_sec" value="$(var arrival_notice_sec)"/>
         <param name="use_arrival_chime" value="$(var use_buzzer)"/>
     </node>
