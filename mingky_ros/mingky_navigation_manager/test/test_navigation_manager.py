@@ -13,7 +13,6 @@ from mingky_navigation_manager.navigation_manager_node import (
     CLINICAL_ERROR,
     LOCALIZATION_ERROR,
     NavigationManager,
-    RECOVERY_ERROR,
     SAFETY_ERROR,
 )
 import pytest
@@ -327,19 +326,20 @@ def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
     assert node._test_context['recovery_attempt'] == 1
 
 
-def test_recovery_stops_after_configured_maximum(adaptive_manager):
+def test_recovery_has_no_attempt_limit(adaptive_manager):
     node, published = adaptive_manager
-    node.recovery_max_attempts = 1
     node._on_goto_pose(_pose('blocked_target'))
+    node._test_context['recovery_attempt'] = 99
 
     node._on_goal_result(
         ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
         node._generation,
     )
 
-    assert node._active is False
-    assert published[-1]['status'] == 'failed'
-    assert published[-1]['error_code'] == RECOVERY_ERROR
+    assert node._active is True
+    assert node._test_context['recovery_attempt'] == 100
+    assert node._recovery_retry_timer is not None
+    assert not any(item['status'] == 'failed' for item in published)
 
 
 def test_emergency_cancels_scheduled_recovery_retry(adaptive_manager):

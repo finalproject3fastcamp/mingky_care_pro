@@ -26,9 +26,11 @@ def test_smac_tree_selects_smac_planner() -> None:
 
     assert selector is not None
     assert selector.attrib['default_planner'] == 'Smac2D'
+    assert root.find('.//RateController').attrib['hz'] == '2.0'
 
 
 def test_final_fallback_retains_existing_motion_recoveries() -> None:
     root = _root('navigate_recovery_smac2d.xml')
 
     assert {'Spin', 'BackUp', 'Wait'} <= _tags(root)
+    assert root.find('.//Wait').attrib['wait_duration'] == '0.3'

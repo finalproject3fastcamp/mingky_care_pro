@@ -93,7 +93,7 @@ class GuideManager(Node):
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
-        self.declare_parameter('recovery_retry_delay_sec', 5.0)
+        self.declare_parameter('recovery_retry_delay_sec', 0.3)
         self.declare_parameter('arrival_notice_sec', 3.0)
         self.declare_parameter('use_arrival_chime', True)
         # disabled 는 기존 동작을 그대로 유지한다. range_layer 는 후속 검증 뒤
@@ -157,7 +157,7 @@ class GuideManager(Node):
                 'recovery_candidate_separation_deg').value)),
         ))
         self.recovery_retry_delay_sec = max(
-            0.5, float(self.get_parameter('recovery_retry_delay_sec').value))
+            0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
         self.arrival_notice_sec = max(
             0.0, float(self.get_parameter('arrival_notice_sec').value))
         self.use_arrival_chime = bool(

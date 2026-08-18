@@ -31,8 +31,9 @@ ros2 launch mingky_bringup mingky_system.launch.xml recovery_mode:=adaptive
 ros2 launch mingky_bringup mingky_system.launch.xml recovery_mode:=default
 ```
 
-전역 경로 계획기는 독립적으로 선택할 수 있습니다. `navfn`이 기본이며,
-복도 모서리에서 더 자연스러운 경로를 시험할 때만 `smac2d`를 선택합니다.
+통합 실행은 전역 경로 계획기로 `smac2d`를 사용합니다. Nav2 컨트롤러는
+안내·Waypoint 시험주행 모두 MPPI를 사용해 10Hz 로컬 코스트맵의 동적
+장애물을 반영합니다. 단독 노드 실행 시에만 호환성을 위해 `navfn`이 기본입니다.
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \
@@ -40,7 +41,7 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
 ```
 
 적응형 모드는 Spin·Wait·Backup이 없는 behavior tree만 사용합니다. 탈출 후보를
-모두 소진하면 5초 동안 정지한 뒤 최신 LiDAR로 후보를 다시 만들며, 원래 안내
+모두 소진하면 0.3초 동안 정지한 뒤 최신 LiDAR로 후보를 다시 만들며, 원래 안내
 목표를 횟수 제한 없이 유지합니다.
 
 LiDAR나 Nav2 위치 피드백이 1초 이상 오래되면 정지 상태로 기다렸다가 다시

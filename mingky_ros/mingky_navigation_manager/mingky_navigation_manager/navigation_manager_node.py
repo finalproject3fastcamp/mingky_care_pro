@@ -42,7 +42,6 @@ BUSY_ERROR = -5
 SAFETY_ERROR = -6
 CLINICAL_ERROR = -7
 LOCALIZATION_ERROR = -8
-RECOVERY_ERROR = -9
 LOW_OBSTACLE_ERROR = -10
 
 
@@ -71,10 +70,7 @@ class NavigationManager(Node):
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
-        self.declare_parameter('recovery_retry_delay_sec', 5.0)
-        # 임상 안내와 달리 엔지니어 시험은 유한 시간에 성공/실패가
-        # 나야 한다.
-        self.declare_parameter('recovery_max_attempts', 3)
+        self.declare_parameter('recovery_retry_delay_sec', 0.3)
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -134,8 +130,6 @@ class NavigationManager(Node):
         ))
         self.recovery_retry_delay_sec = max(
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
-        self.recovery_max_attempts = max(
-            1, int(self.get_parameter('recovery_max_attempts').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -725,12 +719,6 @@ class NavigationManager(Node):
                 and context is not None):
             attempt = int(context.get('recovery_attempt', 0))
             failures = dict(context.get('recovery_failures') or {})
-            if attempt >= self.recovery_max_attempts:
-                self._finish(
-                    'failed', RECOVERY_ERROR,
-                    f'Adaptive Recovery 최대 {self.recovery_max_attempts}회 후에도 '
-                    'Waypoint에 도달하지 못했습니다.')
-                return
             if self._start_adaptive_recovery(attempt, failures):
                 return
             self._schedule_recovery_retry(
@@ -802,8 +790,7 @@ class NavigationManager(Node):
             'generation': self._generation,
         }
         self.get_logger().warn(
-            f'Waypoint Adaptive Recovery {recovery_attempt + 1}/'
-            f'{self.recovery_max_attempts}: '
+            f'Waypoint Adaptive Recovery {recovery_attempt + 1}회차: '
             f'{len(candidates)}개 탈출 후보 경로를 검증합니다.')
         self._validate_next_recovery_candidate(recovery)
         return True
@@ -962,9 +949,6 @@ class NavigationManager(Node):
         failures = recovery['failures']
         failures[candidate.name] = failures.get(candidate.name, 0) + 1
         next_attempt = int(recovery['recovery_attempt']) + 1
-        if next_attempt < self.recovery_max_attempts and self._start_adaptive_recovery(
-                next_attempt, failures):
-            return
         self._schedule_recovery_retry(
             next_attempt, failures, '탈출 지점 이동에 실패했습니다.')
 
@@ -972,12 +956,6 @@ class NavigationManager(Node):
             self, recovery_attempt: int, failures: Mapping[str, int],
             reason: str) -> None:
         if not self._active or self._test_context is None:
-            return
-        if recovery_attempt >= self.recovery_max_attempts:
-            self._finish(
-                'failed', RECOVERY_ERROR,
-                f'{reason} Adaptive Recovery 최대 '
-                f'{self.recovery_max_attempts}회에 도달했습니다.')
             return
         self._cancel_recovery_retry()
         self._generation += 1

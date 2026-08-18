@@ -121,7 +121,9 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
     root = _root()
 
     assert _argument(root, 'recovery_mode').get('default') == 'adaptive'
-    assert _argument(root, 'planner_mode').get('default') == 'navfn'
+    assert _argument(root, 'planner_mode').get('default') == 'smac2d'
+    assert _argument(
+        root, 'recovery_retry_delay_sec').get('default') == '0.3'
     managers = {
         item.get('name'): item for item in root.findall('node')
         if item.get('name') in ('guide_manager', 'navigation_manager')
@@ -133,6 +135,8 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
         }
         assert params['recovery_mode'] == '$(var recovery_mode)'
         assert params['planner_mode'] == '$(var planner_mode)'
+        assert params['recovery_retry_delay_sec'] == (
+            '$(var recovery_retry_delay_sec)')
 
 
 def test_low_obstacle_sidestep_is_opt_in() -> None:
