@@ -123,11 +123,12 @@ class OrderIn(BaseModel):
         "goto", "goto_pose", "start_session", "start_guidance",
         "cancel_guidance", "set_mode",
         "localize", "system_start", "system_stop", "system_restart",
-        "fire_alarm_reset", "set_navigation_speed",
+        "fire_alarm_reset", "set_navigation_speed", "set_low_obstacle_mode",
     ]
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
     # start_session 이면 patient_id, start_guidance/cancel_guidance 면 session_id,
     # set_mode 면 auto | manual | estop, set_navigation_speed 면 m/s 숫자,
+    # set_low_obstacle_mode 면 disabled | sidestep,
     # 나머지 제어 명령은 run.
     #
     # 모드는 로봇이 정본을 갖는다. 여기서 보내는 것은 요청이고, 반영 여부는
@@ -449,6 +450,7 @@ class MobileRobotOut(RobotBase):
     fire_alarm_active: bool | None = None
     returning_to_dock: bool = False
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
+    low_obstacle_mode: Literal["disabled", "sidestep"] | None = None
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
@@ -511,6 +513,8 @@ class RobotHeartbeatIn(BaseModel):
     # Nav2 controller_server에 실제로 반영된 직진 목표속도. 구버전 게이트웨이는
     # 이 값을 보내지 않으므로 None을 허용한다.
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
+    # guide_manager에 실제로 적용된 저상 장애물 회피 전략.
+    low_obstacle_mode: Literal["disabled", "sidestep"] | None = None
     # Guide Manager의 현재 로봇 상태. 구버전 게이트웨이는 보내지 않는다.
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",

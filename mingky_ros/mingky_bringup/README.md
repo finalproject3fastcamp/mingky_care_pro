@@ -87,6 +87,41 @@ battery
 `start_event_gateway:=true`로 실행합니다. 다른 맵을 쓸 때는 같은 맵에 대응하는
 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
 
+### 저상 장애물 옆걸음 회피
+
+라이다가 보지 못하고 `/us_sensor/range` 초음파에만 잡히는 낮은 장애물은
+선택적으로 직접 옆걸음 회피할 수 있습니다. 기본값은 기존 Nav2 동작을 보존하는
+`disabled`이며, 실제 로봇에서 기능을 시험할 때만 `sidestep`을 명시합니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  low_obstacle_mode:=sidestep
+```
+
+운영 systemd에서는 `/etc/mingky/robot.env`에 다음 값을 넣고 통합 시스템을
+재시작합니다.
+
+```bash
+MINGKY_LOW_OBSTACLE_MODE=sidestep
+```
+
+안내 주행이 시작되기 전에는 재시작 없이도 모드를 바꿀 수 있습니다. 진행 중인
+주행이나 회피가 있으면 변경 요청을 거부합니다.
+
+```bash
+ros2 param set /guide_manager low_obstacle_mode sidestep
+ros2 param set /guide_manager low_obstacle_mode disabled
+```
+
+운영에서는 관제의 **로봇 시스템 관리 → 저상 장애물 대응**에서 같은 값을
+선택할 수 있습니다. 안내 세션이 시작되기 전에만 변경되며, 화면의 현재 적용값은
+로봇 게이트웨이가 `guide_manager`의 파라미터 적용 성공을 확인한 뒤 보고합니다.
+
+`sidestep`은 안내 목표를 취소하고 좌우 탐색과 단계 전진을 완료한 뒤 원래 목표를
+다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며, LiDAR가 오래됐거나
+초음파가 끊기면 직접 회피를 시작하지 않습니다. `RangeSensorLayer` 방식은 넓은
+환경에서 별도 검증한 뒤 후속 모드로 추가합니다.
+
 카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
 카메라로 QR을 읽을 때는 소스만 바꿉니다.
 

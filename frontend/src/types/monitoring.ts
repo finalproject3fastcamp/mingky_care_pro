@@ -119,6 +119,7 @@ export interface MobileRobot extends RobotCommon {
   fire_alarm_active: boolean | null
   returning_to_dock: boolean
   navigation_speed_mps: number | null
+  low_obstacle_mode: 'disabled' | 'sidestep' | null
   guide_robot_state:
     | 'idle' | 'moving' | 'waiting' | 'charging' | 'battery_low'
     | 'comm_lost' | 'paused' | 'returning_to_dock' | null

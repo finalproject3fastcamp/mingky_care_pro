@@ -15,5 +15,6 @@ source /home/pinky/mingky_care_pro/install/local_setup.bash
 exec ros2 run mingky_event_gateway event_gateway --ros-args \
   -p backend_url:="${MINGKY_BACKEND_URL}" \
   -p robot_id:="${MINGKY_ROBOT_ID}" \
+  -p low_obstacle_mode:="${MINGKY_LOW_OBSTACLE_MODE:-disabled}" \
   -p order_interval_sec:="${MINGKY_ORDER_INTERVAL}" \
   -p order_wait_sec:="${MINGKY_ORDER_WAIT:-25.0}"

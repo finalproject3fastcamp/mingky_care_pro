@@ -36,6 +36,14 @@ def _validate_navigation_speed(argument: str) -> None:
         )
 
 
+def _validate_low_obstacle_mode(argument: str) -> None:
+    if argument not in ("disabled", "sidestep"):
+        raise HTTPException(
+            status_code=422,
+            detail="low obstacle mode must be disabled or sidestep",
+        )
+
+
 async def _require_robot(robot_id: str) -> None:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -106,8 +114,11 @@ async def create_order(
         if runtime is not None and runtime.fire_alarm_active is False:
             raise HTTPException(
                 status_code=409, detail="fire alarm is not active")
-    if body.command == "set_navigation_speed":
-        _validate_navigation_speed(body.argument)
+    if body.command in ("set_navigation_speed", "set_low_obstacle_mode"):
+        if body.command == "set_navigation_speed":
+            _validate_navigation_speed(body.argument)
+        else:
+            _validate_low_obstacle_mode(body.argument)
         runtime = robot_runtime.snapshot().get(robot_id)
         if runtime is not None:
             if runtime.system_state != "active":

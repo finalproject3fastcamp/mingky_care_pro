@@ -1,8 +1,7 @@
 """통합 launch에서 안내 핵심 노드가 빠지는 회귀를 막는다."""
 
-from pathlib import Path
 import xml.etree.ElementTree as ET
-
+from pathlib import Path
 
 LAUNCH_FILE = (
     Path(__file__).resolve().parents[1] / 'launch' / 'mingky_system.launch.xml'
@@ -17,6 +16,9 @@ ROBOT_INSTALL_SCRIPT = (
 ROBOT_SYSTEMD_UNIT = (
     Path(__file__).resolve().parents[3]
     / 'deploy' / 'robot' / 'systemd' / 'mingky-system.service'
+)
+ROBOT_ENV_EXAMPLE = (
+    Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'robot.env.example'
 )
 
 
@@ -104,6 +106,36 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
 
     assert _argument(root, 'recovery_mode').get('default') == 'adaptive'
     assert _argument(root, 'planner_mode').get('default') == 'navfn'
+
+
+def test_low_obstacle_sidestep_is_opt_in() -> None:
+    root = _root()
+
+    assert _argument(root, 'low_obstacle_mode').get('default') == 'disabled'
+    guide_manager = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'guide_manager'
+    )
+    params = {
+        item.get('name'): item.get('value')
+        for item in guide_manager.findall('param')
+    }
+    assert params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+
+    event_gateway = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'event_gateway'
+    )
+    gateway_params = {
+        item.get('name'): item.get('value')
+        for item in event_gateway.findall('param')
+    }
+    assert gateway_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
+    assert 'low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled}' in unit
+    assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
 
 
 def test_non_clinical_navigation_has_a_separate_manager() -> None:

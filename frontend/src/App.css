@@ -1723,8 +1723,20 @@
 .waypoint-localize-control { display: grid; gap: 10px; }
 .waypoint-system-control { display: grid; gap: 10px; }
 .waypoint-speed-control { display: grid; gap: 10px; }
-.waypoint-speed-control p { margin: 0; color: var(--text-muted); font-size: 0.85rem; line-height: 1.5; }
-.waypoint-speed-control small { color: var(--text-subtle); }
+.waypoint-obstacle-control { display: grid; gap: 10px; }
+.waypoint-speed-control p,
+.waypoint-obstacle-control p { margin: 0; color: var(--text-muted); font-size: 0.85rem; line-height: 1.5; }
+.waypoint-speed-control small,
+.waypoint-obstacle-control small { color: var(--text-subtle); }
+.waypoint-obstacle-control label { display: grid; gap: 6px; color: var(--text-muted); font-size: 0.82rem; }
+.waypoint-obstacle-control select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 12px;
+}
 .waypoint-speed-applied { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .waypoint-speed-applied strong { color: var(--accent-strong); }
 .waypoint-speed-stepper { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 10px; }
