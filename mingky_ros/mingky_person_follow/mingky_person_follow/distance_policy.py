@@ -85,6 +85,35 @@ def estimate_bbox_distance(
     return float(focal_y_px * target_height_m / bbox_height_px)
 
 
+def estimate_near_partial_bbox_distance(
+    focal_y_px: float | None,
+    target_height_m: float,
+    bbox_height_px: float | None,
+    confidence: float,
+    *,
+    min_confidence: float,
+    max_distance_m: float,
+) -> float | None:
+    """가까이에서 잘린 YOLO 박스를 보수적으로 거리 관측으로 인정한다.
+
+    잘린 박스 높이는 실제 전체 박스보다 작으므로 산출 거리는 실제보다
+    멀게 나온다. 그 보수적인 거리도 한계 이내이고 신뢰도가 충분할 때만
+    저속 시야 확보에 사용한다.
+    """
+    values = (confidence, min_confidence, max_distance_m)
+    if not all(math.isfinite(value) for value in values):
+        return None
+    if min_confidence < 0.0 or confidence < min_confidence:
+        return None
+    if max_distance_m <= 0.0:
+        return None
+    distance = estimate_bbox_distance(
+        focal_y_px, target_height_m, bbox_height_px)
+    if distance is None or distance > max_distance_m:
+        return None
+    return distance
+
+
 def bbox_is_complete(
     *,
     center_y_px: float,

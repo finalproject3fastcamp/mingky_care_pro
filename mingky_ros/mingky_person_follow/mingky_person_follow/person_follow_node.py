@@ -3,7 +3,8 @@
 현재 세션의 patient_id와 같은 YOLO 클래스만 추적한다. QR이
 없어도 13cm 인형 높이와 카메라 보정값으로 절대거리를 근사하고,
 QR이 보이면 그 거리로 YOLO 박스 추정을 다시 보정한다. QR·YOLO가
-순간 유실되면 2초까지 직전 주행 상태를 유지한다.
+순간 유실되면 2초까지 직전 주행 상태를 유지한다. 가까운 인형의
+박스가 화면에 잘리면 보수적인 35cm 기준으로 저속 주행만 허용한다.
 """
 
 import collections
@@ -31,6 +32,7 @@ from .distance_policy import (
     bbox_is_complete,
     DistancePolicy,
     estimate_bbox_distance,
+    estimate_near_partial_bbox_distance,
     estimate_visual_distance,
     INACTIVE,
     NORMAL,
@@ -76,6 +78,8 @@ class PersonFollowNode(Node):
         self.declare_parameter('initial_acquire_max_distance_m', 0.30)
         self.declare_parameter('target_height_m', 0.13)
         self.declare_parameter('bbox_edge_margin_px', 5.0)
+        self.declare_parameter('partial_bbox_max_distance_m', 0.35)
+        self.declare_parameter('partial_bbox_conf_threshold', 0.50)
         self.declare_parameter('status_period_sec', 0.5)
         # 0.0은 Nav2에서 제한 해제이므로 정지 표현에 쓰지 않는다.
         self.declare_parameter('stop_speed_percent', 0.1)
@@ -113,8 +117,22 @@ class PersonFollowNode(Node):
         self.target_height_m = float(get('target_height_m').value)
         self.bbox_edge_margin_px = max(
             0.0, float(get('bbox_edge_margin_px').value))
+        self.partial_bbox_max_distance_m = float(
+            get('partial_bbox_max_distance_m').value)
+        self.partial_bbox_conf_threshold = float(
+            get('partial_bbox_conf_threshold').value)
         if not math.isfinite(self.target_height_m) or self.target_height_m <= 0:
             raise ValueError('target_height_m은 0보다 큰 유한한 수여야 합니다.')
+        if (
+                not math.isfinite(self.partial_bbox_max_distance_m)
+                or self.partial_bbox_max_distance_m <= 0.0):
+            raise ValueError(
+                'partial_bbox_max_distance_m은 0보다 큰 유한한 수여야 합니다.')
+        if (
+                not math.isfinite(self.partial_bbox_conf_threshold)
+                or not 0.0 <= self.partial_bbox_conf_threshold <= 1.0):
+            raise ValueError(
+                'partial_bbox_conf_threshold는 0~1 범위여야 합니다.')
         self.status_period_sec = max(
             0.1, float(get('status_period_sec').value))
         self.stop_speed_percent = float(get('stop_speed_percent').value)
@@ -151,7 +169,9 @@ class PersonFollowNode(Node):
         self._locked_class: str | None = None
         self._target_misses = 0
         self._visual_visible = False
+        self._visual_complete = False
         self._last_visual_at: float | None = None
+        self._partial_visual_distance_m: float | None = None
         self._visual_height_px: float | None = None
         self._visual_anchor_distance_m: float | None = None
         self._visual_anchor_height_px: float | None = None
@@ -220,7 +240,9 @@ class PersonFollowNode(Node):
         self._locked_class = None
         self._target_misses = 0
         self._visual_visible = False
+        self._visual_complete = False
         self._last_visual_at = None
+        self._partial_visual_distance_m = None
         self._visual_height_px = None
         self._visual_anchor_distance_m = None
         self._visual_anchor_height_px = None
@@ -268,7 +290,10 @@ class PersonFollowNode(Node):
             self._last_qr_at = now
             self._qr_center = (float(msg.center_x), float(msg.center_y))
             self._qr_distances.append(distance)
-            if self._visual_visible and self._visual_height_px:
+            if (
+                    self._visual_visible
+                    and self._visual_complete
+                    and self._visual_height_px):
                 self._visual_anchor_distance_m = self._median_qr_distance()
                 self._visual_anchor_height_px = self._visual_height_px
 
@@ -335,6 +360,8 @@ class PersonFollowNode(Node):
             if now - frame_at > self.frame_max_age_sec:
                 with self._lock:
                     self._visual_visible = False
+                    self._visual_complete = False
+                    self._partial_visual_distance_m = None
                 continue
             if frame_at == processed_at:
                 continue
@@ -357,6 +384,8 @@ class PersonFollowNode(Node):
                 if target is None:
                     self._target_misses += 1
                     self._visual_visible = False
+                    self._visual_complete = False
+                    self._partial_visual_distance_m = None
                     if self._target_misses >= self.target_reacquire_misses:
                         # 위치 잠금만 풀고 세션 환자 클래스는 유지한다.
                         self._locked_target = None
@@ -369,7 +398,19 @@ class PersonFollowNode(Node):
                         height_px=float(target['h']),
                         image_height_px=float(target['image_height']),
                         edge_margin_px=self.bbox_edge_margin_px):
-                    self._visual_visible = False
+                    distance = estimate_near_partial_bbox_distance(
+                        self._camera_focal_y_px,
+                        self.target_height_m,
+                        float(target['h']),
+                        float(target['conf']),
+                        min_confidence=self.partial_bbox_conf_threshold,
+                        max_distance_m=self.partial_bbox_max_distance_m,
+                    )
+                    self._visual_visible = distance is not None
+                    self._visual_complete = False
+                    self._partial_visual_distance_m = distance
+                    if distance is not None:
+                        self._last_visual_at = now
                     continue
                 self._visual_height_px = float(target['h'])
                 if qr_recent:
@@ -388,9 +429,13 @@ class PersonFollowNode(Node):
                     )
                 if distance is None:
                     self._visual_visible = False
+                    self._visual_complete = False
+                    self._partial_visual_distance_m = None
                     continue
                 self._visual_distances.append(distance)
                 self._visual_visible = True
+                self._visual_complete = True
+                self._partial_visual_distance_m = None
                 self._last_visual_at = now
 
     def _control_tick(self) -> None:
@@ -405,6 +450,14 @@ class PersonFollowNode(Node):
             )
             visual_fresh = (
                 self._visual_visible
+                and self._visual_complete
+                and self._last_visual_at is not None
+                and now - self._last_visual_at <= self.frame_max_age_sec
+            )
+            partial_visual_fresh = (
+                self._visual_visible
+                and not self._visual_complete
+                and self._partial_visual_distance_m is not None
                 and self._last_visual_at is not None
                 and now - self._last_visual_at <= self.frame_max_age_sec
             )
@@ -419,6 +472,11 @@ class PersonFollowNode(Node):
                 distance = self._median_qr_distance()
                 mode = select_mode(distance, previous, self.policy)
                 source = 'qr'
+                self._last_reliable_distance_m = distance
+            elif partial_visual_fresh:
+                distance = self._partial_visual_distance_m
+                mode = SLOW
+                source = 'partial_near'
                 self._last_reliable_distance_m = distance
             else:
                 last_seen = max(

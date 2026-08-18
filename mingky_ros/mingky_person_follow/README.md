@@ -107,7 +107,9 @@ curl http://127.0.0.1:5001/health
 | `initial_acquire_grace_sec` | `4.0` | 출발 후 첫 환자 검출 유예 시간 |
 | `initial_acquire_max_distance_m` | `0.30` | 첫 검출 전 최대 주행 거리 |
 | `target_height_m` | `0.13` | YOLO 절대거리 계산용 인형 높이 |
-| `bbox_edge_margin_px` | `5.0` | 화면에 잘린 박스 제외 여유폭 |
+| `bbox_edge_margin_px` | `5.0` | 완전한 박스 판정의 화면 가장자리 여유폭 |
+| `partial_bbox_max_distance_m` | `0.35` | 잘린 박스를 저속 근접 검출로 인정할 최대 거리 |
+| `partial_bbox_conf_threshold` | `0.50` | 잘린 박스 근접 검출의 최소 YOLO 신뢰도 |
 | `slow_speed_percent` | `35.0` | 감속 시 Nav2 속도 비율 |
 | `stop_speed_percent` | `0.1` | Nav2 취소 전 즉시 정지 속도 비율 |
 | `infer_server_url` | 빈 문자열 | 선택 YOLO `/infer` URL |

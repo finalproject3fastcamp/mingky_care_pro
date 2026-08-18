@@ -151,12 +151,31 @@ def test_visual_distance_works_without_a_recent_qr(node) -> None:
     with instance._lock:
         instance._last_visual_at = time.monotonic()
         instance._visual_visible = True
+        instance._visual_complete = True
         instance._visual_distances.append(0.18)
 
     instance._control_tick()
 
     assert states[-1]['source'] == 'visual'
     assert states[-1]['distance'] == pytest.approx(0.18)
+
+
+def test_near_partial_visual_always_moves_slowly(node) -> None:
+    instance, speeds, states = node
+    instance._on_guide_state(_guide())
+    with instance._lock:
+        instance._last_visual_at = time.monotonic()
+        instance._visual_visible = True
+        instance._visual_complete = False
+        instance._partial_visual_distance_m = 0.34
+
+    instance._control_tick()
+
+    assert instance._mode == SLOW
+    assert speeds[-1] == pytest.approx(35.0)
+    assert states[-1]['source'] == 'partial_near'
+    assert states[-1]['distance'] == pytest.approx(0.34)
+    assert states[-1]['visual_visible'] is True
 
 
 def test_short_tracking_loss_keeps_guiding_then_waits(node) -> None:

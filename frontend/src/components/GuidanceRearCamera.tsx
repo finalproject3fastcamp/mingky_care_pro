@@ -22,6 +22,9 @@ function followPresentation(
     const tone = state === 'normal' ? 'normal' : 'slow'
     return { tone: tone as FollowTone, title: '환자 추적 순간 유실 · 주행 유지' }
   }
+  if (source === 'partial_near') {
+    return { tone: 'slow' as FollowTone, title: '환자 일부 확인 · 감속 35%' }
+  }
   switch (state) {
     case 'normal':
       return { tone: 'normal' as FollowTone, title: '환자 확인 · 정상 주행' }
@@ -42,6 +45,7 @@ function sourceLabel(source: string | null | undefined): string {
   switch (source) {
     case 'qr': return 'QR 거리 측정'
     case 'visual': return 'YOLO 거리 추정'
+    case 'partial_near': return 'YOLO 일부 검출'
     case 'acquiring': return '출발 시야 확보'
     case 'grace': return '추적 유실 유예'
     case 'stale': return '추적 정보 지연'
@@ -90,6 +94,8 @@ export function GuidanceRearCamera({ robotId }: Props) {
           ? '벽에서 멀어지며 후방 카메라에서 환자를 확인할 공간을 확보하고 있습니다.'
           : data?.follow_source === 'grace'
             ? '추적 흔들림을 고려해 최대 2초간 직전 주행 상태를 유지합니다.'
+          : data?.follow_source === 'partial_near'
+            ? '가까운 환자의 일부만 보여 35% 저속으로 시야를 확보하고 있습니다.'
             : data?.qr_visible
           ? '현재 환자의 QR을 확인했습니다.'
           : data?.visual_visible

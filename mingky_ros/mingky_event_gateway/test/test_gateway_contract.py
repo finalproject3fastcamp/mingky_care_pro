@@ -3,6 +3,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from mingky_event_gateway.gateway_node import (
     ACTIVE_GUIDE_SESSION_STATES,
     HeartbeatFailureGuard,
@@ -274,6 +276,22 @@ def test_patient_follow_status_accepts_acquisition_source():
     assert status['follow_state'] == 'slow'
     assert status['follow_distance'] is None
     assert status['follow_source'] == 'acquiring'
+
+
+def test_patient_follow_status_accepts_near_partial_visual_source():
+    status = parse_patient_follow_status(json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': 0.34,
+        'source': 'partial_near',
+        'qr_visible': False,
+        'visual_visible': True,
+    }), 42, 'patient-001')
+
+    assert status['follow_state'] == 'slow'
+    assert status['follow_distance'] == pytest.approx(0.34)
+    assert status['follow_source'] == 'partial_near'
 
 
 def test_patient_follow_status_rejects_other_patient_or_invalid_values():

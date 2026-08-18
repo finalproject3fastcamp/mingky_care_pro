@@ -6,6 +6,7 @@ from mingky_person_follow.distance_policy import (
     bbox_is_complete,
     DistancePolicy,
     estimate_bbox_distance,
+    estimate_near_partial_bbox_distance,
     NORMAL,
     select_mode,
     SLOW,
@@ -72,6 +73,33 @@ def test_clipped_bbox_is_rejected() -> None:
         image_height_px=480.0,
         edge_margin_px=5.0,
     )
+
+
+def test_near_partial_bbox_is_accepted_conservatively() -> None:
+    assert estimate_near_partial_bbox_distance(
+        920.0,
+        0.13,
+        350.0,
+        0.80,
+        min_confidence=0.50,
+        max_distance_m=0.35,
+    ) == pytest.approx(0.3417, rel=1e-3)
+    assert estimate_near_partial_bbox_distance(
+        920.0,
+        0.13,
+        300.0,
+        0.80,
+        min_confidence=0.50,
+        max_distance_m=0.35,
+    ) is None
+    assert estimate_near_partial_bbox_distance(
+        920.0,
+        0.13,
+        350.0,
+        0.49,
+        min_confidence=0.50,
+        max_distance_m=0.35,
+    ) is None
 
 
 @pytest.mark.parametrize('kwargs', [

@@ -185,6 +185,12 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     assert _argument(root, 'patient_follow_initial_acquire_grace').get('default') == '4.0'
     assert _argument(root, 'patient_follow_initial_acquire_distance').get('default') == '0.30'
     assert _argument(root, 'patient_follow_target_height').get('default') == '0.13'
+    assert _argument(
+        root, 'patient_follow_partial_bbox_max_distance'
+    ).get('default') == '0.35'
+    assert _argument(
+        root, 'patient_follow_partial_bbox_conf_threshold'
+    ).get('default') == '0.50'
     follower = next(
         item for item in root.findall('node')
         if item.get('name') == 'person_follow_node'
@@ -208,6 +214,10 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
         '$(var patient_follow_initial_acquire_distance)')
     assert follower_params['target_height_m'] == (
         '$(var patient_follow_target_height)')
+    assert follower_params['partial_bbox_max_distance_m'] == (
+        '$(var patient_follow_partial_bbox_max_distance)')
+    assert follower_params['partial_bbox_conf_threshold'] == (
+        '$(var patient_follow_partial_bbox_conf_threshold)')
 
     guide = next(
         item for item in root.findall('node')
