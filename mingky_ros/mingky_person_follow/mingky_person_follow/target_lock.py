@@ -24,6 +24,8 @@ class Detection(TypedDict):
     y: float
     w: float
     h: float
+    image_width: float
+    image_height: float
 
 
 def bbox_center_distance(a: Detection, b: Detection) -> float:

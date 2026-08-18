@@ -159,9 +159,10 @@ Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`�
 
 ## 환자 거리 기반 안내
 
-`start_patient_follow:=true`를 주면 후방 카메라의 환자 QR ID·거리로
-안내 속도를 조절합니다. 시험 기본 임계값은 0.15m 감속, 0.20m 대기이며
-YOLO URL을 주면 QR이 짧게 가려진 구간만 인형 박스로 보완합니다.
+`start_patient_follow:=true`를 주면 후방 카메라의 환자 QR·YOLO로
+안내 속도를 조절합니다. 기본 임계값은 0.15m 감속, 0.30m 대기이며
+YOLO는 13cm 인형 높이와 카메라 보정값으로 절대거리를 근사합니다.
+QR은 환자 ID와 YOLO 거리를 다시 보정하는 기준으로 사용합니다.
 
 환자가 멀어지면 Guide Manager가 현재 Nav2 목표를 정상 취소해
 Adaptive Recovery가 실행되지 않게 하고, 환자가 복귀하면 같은 Waypoint를
@@ -174,7 +175,9 @@ Adaptive Recovery가 실행되지 않게 하고, 환자가 복귀하면 같은 W
 MINGKY_PATIENT_FOLLOW_ENABLED=true
 MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL=http://<GPU-PC-IP>:5001/infer
 MINGKY_PATIENT_FOLLOW_SLOW_DISTANCE_M=0.15
-MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.20
+MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.30
+MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC=2.0
+MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M=0.13
 MINGKY_PATIENT_FOLLOW_SLOW_SPEED_PERCENT=35.0
 ```
 

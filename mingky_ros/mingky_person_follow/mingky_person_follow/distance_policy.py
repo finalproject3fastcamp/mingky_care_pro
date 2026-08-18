@@ -1,4 +1,4 @@
-"""QR 거리와 직전 상태로 안내 주행 속도 단계를 결정한다."""
+"""QR·YOLO 추정 거리와 직전 상태로 주행 속도를 결정한다."""
 
 from dataclasses import dataclass
 import math
@@ -13,7 +13,7 @@ WAITING = 'waiting'
 @dataclass(frozen=True)
 class DistancePolicy:
     slow_distance_m: float = 0.15
-    stop_distance_m: float = 0.20
+    stop_distance_m: float = 0.30
     hysteresis_m: float = 0.02
 
     def __post_init__(self) -> None:
@@ -64,9 +64,40 @@ def estimate_visual_distance(
     anchor_height_px: float | None,
     current_height_px: float | None,
 ) -> float | None:
-    """QR 검증 시점의 YOLO 박스 크기로 짧은 가림 구간 거리를 보간한다."""
+    """QR 보정 시점의 YOLO 박스 크기로 현재 거리를 추정한다."""
     values = (anchor_distance_m, anchor_height_px, current_height_px)
     if any(value is None or not math.isfinite(value) or value <= 0.0
            for value in values):
         return None
     return float(anchor_distance_m * anchor_height_px / current_height_px)
+
+
+def estimate_bbox_distance(
+    focal_y_px: float | None,
+    target_height_m: float,
+    bbox_height_px: float | None,
+) -> float | None:
+    """실제 높이와 카메라 초점거리로 YOLO 박스의 절대거리를 근사한다."""
+    values = (focal_y_px, target_height_m, bbox_height_px)
+    if any(value is None or not math.isfinite(value) or value <= 0.0
+           for value in values):
+        return None
+    return float(focal_y_px * target_height_m / bbox_height_px)
+
+
+def bbox_is_complete(
+    *,
+    center_y_px: float,
+    height_px: float,
+    image_height_px: float,
+    edge_margin_px: float,
+) -> bool:
+    """상·하단이 화면에 잘린 박스는 거리 추정에서 제외한다."""
+    values = (center_y_px, height_px, image_height_px, edge_margin_px)
+    if not all(math.isfinite(value) for value in values):
+        return False
+    if height_px <= 0.0 or image_height_px <= 0.0 or edge_margin_px < 0.0:
+        return False
+    top = center_y_px - height_px / 2.0
+    bottom = center_y_px + height_px / 2.0
+    return top > edge_margin_px and bottom < image_height_px - edge_margin_px

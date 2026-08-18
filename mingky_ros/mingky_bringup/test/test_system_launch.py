@@ -180,7 +180,9 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
 
     assert _argument(root, 'start_patient_follow').get('default') == 'true'
     assert _argument(root, 'patient_follow_slow_distance').get('default') == '0.15'
-    assert _argument(root, 'patient_follow_stop_distance').get('default') == '0.20'
+    assert _argument(root, 'patient_follow_stop_distance').get('default') == '0.30'
+    assert _argument(root, 'patient_follow_tracking_grace').get('default') == '2.0'
+    assert _argument(root, 'patient_follow_target_height').get('default') == '0.13'
     follower = next(
         item for item in root.findall('node')
         if item.get('name') == 'person_follow_node'
@@ -196,6 +198,10 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
         '$(var patient_follow_slow_distance)')
     assert follower_params['stop_distance_m'] == (
         '$(var patient_follow_stop_distance)')
+    assert follower_params['tracking_grace_sec'] == (
+        '$(var patient_follow_tracking_grace)')
+    assert follower_params['target_height_m'] == (
+        '$(var patient_follow_target_height)')
 
     guide = next(
         item for item in root.findall('node')
@@ -218,6 +224,9 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     ) in unit
     assert 'patient_follow_infer_server_url:=${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:-}' not in unit
     assert 'MINGKY_PATIENT_FOLLOW_ENABLED=true' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.30' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC=2.0' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M=0.13' in env_example
 
 
 def test_non_clinical_navigation_has_a_separate_manager() -> None:

@@ -79,7 +79,8 @@ def test_stale_qr_fails_safe_to_waiting(node) -> None:
     instance._on_qr_observation(_qr(distance=0.10))
     instance._control_tick()
     with instance._lock:
-        instance._last_qr_at = time.monotonic() - instance.qr_stale_sec - 0.1
+        instance._last_qr_at = (
+            time.monotonic() - instance.tracking_grace_sec - 0.1)
         instance._qr_visible = True
 
     instance._control_tick()
@@ -101,25 +102,64 @@ def test_non_guiding_session_releases_speed_limit(node) -> None:
     assert states[-1]['session_id'] == 0
 
 
-def test_visual_fallback_is_bounded_by_last_qr(node) -> None:
+def test_visual_distance_works_without_a_recent_qr(node) -> None:
     instance, _, states = node
     instance._on_guide_state(_guide())
-    instance._on_qr_observation(_qr(distance=0.18))
     with instance._lock:
-        instance._qr_visible = False
         instance._last_visual_at = time.monotonic()
         instance._visual_visible = True
-        instance._visual_anchor_distance_m = 0.18
-        instance._visual_anchor_height_px = 200.0
-        instance._visual_height_px = 200.0
+        instance._visual_distances.append(0.18)
 
     instance._control_tick()
 
     assert states[-1]['source'] == 'visual'
     assert states[-1]['distance'] == pytest.approx(0.18)
 
-    with instance._lock:
-        instance._last_qr_at = (
-            time.monotonic() - instance.visual_fallback_sec - 0.1)
+
+def test_short_tracking_loss_keeps_guiding_then_waits(node) -> None:
+    instance, speeds, states = node
+    instance._on_guide_state(_guide())
+    instance._on_qr_observation(_qr(distance=0.10))
     instance._control_tick()
+
+    with instance._lock:
+        instance._qr_visible = False
+        instance._last_qr_at = time.monotonic() - 1.5
+    instance._control_tick()
+
+    assert instance._mode == NORMAL
+    assert speeds[-1] == pytest.approx(100.0)
+
+    with instance._lock:
+        instance._last_qr_at = time.monotonic() - 2.1
+    instance._control_tick()
+
     assert instance._mode == WAITING
+    assert speeds[-1] == pytest.approx(0.1)
+    assert states[-1]['source'] == 'stale'
+
+
+def test_detection_log_records_changes_and_rate_limits_repeats(
+        node, monkeypatch) -> None:
+    instance, _, _ = node
+    messages = []
+    monkeypatch.setattr(
+        instance.get_logger(), 'info', lambda message: messages.append(message))
+    clock = iter((10.0, 11.0, 12.0, 17.0, 18.0))
+    monkeypatch.setattr(time, 'monotonic', lambda: next(clock))
+    p003 = {
+        'cls': 'p003', 'conf': 0.91,
+        'x': 320.0, 'y': 240.0, 'w': 180.0, 'h': 326.7,
+    }
+
+    instance._log_detections([p003])
+    instance._log_detections([p003])
+    instance._log_detections([])
+    instance._log_detections([])
+    instance._log_detections([])
+
+    assert messages == [
+        'YOLO 검출: count=1, targets=[p003(conf=0.91, bbox=180x327px)]',
+        'YOLO 미검출: targets=[]',
+        'YOLO 미검출: targets=[]',
+    ]

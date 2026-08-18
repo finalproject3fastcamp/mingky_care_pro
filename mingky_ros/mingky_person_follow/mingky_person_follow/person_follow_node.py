@@ -1,9 +1,9 @@
-"""QR 거리를 주 기준으로 안내 환자의 지연을 감지한다.
+"""YOLO 인형 박스와 QR 보정값으로 안내 환자 거리를 추정한다.
 
-이 노드는 현재 안내 세션의 patient_id와 후방 QR의 data가 같을
-때만 거리를 신뢰한다. QR이 짧게 가려진 구간에서는 직전 QR 거리와
-YOLO 박스 크기를 결합해 제한된 시간 동안만 보간한다. 최신 거리를
-신뢰할 수 없으면 안전하게 waiting을 발행한다.
+현재 세션의 patient_id와 같은 YOLO 클래스만 추적한다. QR이
+없어도 13cm 인형 높이와 카메라 보정값으로 절대거리를 근사하고,
+QR이 보이면 그 거리로 YOLO 박스 추정을 다시 보정한다. QR·YOLO가
+순간 유실되면 2초까지 직전 주행 상태를 유지한다.
 """
 
 import collections
@@ -23,11 +23,13 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 import requests
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CameraInfo, CompressedImage
 from std_msgs.msg import Bool, String
 
 from .distance_policy import (
+    bbox_is_complete,
     DistancePolicy,
+    estimate_bbox_distance,
     estimate_visual_distance,
     INACTIVE,
     NORMAL,
@@ -42,6 +44,7 @@ from .target_lock import pick_target
 SPEED_LIMIT_TOPIC = '/speed_limit'
 FOLLOWING_ACTIVE_TOPIC = '/person_follow/following'
 FOLLOW_STATE_TOPIC = '/person_follow/state'
+DETECTION_LOG_INTERVAL_SEC = 5.0
 
 
 class PersonFollowNode(Node):
@@ -52,19 +55,23 @@ class PersonFollowNode(Node):
         self.declare_parameter('robot_id', 'pinky-01')
         self.declare_parameter(
             'image_topic', '/rear_camera/image_raw/compressed')
+        self.declare_parameter(
+            'camera_info_topic', '/rear_camera/camera_info')
         self.declare_parameter('frame_max_age_sec', 2.0)
-        # QR 거리가 주 센서이므로 YOLO 서버는 선택 기능이다.
+        # YOLO 서버를 비우면 QR 거리 단독으로 안전하게 폴백한다.
         self.declare_parameter('infer_server_url', '')
         self.declare_parameter('infer_timeout_sec', 2.0)
         self.declare_parameter('conf_threshold', 0.25)
         self.declare_parameter('max_jump_px', 200.0)
         self.declare_parameter('target_reacquire_misses', 5)
         self.declare_parameter('slow_distance_m', 0.15)
-        self.declare_parameter('stop_distance_m', 0.20)
+        self.declare_parameter('stop_distance_m', 0.30)
         self.declare_parameter('distance_hysteresis_m', 0.02)
         self.declare_parameter('distance_window_size', 5)
         self.declare_parameter('qr_stale_sec', 1.0)
-        self.declare_parameter('visual_fallback_sec', 2.0)
+        self.declare_parameter('tracking_grace_sec', 2.0)
+        self.declare_parameter('target_height_m', 0.13)
+        self.declare_parameter('bbox_edge_margin_px', 5.0)
         self.declare_parameter('status_period_sec', 0.5)
         # 0.0은 Nav2에서 제한 해제이므로 정지 표현에 쓰지 않는다.
         self.declare_parameter('stop_speed_percent', 0.1)
@@ -74,6 +81,7 @@ class PersonFollowNode(Node):
         get = self.get_parameter
         self.robot_id = str(get('robot_id').value)
         self.image_topic = str(get('image_topic').value)
+        self.camera_info_topic = str(get('camera_info_topic').value)
         self.frame_max_age_sec = max(
             0.1, float(get('frame_max_age_sec').value))
         self.infer_server_url = str(get('infer_server_url').value).strip()
@@ -91,10 +99,13 @@ class PersonFollowNode(Node):
         distance_window_size = max(
             1, int(get('distance_window_size').value))
         self.qr_stale_sec = max(0.1, float(get('qr_stale_sec').value))
-        self.visual_fallback_sec = max(
-            self.qr_stale_sec,
-            float(get('visual_fallback_sec').value),
-        )
+        self.tracking_grace_sec = max(
+            0.0, float(get('tracking_grace_sec').value))
+        self.target_height_m = float(get('target_height_m').value)
+        self.bbox_edge_margin_px = max(
+            0.0, float(get('bbox_edge_margin_px').value))
+        if not math.isfinite(self.target_height_m) or self.target_height_m <= 0:
+            raise ValueError('target_height_m은 0보다 큰 유한한 수여야 합니다.')
         self.status_period_sec = max(
             0.1, float(get('status_period_sec').value))
         self.stop_speed_percent = float(get('stop_speed_percent').value)
@@ -120,10 +131,13 @@ class PersonFollowNode(Node):
         self._last_qr_at: float | None = None
         self._qr_center: tuple[float, float] | None = None
         self._qr_distances = collections.deque(maxlen=distance_window_size)
+        self._visual_distances = collections.deque(maxlen=distance_window_size)
         self._latest_jpeg: bytes | None = None
         self._latest_frame_at: float | None = None
         self._last_processed_at: float | None = None
         self._inference_available: bool | None = None
+        self._last_detection_log_at: float | None = None
+        self._last_detection_classes: tuple[str, ...] | None = None
         self._locked_target: dict | None = None
         self._locked_class: str | None = None
         self._target_misses = 0
@@ -132,6 +146,8 @@ class PersonFollowNode(Node):
         self._visual_height_px: float | None = None
         self._visual_anchor_distance_m: float | None = None
         self._visual_anchor_height_px: float | None = None
+        self._camera_focal_y_px: float | None = None
+        self._last_reliable_distance_m: float | None = None
 
         state_qos = QoSProfile(
             depth=1,
@@ -148,6 +164,9 @@ class PersonFollowNode(Node):
             GuideState, '/guide_manager/state', self._on_guide_state, state_qos)
         self.create_subscription(
             QrObservation, '/rear_qr/observation', self._on_qr_observation, 10)
+        self.create_subscription(
+            CameraInfo, self.camera_info_topic, self._on_camera_info,
+            qos_profile_sensor_data)
         if self.infer_server_url:
             self.create_subscription(
                 CompressedImage,
@@ -161,9 +180,9 @@ class PersonFollowNode(Node):
                 name='person-follow-inference',
             ).start()
             self.get_logger().info(
-                f'YOLO 보완 추론 서버: {self.infer_server_url}')
+                f'YOLO 거리 추정 서버: {self.infer_server_url}')
         else:
-            self.get_logger().info('YOLO 보완 추적 비활성; QR 거리만 사용합니다.')
+            self.get_logger().info('YOLO 추적 비활성; QR 거리만 사용합니다.')
         self.create_timer(0.1, self._control_tick)
 
         # 안내 세션이 아니므로 시작 즉시 Nav2 속도 제한을 해제한다.
@@ -181,6 +200,7 @@ class PersonFollowNode(Node):
         self._last_qr_at = None
         self._qr_center = None
         self._qr_distances.clear()
+        self._visual_distances.clear()
         self._locked_target = None
         self._locked_class = None
         self._target_misses = 0
@@ -189,6 +209,7 @@ class PersonFollowNode(Node):
         self._visual_height_px = None
         self._visual_anchor_distance_m = None
         self._visual_anchor_height_px = None
+        self._last_reliable_distance_m = None
 
     def _on_guide_state(self, msg: GuideState) -> None:
         active = (
@@ -234,10 +255,26 @@ class PersonFollowNode(Node):
             self._latest_jpeg = bytes(msg.data)
             self._latest_frame_at = time.monotonic()
 
+    def _on_camera_info(self, msg: CameraInfo) -> None:
+        focal_y = float(msg.k[4])
+        if not math.isfinite(focal_y) or focal_y <= 0.0:
+            return
+        with self._lock:
+            self._camera_focal_y_px = focal_y
+
     def _median_qr_distance(self) -> float | None:
         if not self._qr_distances:
             return None
         ordered = sorted(self._qr_distances)
+        middle = len(ordered) // 2
+        if len(ordered) % 2:
+            return float(ordered[middle])
+        return float((ordered[middle - 1] + ordered[middle]) / 2.0)
+
+    def _median_visual_distance(self) -> float | None:
+        if not self._visual_distances:
+            return None
+        ordered = sorted(self._visual_distances)
         middle = len(ordered) // 2
         if len(ordered) % 2:
             return float(ordered[middle])
@@ -253,6 +290,7 @@ class PersonFollowNode(Node):
                 processed_at = self._last_processed_at
                 locked = self._locked_target
                 locked_class = self._locked_class
+                patient_id = self._patient_id
                 last_qr_at = self._last_qr_at
                 qr_center = self._qr_center
             now = time.monotonic()
@@ -273,7 +311,7 @@ class PersonFollowNode(Node):
                 locked,
                 screen_center=qr_center or (320.0, 240.0),
                 max_jump_px=self.max_jump_px,
-                required_class=locked_class,
+                required_class=locked_class or patient_id,
             )
             qr_recent = (
                 last_qr_at is not None
@@ -284,23 +322,40 @@ class PersonFollowNode(Node):
                     self._target_misses += 1
                     self._visual_visible = False
                     if self._target_misses >= self.target_reacquire_misses:
-                        # 위치 잠금만 풀고 QR로 검증한 클래스는 유지한다.
+                        # 위치 잠금만 풀고 세션 환자 클래스는 유지한다.
                         self._locked_target = None
                     continue
-                if self._locked_class is None and not qr_recent:
-                    # QR로 현재 환자를 확인하기 전에는 임의 인형을
-                    # 잠그지 않는다.
+                self._locked_target = target
+                self._locked_class = str(target['cls'])
+                self._target_misses = 0
+                if not bbox_is_complete(
+                        center_y_px=float(target['y']),
+                        height_px=float(target['h']),
+                        image_height_px=float(target['image_height']),
+                        edge_margin_px=self.bbox_edge_margin_px):
                     self._visual_visible = False
                     continue
-                self._locked_target = target
-                self._locked_class = self._locked_class or str(target['cls'])
-                self._target_misses = 0
-                self._visual_visible = True
-                self._last_visual_at = now
                 self._visual_height_px = float(target['h'])
                 if qr_recent:
                     self._visual_anchor_distance_m = self._median_qr_distance()
                     self._visual_anchor_height_px = self._visual_height_px
+                distance = estimate_visual_distance(
+                    self._visual_anchor_distance_m,
+                    self._visual_anchor_height_px,
+                    self._visual_height_px,
+                )
+                if distance is None:
+                    distance = estimate_bbox_distance(
+                        self._camera_focal_y_px,
+                        self.target_height_m,
+                        self._visual_height_px,
+                    )
+                if distance is None:
+                    self._visual_visible = False
+                    continue
+                self._visual_distances.append(distance)
+                self._visual_visible = True
+                self._last_visual_at = now
 
     def _control_tick(self) -> None:
         now = time.monotonic()
@@ -315,28 +370,40 @@ class PersonFollowNode(Node):
             visual_fresh = (
                 self._visual_visible
                 and self._last_visual_at is not None
-                and self._last_qr_at is not None
                 and now - self._last_visual_at <= self.frame_max_age_sec
-                and now - self._last_qr_at <= self.visual_fallback_sec
             )
             if not active:
                 mode, distance, source = INACTIVE, None, 'none'
+            elif visual_fresh:
+                distance = self._median_visual_distance()
+                mode = select_mode(distance, previous, self.policy)
+                source = 'visual'
+                self._last_reliable_distance_m = distance
             elif qr_fresh:
                 distance = self._median_qr_distance()
                 mode = select_mode(distance, previous, self.policy)
                 source = 'qr'
-            elif visual_fresh:
-                distance = estimate_visual_distance(
-                    self._visual_anchor_distance_m,
-                    self._visual_anchor_height_px,
-                    self._visual_height_px,
-                )
-                mode = select_mode(distance, previous, self.policy)
-                source = 'visual'
+                self._last_reliable_distance_m = distance
             else:
-                distance = None
-                mode = WAITING
-                source = 'stale'
+                last_seen = max(
+                    (stamp for stamp in (
+                        self._last_qr_at, self._last_visual_at)
+                     if stamp is not None),
+                    default=None,
+                )
+                grace_active = (
+                    previous in (NORMAL, SLOW)
+                    and last_seen is not None
+                    and now - last_seen <= self.tracking_grace_sec
+                )
+                if grace_active:
+                    distance = self._last_reliable_distance_m
+                    mode = previous
+                    source = 'grace'
+                else:
+                    distance = None
+                    mode = WAITING
+                    source = 'stale'
             changed = mode != previous
             self._mode = mode
 
@@ -402,6 +469,14 @@ class PersonFollowNode(Node):
             payload = body.get('detections', [])
             if not isinstance(payload, list):
                 raise ValueError('detections는 배열이어야 합니다.')
+            image_width = float(body['image_width'])
+            image_height = float(body['image_height'])
+            if not (
+                    math.isfinite(image_width)
+                    and math.isfinite(image_height)
+                    and image_width > 0.0
+                    and image_height > 0.0):
+                raise ValueError('입력 영상 크기가 유효하지 않습니다.')
             detections = []
             for raw in payload:
                 if not isinstance(raw, dict):
@@ -413,6 +488,8 @@ class PersonFollowNode(Node):
                     'y': float(raw['y']),
                     'w': float(raw['w']),
                     'h': float(raw['h']),
+                    'image_width': image_width,
+                    'image_height': image_height,
                 }
                 numeric = [
                     value for key, value in detection.items() if key != 'cls'
@@ -421,6 +498,7 @@ class PersonFollowNode(Node):
                     raise ValueError(
                         '검출 좌표와 신뢰도는 유한한 수여야 합니다.')
                 detections.append(detection)
+            self._log_detections(detections)
             if self._inference_available is False:
                 self.events.publish('person_follow.inference_restored')
                 self.get_logger().info('추론 서버 연결이 복구됐습니다.')
@@ -437,6 +515,37 @@ class PersonFollowNode(Node):
             self.get_logger().warn(
                 f'추론 서버 호출 실패: {exc}', throttle_duration_sec=5.0)
             return []
+
+    def _log_detections(self, detections: list[dict]) -> None:
+        """검출 클래스 변화는 즉시, 같은 결과는 5초마다 기록한다."""
+        now = time.monotonic()
+        classes = tuple(sorted({str(item['cls']) for item in detections}))
+        changed = classes != self._last_detection_classes
+        periodic = (
+            self._last_detection_log_at is None
+            or now - self._last_detection_log_at >= DETECTION_LOG_INTERVAL_SEC
+        )
+        if not changed and not periodic:
+            return
+
+        if detections:
+            summaries = []
+            for item in sorted(
+                    detections,
+                    key=lambda value: float(value['conf']),
+                    reverse=True):
+                summaries.append(
+                    f"{item['cls']}(conf={float(item['conf']):.2f}, "
+                    f"bbox={float(item['w']):.0f}x{float(item['h']):.0f}px)"
+                )
+            self.get_logger().info(
+                f"YOLO 검출: count={len(detections)}, "
+                f"targets=[{', '.join(summaries)}]")
+        else:
+            self.get_logger().info('YOLO 미검출: targets=[]')
+
+        self._last_detection_classes = classes
+        self._last_detection_log_at = now
 
 
 def main() -> None:
