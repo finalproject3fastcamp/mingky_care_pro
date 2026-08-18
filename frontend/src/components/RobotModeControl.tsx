@@ -12,7 +12,8 @@
  * 섞여 있으면 안 되기 때문이다. 걸어 잠기므로 해제도 명시적으로 눌러야 한다.
  */
 
-import { useEffect, useState } from 'react'
+import { animate, createScope } from 'animejs'
+import { useEffect, useRef, useState } from 'react'
 
 import { sendOrder, type RobotMode } from '../lib/api'
 
@@ -38,6 +39,7 @@ interface Props {
 export function RobotModeControl({
   robotId, mode, appliedMode, modeStatusRevision, robotConnected,
 }: Props) {
+  const rootRef = useRef<HTMLElement>(null)
   // 요청이 실패하면 화면에 남긴다. 특히 비상정지는 실패를 모르면
   // 눌렀으니 섰겠거니 하고 다음 행동을 한다.
   const [error, setError] = useState<string | null>(null)
@@ -95,8 +97,27 @@ export function RobotModeControl({
 
   const estopped = mode === 'estop' || appliedMode === 'estop'
 
+  useEffect(() => {
+    if (!rootRef.current || appliedMode === null) return
+    const scope = createScope({
+      root: rootRef,
+      mediaQueries: {
+        reduceMotion: '(prefers-reduced-motion: reduce)',
+      },
+    }).add((self) => {
+      if (self?.matches.reduceMotion) return
+      animate('.mode-control__value', {
+        opacity: { from: 0.35 },
+        y: { from: -5 },
+        duration: 320,
+        ease: 'out(4)',
+      })
+    })
+    return () => scope.revert()
+  }, [appliedMode])
+
   return (
-    <section className="mode-control">
+    <section className="mode-control" ref={rootRef}>
       <header className="mode-control__header">
         <span className="mode-control__label">주행 모드</span>
         <strong className={`mode-control__value mode-control__value--${appliedMode ?? 'unknown'}`}>

@@ -1,3 +1,4 @@
+import { animate, createScope } from 'animejs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
@@ -44,6 +45,7 @@ export function MedicalDashboard() {
   const [justArmed, setJustArmed] = useState<MobileRobot | null>(null)
   const [locationBusy, setLocationBusy] = useState(false)
   const [locationNotice, setLocationNotice] = useState<string | null>(null)
+  const controlDeckRef = useRef<HTMLDivElement>(null)
 
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
@@ -161,6 +163,32 @@ export function MedicalDashboard() {
     }
   }, [robotList, justArmed])
 
+  useEffect(() => {
+    if (!selectedRobotId || !controlDeckRef.current) return
+    const scope = createScope({
+      root: controlDeckRef,
+      mediaQueries: {
+        reduceMotion: '(prefers-reduced-motion: reduce)',
+      },
+    }).add((self) => {
+      if (self?.matches.reduceMotion) return
+      animate('.control-deck__map-shell', {
+        opacity: { from: 0 },
+        scale: { from: 0.985 },
+        duration: 480,
+        ease: 'out(3)',
+      })
+      animate('.control-deck__rail', {
+        opacity: { from: 0 },
+        x: { from: 20 },
+        delay: 90,
+        duration: 420,
+        ease: 'out(4)',
+      })
+    })
+    return () => scope.revert()
+  }, [selectedRobotId])
+
   function handleSelect(robot: MobileRobot) {
     setJustArmed(robot)
     navigate(`/medical/${robot.robot_id}`)
@@ -240,7 +268,7 @@ export function MedicalDashboard() {
       {/* 안내 중이든 대기 중이든 항상 보여야 한다. 급할 때 찾는 것이
           화면 상태에 따라 사라지면 안 된다. */}
       {selectedRobotId && (
-          <div className="control-deck">
+          <div className="control-deck" ref={controlDeckRef}>
             {/* 끊김은 조작·정지가 안 닿는다는 뜻이라 화면 위쪽에 크게 알린다.
                 패널마다 흩어 놓으면 어느 것이 진짜 상태인지 알기 어렵다. */}
             {!teleop.robotConnected && (
@@ -251,39 +279,55 @@ export function MedicalDashboard() {
                   : ' 관제 서버와의 연결도 끊겨 있습니다.'}
               </p>
             )}
-            <RobotModeControl
-              robotId={selectedRobotId}
-              mode={mode}
-              appliedMode={teleop.appliedMode}
-              modeStatusRevision={teleop.modeStatusRevision}
-              robotConnected={teleop.robotConnected}
-            />
-            <LazyHospitalMap3D
-              pose={teleop.pose}
-              live={teleop.robotConnected}
-              scan={teleop.scan}
-              particles={teleop.particles}
-              plan={teleop.plan}
-              onSetPose={teleop.setPose}
-              estop={teleop.appliedMode === 'estop'}
-              selected
-            />
-            <TeleopPad
-              drive={teleop.drive}
-              enabled={mode === 'manual' && teleop.appliedMode === 'manual'
-                && teleop.robotConnected}
-              disabledReason={
-                !teleop.robotConnected
-                  ? '로봇이 관제에 연결되어 있지 않습니다.'
-                  : teleop.appliedMode === null
-                    ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
-                  : mode !== teleop.appliedMode
-                    ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
-                  : teleop.appliedMode === 'estop'
-                    ? '비상정지가 걸려 있습니다. 해제해야 움직입니다.'
-                    : '수동 조작 모드로 전환해야 움직입니다.'
-              }
-            />
+            <div className="control-deck__map-shell">
+              <LazyHospitalMap3D
+                pose={teleop.pose}
+                live={teleop.robotConnected}
+                scan={teleop.scan}
+                particles={teleop.particles}
+                plan={teleop.plan}
+                onSetPose={teleop.setPose}
+                estop={teleop.appliedMode === 'estop'}
+                selected
+              />
+            </div>
+            <aside className="control-deck__rail" aria-label="로봇 주행 제어">
+              <header className="control-deck__rail-header">
+                <div>
+                  <span className="control-deck__eyebrow">CONTROL CENTER</span>
+                  <strong>로봇 주행 제어</strong>
+                </div>
+                <span className={`control-deck__connection${
+                  teleop.robotConnected ? ' is-online' : ' is-offline'
+                }`}>
+                  <i aria-hidden="true" />
+                  {teleop.robotConnected ? '연결됨' : '연결 끊김'}
+                </span>
+              </header>
+              <RobotModeControl
+                robotId={selectedRobotId}
+                mode={mode}
+                appliedMode={teleop.appliedMode}
+                modeStatusRevision={teleop.modeStatusRevision}
+                robotConnected={teleop.robotConnected}
+              />
+              <TeleopPad
+                drive={teleop.drive}
+                enabled={mode === 'manual' && teleop.appliedMode === 'manual'
+                  && teleop.robotConnected}
+                disabledReason={
+                  !teleop.robotConnected
+                    ? '로봇이 관제에 연결되어 있지 않습니다.'
+                    : teleop.appliedMode === null
+                      ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
+                      : mode !== teleop.appliedMode
+                      ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
+                      : teleop.appliedMode === 'estop'
+                      ? '비상정지가 걸려 있습니다. 해제해야 움직입니다.'
+                      : '수동 조작 모드로 전환해야 움직입니다.'
+                }
+              />
+            </aside>
           </div>
       )}
       {selectedRobotId && (
