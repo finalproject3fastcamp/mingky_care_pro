@@ -564,6 +564,8 @@ class EventGateway(Node):
         self._controller_parameters = AsyncParameterClient(
             self, "controller_server")
         self._guide_parameters = AsyncParameterClient(self, "guide_manager")
+        self._navigation_parameters = AsyncParameterClient(
+            self, "navigation_manager")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -1423,18 +1425,23 @@ class EventGateway(Node):
                 self.get_logger().error(
                     "안내 또는 안전 동작 중이라 회피 모드 변경을 거부했습니다.")
                 return True
-            if not self._guide_parameters.services_are_ready():
+            if (not self._guide_parameters.services_are_ready()
+                    or not self._navigation_parameters.services_are_ready()):
                 self.get_logger().warn(
-                    "guide_manager 파라미터 서비스가 아직 준비되지 않았습니다. "
+                    "안내/Waypoint 주행 관리자 파라미터 서비스가 아직 "
+                    "준비되지 않았습니다. "
                     "명령을 유지합니다.")
                 return False
-            future = self._guide_parameters.set_parameters([
+            previous = self._low_obstacle_mode
+            future = self._navigation_parameters.set_parameters([
                 Parameter("low_obstacle_mode", value=mode),
             ])
             future.add_done_callback(
-                lambda result, requested=mode: self._on_low_obstacle_mode_response(
-                    result, requested))
-            self.get_logger().info(f"저상 장애물 회피 모드 변경 요청: {mode}")
+                lambda result, requested=mode, old=previous:
+                self._on_navigation_low_obstacle_mode_response(
+                    result, requested, old))
+            self.get_logger().info(
+                f"Waypoint 시험 저상 장애물 회피 모드 변경 요청: {mode}")
             return True
 
         if command == "cancel_guidance":
@@ -1529,11 +1536,39 @@ class EventGateway(Node):
         self._navigation_speed_mps = requested
         self.get_logger().info(f"주행 속도 적용 완료: {requested:.2f} m/s")
 
-    def _on_low_obstacle_mode_response(self, future, requested: str) -> None:
+    def _on_navigation_low_obstacle_mode_response(
+            self, future, requested: str, previous: str) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(
+                f"Waypoint 시험 저상 장애물 회피 모드 변경 실패: {exc}")
+            return
+        results = response.results if response is not None else []
+        if not results or not all(result.successful for result in results):
+            reasons = ", ".join(
+                result.reason for result in (results or []) if result.reason)
+            self.get_logger().error(
+                "Waypoint 시험 저상 장애물 회피 모드 변경 거부: "
+                f"{reasons or '원인 확인 불가'}")
+            return
+        future = self._guide_parameters.set_parameters([
+            Parameter("low_obstacle_mode", value=requested),
+        ])
+        future.add_done_callback(
+            lambda result, mode=requested, old=previous:
+            self._on_low_obstacle_mode_response(result, mode, old))
+        self.get_logger().info(
+            f"안내 주행 저상 장애물 회피 모드 변경 요청: {requested}")
+
+    def _on_low_obstacle_mode_response(
+            self, future, requested: str, previous: str | None = None) -> None:
         try:
             response = future.result()
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error(f"저상 장애물 회피 모드 변경 실패: {exc}")
+            if previous is not None:
+                self._rollback_navigation_low_obstacle_mode(previous)
             return
         results = response.results if response is not None else []
         if not results or not all(result.successful for result in results):
@@ -1541,9 +1576,20 @@ class EventGateway(Node):
                 result.reason for result in (results or []) if result.reason)
             self.get_logger().error(
                 f"저상 장애물 회피 모드 변경 거부: {reasons or '원인 확인 불가'}")
+            if previous is not None:
+                self._rollback_navigation_low_obstacle_mode(previous)
             return
         self._low_obstacle_mode = requested
-        self.get_logger().info(f"저상 장애물 회피 모드 적용 완료: {requested}")
+        self.get_logger().info(
+            f"안내/Waypoint 시험 저상 장애물 회피 모드 적용 완료: {requested}")
+
+    def _rollback_navigation_low_obstacle_mode(self, previous: str) -> None:
+        self._navigation_parameters.set_parameters([
+            Parameter("low_obstacle_mode", value=previous),
+        ])
+        self.get_logger().warn(
+            "안내 주행 모드 적용 실패로 Waypoint 시험 모드를 "
+            f"{previous}(으)로 되돌립니다.")
 
     # ------------------------------------------------------------------ 종료
 

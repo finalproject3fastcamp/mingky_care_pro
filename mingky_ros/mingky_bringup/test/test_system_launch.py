@@ -145,6 +145,16 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     }
     assert params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
 
+    navigation_manager = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'navigation_manager'
+    )
+    navigation_params = {
+        item.get('name'): item.get('value')
+        for item in navigation_manager.findall('param')
+    }
+    assert navigation_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+
     event_gateway = next(
         item for item in root.findall('node')
         if item.get('name') == 'event_gateway'

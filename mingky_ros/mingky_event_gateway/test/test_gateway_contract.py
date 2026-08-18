@@ -71,6 +71,15 @@ class _Future:
         return self.response
 
 
+class _ParameterClient:
+    def __init__(self):
+        self.requests = []
+
+    def set_parameters(self, parameters):
+        self.requests.append(parameters)
+        return SimpleNamespace(add_done_callback=lambda callback: None)
+
+
 def test_navigation_speed_updates_reported_value_after_parameter_success():
     gateway = object.__new__(EventGateway)
     gateway._navigation_speed_mps = 0.20
@@ -109,6 +118,38 @@ def test_low_obstacle_mode_keeps_previous_value_after_parameter_rejection():
     gateway._on_low_obstacle_mode_response(_Future(False), 'sidestep')
 
     assert gateway._low_obstacle_mode == 'disabled'
+
+
+def test_waypoint_mode_is_applied_before_guide_mode():
+    gateway = object.__new__(EventGateway)
+    gateway._guide_parameters = _ParameterClient()
+    gateway.get_logger = lambda: _Logger()
+
+    gateway._on_navigation_low_obstacle_mode_response(
+        _Future(True), 'sidestep', 'disabled')
+
+    assert len(gateway._guide_parameters.requests) == 1
+    parameter = gateway._guide_parameters.requests[0][0]
+    assert parameter.name == 'low_obstacle_mode'
+    assert parameter.value == 'sidestep'
+
+
+def test_guide_mode_rejection_rolls_waypoint_mode_back():
+    gateway = object.__new__(EventGateway)
+    gateway._low_obstacle_mode = 'disabled'
+    gateway._navigation_parameters = _ParameterClient()
+    gateway.get_logger = lambda: SimpleNamespace(
+        info=lambda message: None,
+        warn=lambda message: None,
+        error=lambda message: None,
+    )
+
+    gateway._on_low_obstacle_mode_response(
+        _Future(False), 'sidestep', 'disabled')
+
+    assert gateway._low_obstacle_mode == 'disabled'
+    parameter = gateway._navigation_parameters.requests[0][0]
+    assert parameter.value == 'disabled'
 
 
 def test_active_guidance_states_cover_confirmation_through_room_waiting():

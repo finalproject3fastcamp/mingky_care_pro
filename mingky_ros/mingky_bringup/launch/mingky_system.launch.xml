@@ -154,6 +154,7 @@
         <!-- Waypoint 시험주행도 환자 안내와 같은 복구 정책·플래너를 사용한다. -->
         <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
     </node>
 
     <node pkg="mingky_lcd_status" exec="lcd_status"

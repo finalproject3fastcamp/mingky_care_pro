@@ -105,22 +105,25 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
 MINGKY_LOW_OBSTACLE_MODE=sidestep
 ```
 
-안내 주행이 시작되기 전에는 재시작 없이도 모드를 바꿀 수 있습니다. 진행 중인
-주행이나 회피가 있으면 변경 요청을 거부합니다.
+안내 주행 또는 Waypoint 시험 주행이 시작되기 전에는 재시작 없이도 모드를 바꿀
+수 있습니다. 진행 중인 주행이나 회피가 있으면 변경 요청을 거부합니다.
 
 ```bash
 ros2 param set /guide_manager low_obstacle_mode sidestep
+ros2 param set /navigation_manager low_obstacle_mode sidestep
 ros2 param set /guide_manager low_obstacle_mode disabled
+ros2 param set /navigation_manager low_obstacle_mode disabled
 ```
 
 운영에서는 관제의 **로봇 시스템 관리 → 저상 장애물 대응**에서 같은 값을
-선택할 수 있습니다. 안내 세션이 시작되기 전에만 변경되며, 화면의 현재 적용값은
-로봇 게이트웨이가 `guide_manager`의 파라미터 적용 성공을 확인한 뒤 보고합니다.
+선택할 수 있습니다. 주행이 시작되기 전에만 변경되며, 화면의 현재 적용값은 로봇
+게이트웨이가 `guide_manager`와 `navigation_manager` 양쪽의 파라미터 적용 성공을
+확인한 뒤 보고합니다.
 
-`sidestep`은 안내 목표를 취소하고 좌우 탐색과 단계 전진을 완료한 뒤 원래 목표를
-다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며, LiDAR가 오래됐거나
-초음파가 끊기면 직접 회피를 시작하지 않습니다. `RangeSensorLayer` 방식은 넓은
-환경에서 별도 검증한 뒤 후속 모드로 추가합니다.
+`sidestep`은 안내 목표나 Waypoint 시험 목표를 취소하고 좌우 탐색과 단계 전진을
+완료한 뒤 원래 목표를 다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며,
+LiDAR가 오래됐거나 초음파가 끊기면 직접 회피를 시작하지 않습니다.
+`RangeSensorLayer` 방식은 넓은 환경에서 별도 검증한 뒤 후속 모드로 추가합니다.
 
 카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
 카메라로 QR을 읽을 때는 소스만 바꿉니다.

@@ -13,6 +13,13 @@ from typing import Mapping
 from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from geometry_msgs.msg import PoseStamped
+from mingky_guide_manager.low_obstacle import (
+    LowObstacleConfig,
+    SidestepOutcome,
+    is_low_obstacle,
+    lidar_sector_min_range,
+)
+from mingky_guide_manager.low_obstacle_driver import SidestepActionDriver
 from mingky_interfaces.msg import GuideState
 from mingky_smart_recovery.selector import (
     EscapeCandidate,
@@ -20,12 +27,13 @@ from mingky_smart_recovery.selector import (
     select_diverse_candidates,
     select_escape_candidates,
 )
-from nav2_msgs.action import ComputePathToPose, NavigateToPose
+from nav2_msgs.action import ComputePathToPose, DriveOnHeading, NavigateToPose, Spin
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Range
 from std_msgs.msg import Bool, String
 import yaml
 
@@ -35,6 +43,7 @@ SAFETY_ERROR = -6
 CLINICAL_ERROR = -7
 LOCALIZATION_ERROR = -8
 RECOVERY_ERROR = -9
+LOW_OBSTACLE_ERROR = -10
 
 
 def _yaw_to_quat(yaw: float) -> tuple[float, float]:
@@ -66,6 +75,24 @@ class NavigationManager(Node):
         # 임상 안내와 달리 엔지니어 시험은 유한 시간에 성공/실패가
         # 나야 한다.
         self.declare_parameter('recovery_max_attempts', 3)
+        self.declare_parameter('low_obstacle_mode', 'disabled')
+        self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
+        self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
+        self.declare_parameter('low_obstacle_confirmations', 2)
+        self.declare_parameter('low_obstacle_max_sidesteps', 3)
+        self.declare_parameter('low_obstacle_trigger_distance', 0.25)
+        self.declare_parameter('low_obstacle_lidar_margin', 0.15)
+        self.declare_parameter('low_obstacle_lidar_front_center_deg', 180.0)
+        self.declare_parameter('low_obstacle_lidar_half_width_deg', 15.0)
+        self.declare_parameter('low_obstacle_probe_step_deg', 10.0)
+        self.declare_parameter('low_obstacle_probe_max_steps', 4)
+        self.declare_parameter('low_obstacle_probe_clearance', 0.45)
+        self.declare_parameter('low_obstacle_body_margin_deg', 15.0)
+        self.declare_parameter('low_obstacle_drive_step', 0.08)
+        self.declare_parameter('low_obstacle_drive_total', 0.35)
+        self.declare_parameter('low_obstacle_drive_speed', 0.12)
+        self.declare_parameter('low_obstacle_min_drive_clearance', 0.10)
+        self.declare_parameter('low_obstacle_range_timeout_sec', 0.8)
 
         self.robot_id = str(self.get_parameter('robot_id').value)
         self.waypoints = self._load_waypoints(
@@ -109,6 +136,46 @@ class NavigationManager(Node):
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
         self.recovery_max_attempts = max(
             1, int(self.get_parameter('recovery_max_attempts').value))
+        self.low_obstacle_mode = str(
+            self.get_parameter('low_obstacle_mode').value).lower()
+        if self.low_obstacle_mode not in ('disabled', 'sidestep'):
+            self.get_logger().warn(
+                f'지원하지 않는 low_obstacle_mode={self.low_obstacle_mode!r}; '
+                'disabled를 사용합니다.')
+            self.low_obstacle_mode = 'disabled'
+        self.low_obstacle_scan_stale_sec = max(
+            0.1, float(self.get_parameter(
+                'low_obstacle_scan_stale_sec').value))
+        self.low_obstacle_confirmations = max(
+            1, int(self.get_parameter('low_obstacle_confirmations').value))
+        self.low_obstacle_max_sidesteps = max(
+            1, int(self.get_parameter('low_obstacle_max_sidesteps').value))
+        self.low_obstacle_config = LowObstacleConfig(
+            trigger_distance_m=float(self.get_parameter(
+                'low_obstacle_trigger_distance').value),
+            lidar_margin_m=float(self.get_parameter(
+                'low_obstacle_lidar_margin').value),
+            lidar_front_center_deg=float(self.get_parameter(
+                'low_obstacle_lidar_front_center_deg').value),
+            lidar_half_width_deg=float(self.get_parameter(
+                'low_obstacle_lidar_half_width_deg').value),
+            probe_step_deg=float(self.get_parameter(
+                'low_obstacle_probe_step_deg').value),
+            probe_max_steps=max(1, int(self.get_parameter(
+                'low_obstacle_probe_max_steps').value)),
+            probe_clearance_m=float(self.get_parameter(
+                'low_obstacle_probe_clearance').value),
+            body_clearance_margin_deg=float(self.get_parameter(
+                'low_obstacle_body_margin_deg').value),
+            drive_step_m=float(self.get_parameter(
+                'low_obstacle_drive_step').value),
+            drive_total_m=float(self.get_parameter(
+                'low_obstacle_drive_total').value),
+            drive_speed_mps=float(self.get_parameter(
+                'low_obstacle_drive_speed').value),
+            minimum_drive_clearance_m=float(self.get_parameter(
+                'low_obstacle_min_drive_clearance').value),
+        )
 
         self._clinical_active = False
         self._battery_low = False
@@ -117,6 +184,7 @@ class NavigationManager(Node):
         self._active = False
         self._generation = 0
         self._goal_handle = None
+        self._goal_result_future = None
         self._recovery_retry_timer = None
         self._latest_scan = None
         self._latest_scan_received_ns = 0
@@ -126,6 +194,8 @@ class NavigationManager(Node):
         # 시험 목표 메타데이터는 별도 이름으로 두어 ActionClient가 사용하는
         # ROS Context를 덮어쓰지 않는다.
         self._test_context: dict | None = None
+        self._pending_low_obstacle_context: dict | None = None
+        self._low_obstacle_confirmed_count = 0
 
         state_qos = QoSProfile(
             depth=1,
@@ -134,6 +204,8 @@ class NavigationManager(Node):
         )
         self.result_pub = self.create_publisher(String, '~/result', 10)
         self.active_pub = self.create_publisher(Bool, '~/active', state_qos)
+        self.obstacle_stop_pub = self.create_publisher(
+            Bool, '/emergency_stop/obstacle', 10)
         self.create_subscription(String, '~/goto', self._on_goto, 10)
         self.create_subscription(String, '~/goto_pose', self._on_goto_pose, 10)
         self.create_subscription(Bool, '~/cancel', self._on_cancel, 10)
@@ -150,15 +222,62 @@ class NavigationManager(Node):
             self._on_scan,
             10,
         )
+        range_qos = QoSProfile(depth=5)
+        range_qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        self.create_subscription(
+            Range,
+            str(self.get_parameter('low_obstacle_range_topic').value),
+            self._on_low_obstacle_range,
+            range_qos,
+        )
 
         self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.path_planner = ActionClient(
             self, ComputePathToPose, 'compute_path_to_pose')
+        self.low_obstacle_spin = ActionClient(self, Spin, 'spin')
+        self.low_obstacle_drive = ActionClient(
+            self, DriveOnHeading, 'drive_on_heading')
+        self.low_obstacle_driver = SidestepActionDriver(
+            self,
+            self.low_obstacle_spin,
+            self.low_obstacle_drive,
+            self.low_obstacle_config,
+            self._on_low_obstacle_sidestep_complete,
+            range_timeout_sec=float(self.get_parameter(
+                'low_obstacle_range_timeout_sec').value),
+        )
+        self.add_on_set_parameters_callback(self._on_set_parameters)
         self._publish_active()
         self.get_logger().info(
             f'navigation_manager 시작 (robot_id={self.robot_id}, '
             f'waypoint {len(self.waypoints)}개, recovery={self.recovery_mode}, '
-            f'planner={self.planner_mode})')
+            f'planner={self.planner_mode}, '
+            f'low_obstacle={self.low_obstacle_mode})')
+
+    def _on_set_parameters(self, parameters) -> SetParametersResult:
+        requested_mode = next(
+            (str(parameter.value).lower() for parameter in parameters
+             if parameter.name == 'low_obstacle_mode'),
+            None,
+        )
+        if requested_mode is None:
+            return SetParametersResult(successful=True)
+        if requested_mode not in ('disabled', 'sidestep'):
+            return SetParametersResult(
+                successful=False,
+                reason='low_obstacle_mode은 disabled 또는 sidestep이어야 합니다.',
+            )
+        if (self._active or self._pending_low_obstacle_context is not None
+                or self.low_obstacle_driver.active):
+            return SetParametersResult(
+                successful=False,
+                reason='Waypoint 시험 주행 중에는 저상 장애물 모드를 변경할 수 없습니다.',
+            )
+        self.low_obstacle_mode = requested_mode
+        self._low_obstacle_confirmed_count = 0
+        self.get_logger().info(
+            f'Waypoint 시험 저상 장애물 모드 변경: {self.low_obstacle_mode}')
+        return SetParametersResult(successful=True)
 
     def _waypoint_candidates(self, map_name: str) -> list[Path]:
         relative = Path('config') / 'waypoints' / f'{map_name}_waypoints.yaml'
@@ -217,6 +336,159 @@ class NavigationManager(Node):
     def _on_scan(self, msg: LaserScan) -> None:
         self._latest_scan = msg
         self._latest_scan_received_ns = self.get_clock().now().nanoseconds
+
+    def _on_low_obstacle_range(self, msg: Range) -> None:
+        """시험 주행 중 초음파와 LiDAR 차이로 저상 장애물을 판별한다."""
+        self.low_obstacle_driver.update_range(msg.range)
+        if self.low_obstacle_mode != 'sidestep':
+            self._low_obstacle_confirmed_count = 0
+            return
+        if (
+                self.low_obstacle_driver.active
+                or self._pending_low_obstacle_context is not None
+                or not self._active
+                or self._goal_handle is None
+                or self._goal_result_future is None
+                or self._test_context is None
+                or self._battery_low
+                or self._emergency
+                or self._clinical_active
+                or self._localization_active):
+            self._low_obstacle_confirmed_count = 0
+            return
+        now_ns = self.get_clock().now().nanoseconds
+        stale_ns = int(self.low_obstacle_scan_stale_sec * 1_000_000_000)
+        if (self._latest_scan is None
+                or now_ns - self._latest_scan_received_ns > stale_ns):
+            self._low_obstacle_confirmed_count = 0
+            return
+        scan = self._latest_scan
+        lidar_range = lidar_sector_min_range(
+            scan.ranges,
+            angle_min=float(scan.angle_min),
+            angle_increment=float(scan.angle_increment),
+            range_min=float(scan.range_min),
+            range_max=float(scan.range_max),
+            center_deg=self.low_obstacle_config.lidar_front_center_deg,
+            half_width_deg=self.low_obstacle_config.lidar_half_width_deg,
+        )
+        if not is_low_obstacle(
+                float(msg.range),
+                lidar_range,
+                trigger_distance_m=self.low_obstacle_config.trigger_distance_m,
+                lidar_margin_m=self.low_obstacle_config.lidar_margin_m):
+            self._low_obstacle_confirmed_count = 0
+            return
+        self._low_obstacle_confirmed_count += 1
+        if self._low_obstacle_confirmed_count < self.low_obstacle_confirmations:
+            return
+        self._low_obstacle_confirmed_count = 0
+        self._request_low_obstacle_avoidance(float(msg.range), lidar_range)
+
+    def _request_low_obstacle_avoidance(
+            self, ultrasonic_range: float, lidar_range: float) -> None:
+        handle = self._goal_handle
+        result_future = self._goal_result_future
+        context = self._test_context
+        if handle is None or result_future is None or context is None:
+            return
+        self.get_logger().warn(
+            f'저상 장애물 감지(초음파={ultrasonic_range:.2f}m, '
+            f'LiDAR={lidar_range:.2f}m); Waypoint 시험 목표를 일시 취소합니다.')
+        self._generation += 1
+        self._pending_low_obstacle_context = dict(context)
+        self._goal_handle = None
+        self._goal_result_future = None
+        cancel = handle.cancel_goal_async()
+        cancel.add_done_callback(
+            lambda done: self._on_low_obstacle_cancel_response(
+                done, result_future, dict(context)))
+
+    def _on_low_obstacle_cancel_response(
+            self, future, result_future, context: dict) -> None:
+        if self._pending_low_obstacle_context is None:
+            return
+        try:
+            response = future.result()
+            accepted = bool(response.goals_canceling)
+        except Exception as exc:  # noqa: BLE001
+            self._fail_low_obstacle(
+                f'Waypoint 시험 목표 취소 요청 실패: {exc}',
+                engage_safety_stop=True,
+            )
+            return
+        if not accepted:
+            self._fail_low_obstacle(
+                'Nav2가 Waypoint 시험 목표 취소를 거부했습니다.',
+                engage_safety_stop=True,
+            )
+            return
+        result_future.add_done_callback(
+            lambda done: self._on_low_obstacle_nav_cancelled(done, context))
+
+    def _on_low_obstacle_nav_cancelled(self, future, context: dict) -> None:
+        if self._pending_low_obstacle_context is None:
+            return
+        try:
+            status = int(future.result().status)
+        except Exception as exc:  # noqa: BLE001
+            self._fail_low_obstacle(
+                f'Waypoint 시험 목표 취소 확인 실패: {exc}',
+                engage_safety_stop=True,
+            )
+            return
+        if status != GoalStatus.STATUS_CANCELED:
+            self._fail_low_obstacle(
+                f'Waypoint 시험 목표가 취소 상태로 끝나지 않았습니다(status={status}).',
+                engage_safety_stop=True,
+            )
+            return
+        attempts = int(context.get('low_obstacle_attempts', 0))
+        if attempts >= self.low_obstacle_max_sidesteps:
+            self._fail_low_obstacle('저상 장애물 최대 회피 횟수에 도달했습니다.')
+            return
+        self.get_logger().info(
+            f'Waypoint 시험 목표 취소 완료; 옆걸음 회피 {attempts + 1}/'
+            f'{self.low_obstacle_max_sidesteps}회를 시작합니다.')
+        if not self.low_obstacle_driver.start(context.get('low_obstacle_side')):
+            self._fail_low_obstacle('저상 장애물 옆걸음 회피를 시작하지 못했습니다.')
+
+    def _on_low_obstacle_sidestep_complete(
+            self, outcome: SidestepOutcome) -> None:
+        context = self._pending_low_obstacle_context
+        if context is None:
+            return
+        self._pending_low_obstacle_context = None
+        if not outcome.succeeded:
+            self._finish(
+                'failed', LOW_OBSTACLE_ERROR,
+                f'저상 장애물 회피 실패: {outcome.reason}')
+            return
+        if (self._battery_low or self._emergency
+                or self._clinical_active or self._localization_active):
+            return
+        attempts = int(context.get('low_obstacle_attempts', 0)) + 1
+        context['low_obstacle_attempts'] = attempts
+        context['low_obstacle_side'] = outcome.side
+        self._test_context = context
+        self.get_logger().info(
+            f'옆걸음 회피 완료; 원래 Waypoint 시험 목표를 다시 전송합니다 '
+            f'(attempt={attempts}, side={outcome.side}).')
+        self._send_original_goal()
+
+    def _fail_low_obstacle(
+            self, message: str, *, engage_safety_stop: bool = False) -> None:
+        if engage_safety_stop:
+            # Nav2 목표가 실제로 멈췄는지 확인할 수 없을 때 직접 동작을
+            # 이어가지 않고 기존 안전 게이트를 잠근다.
+            self.obstacle_stop_pub.publish(Bool(data=True))
+        self._pending_low_obstacle_context = None
+        self._finish('failed', LOW_OBSTACLE_ERROR, message)
+
+    def _cancel_low_obstacle_operation(self) -> None:
+        self.low_obstacle_driver.cancel()
+        self._pending_low_obstacle_context = None
+        self._low_obstacle_confirmed_count = 0
 
     def _on_nav_feedback(self, feedback_msg, generation: int) -> None:
         if generation != self._generation:
@@ -371,6 +643,8 @@ class NavigationManager(Node):
             'yaw': float(waypoint['yaw']),
             'recovery_attempt': 0,
             'recovery_failures': {},
+            'low_obstacle_attempts': 0,
+            'low_obstacle_side': None,
         }
         self._publish_active()
         self._publish_result('started', self._public_test_context())
@@ -403,6 +677,7 @@ class NavigationManager(Node):
         self._generation += 1
         generation = self._generation
         self._goal_handle = None
+        self._goal_result_future = None
         future = self.nav.send_goal_async(
             goal,
             feedback_callback=lambda feedback: self._on_nav_feedback(
@@ -427,6 +702,7 @@ class NavigationManager(Node):
             return
         self._goal_handle = handle
         result = handle.get_result_async()
+        self._goal_result_future = result
         result.add_done_callback(
             lambda done: self._on_goal_result(done, generation))
 
@@ -434,6 +710,7 @@ class NavigationManager(Node):
         if generation != self._generation:
             return
         self._goal_handle = None
+        self._goal_result_future = None
         try:
             status = int(future.result().status)
         except Exception as exc:  # noqa: BLE001
@@ -706,6 +983,7 @@ class NavigationManager(Node):
         self._generation += 1
         generation = self._generation
         self._goal_handle = None
+        self._goal_result_future = None
         self._test_context['recovery_attempt'] = recovery_attempt
         self._test_context['recovery_failures'] = dict(failures)
         self.get_logger().warn(
@@ -744,9 +1022,11 @@ class NavigationManager(Node):
         context = self._public_test_context()
         self._generation += 1
         self._cancel_recovery_retry()
+        self._cancel_low_obstacle_operation()
         if self._goal_handle is not None:
             self._goal_handle.cancel_goal_async()
         self._goal_handle = None
+        self._goal_result_future = None
         self._active = False
         self._test_context = None
         self._publish_active()
@@ -759,7 +1039,9 @@ class NavigationManager(Node):
     def _finish(self, status: str, error_code: int, message: str) -> None:
         context = self._public_test_context()
         self._cancel_recovery_retry()
+        self._cancel_low_obstacle_operation()
         self._goal_handle = None
+        self._goal_result_future = None
         self._active = False
         self._test_context = None
         self._publish_active()

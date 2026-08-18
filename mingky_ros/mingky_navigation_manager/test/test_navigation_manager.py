@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
+from mingky_guide_manager.low_obstacle import SidestepOutcome
 from mingky_interfaces.msg import GuideState
 from mingky_navigation_manager.navigation_manager_node import (
     BUSY_ERROR,
@@ -18,7 +19,7 @@ from mingky_navigation_manager.navigation_manager_node import (
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Range
 from std_msgs.msg import Bool, String
 
 
@@ -78,6 +79,25 @@ class FakeNav:
 
 class FakePathPlanner(FakeNav):
     pass
+
+
+class FakeSidestepDriver:
+
+    def __init__(self):
+        self.active = False
+        self.ranges = []
+        self.started = []
+
+    def update_range(self, value):
+        self.ranges.append(value)
+
+    def start(self, preferred_side=None):
+        self.active = True
+        self.started.append(preferred_side)
+        return True
+
+    def cancel(self):
+        self.active = False
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -337,3 +357,45 @@ def test_emergency_cancels_scheduled_recovery_retry(adaptive_manager):
     assert node._active is False
     assert node._recovery_retry_timer is None
     assert published[-1]['error_code'] == SAFETY_ERROR
+
+
+def test_low_obstacle_sidestep_cancels_and_resumes_waypoint_test(manager):
+    node, _ = manager
+    node.low_obstacle_mode = 'sidestep'
+    node.low_obstacle_driver = FakeSidestepDriver()
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('low_obstacle_target'))
+    handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(handle))
+
+    node._on_low_obstacle_range(Range(range=0.20))
+    node._on_low_obstacle_range(Range(range=0.20))
+
+    assert handle.cancelled == 1
+    handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_CANCELED,
+    )))
+    assert node.low_obstacle_driver.started == [None]
+
+    node._on_low_obstacle_sidestep_complete(
+        SidestepOutcome(True, 1, 'sidestep completed'))
+
+    assert len(node.nav.sent) == 2
+    assert node.nav.sent[1].pose.pose.position.x == pytest.approx(1.25)
+    assert node._test_context['low_obstacle_attempts'] == 1
+    assert node._test_context['low_obstacle_side'] == 1
+
+
+def test_disabled_low_obstacle_mode_keeps_waypoint_goal(manager):
+    node, _ = manager
+    node.low_obstacle_driver = FakeSidestepDriver()
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('normal_target'))
+    handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(handle))
+
+    node._on_low_obstacle_range(Range(range=0.20))
+    node._on_low_obstacle_range(Range(range=0.20))
+
+    assert handle.cancelled == 0
+    assert node.low_obstacle_driver.started == []
