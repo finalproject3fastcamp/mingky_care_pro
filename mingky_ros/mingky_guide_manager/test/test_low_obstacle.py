@@ -41,6 +41,40 @@ def test_lidar_sector_uses_configured_sensor_front() -> None:
     assert result == pytest.approx(0.30)
 
 
+def test_lidar_sector_treats_positive_infinity_as_clear_space() -> None:
+    result = lidar_sector_min_range(
+        [math.inf] * 9,
+        angle_min=-math.pi,
+        angle_increment=math.pi / 4,
+        range_min=0.05,
+        range_max=5.0,
+        center_deg=180.0,
+        half_width_deg=15.0,
+    )
+
+    assert result == pytest.approx(5.0)
+    assert is_low_obstacle(
+        0.20,
+        result,
+        trigger_distance_m=0.25,
+        lidar_margin_m=0.15,
+    )
+
+
+def test_lidar_sector_does_not_treat_invalid_values_as_clear_space() -> None:
+    result = lidar_sector_min_range(
+        [math.nan, -math.inf] * 4 + [math.nan],
+        angle_min=-math.pi,
+        angle_increment=math.pi / 4,
+        range_min=0.05,
+        range_max=5.0,
+        center_deg=180.0,
+        half_width_deg=15.0,
+    )
+
+    assert result is None
+
+
 def _complete_left_sidestep(strategy: SidestepStrategy):
     sequence = strategy.commands()
     command = next(sequence)

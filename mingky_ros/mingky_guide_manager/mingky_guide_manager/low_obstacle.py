@@ -58,13 +58,22 @@ def lidar_sector_min_range(
     center = math.radians(center_deg)
     half_width = math.radians(max(0.0, half_width_deg))
     valid = []
+    saw_no_return = False
     for index, distance in enumerate(ranges):
         angle = angle_min + index * angle_increment
         if _angular_distance(angle, center) > half_width:
             continue
+        # LaserScan은 측정 거리 안에 반사체가 없을 때 +inf를 사용한다. 최신
+        # 스캔의 정면 구간이 전부 +inf인 것은 센서 단절이 아니라 빈 공간이다.
+        # NaN과 -inf는 센서 이상 가능성이 있어 같은 방식으로 통과시키지 않는다.
+        if math.isinf(distance) and distance > 0.0:
+            saw_no_return = True
+            continue
         if math.isfinite(distance) and range_min <= distance <= range_max:
             valid.append(float(distance))
-    return min(valid) if valid else None
+    if valid:
+        return min(valid)
+    return float(range_max) if saw_no_return else None
 
 
 def is_low_obstacle(
