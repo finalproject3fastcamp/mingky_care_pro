@@ -431,7 +431,7 @@ class PersonFollowNode(Node):
                 self.events.publish(
                     'person_follow.inference_unavailable',
                     {'reason': str(exc)},
-                    level='error',
+                    level='warning',
                 )
             self._inference_available = False
             self.get_logger().warn(
