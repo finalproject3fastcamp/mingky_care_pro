@@ -17,6 +17,10 @@ ROBOT_SYSTEMD_UNIT = (
     Path(__file__).resolve().parents[3]
     / 'deploy' / 'robot' / 'systemd' / 'mingky-system.service'
 )
+ROBOT_BATTERY_SYSTEMD_UNIT = (
+    Path(__file__).resolve().parents[3]
+    / 'deploy' / 'robot' / 'systemd' / 'mingky-battery-pub.service'
+)
 ROBOT_ENV_EXAMPLE = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'robot.env.example'
 )
@@ -339,3 +343,9 @@ def test_systemd_starts_the_teleop_control_nodes() -> None:
     assert 'mingky-teleop-bridge' in enable_block
     assert 'fg-teleop' in enable_block
     assert 'mingky-system' in enable_block
+
+
+def test_battery_service_enables_ultrasonic_sensor_data() -> None:
+    unit = ROBOT_BATTERY_SYSTEMD_UNIT.read_text(encoding='utf-8')
+
+    assert 'sensor_rate_hz:=10.0' in unit
