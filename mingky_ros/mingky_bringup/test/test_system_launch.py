@@ -20,6 +20,10 @@ ROBOT_SYSTEMD_UNIT = (
 ROBOT_ENV_EXAMPLE = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'robot.env.example'
 )
+REAR_CAMERA_LAUNCH_FILE = LAUNCH_FILE.parent / 'rear_camera.launch.py'
+REAR_CAMERA_CONFIG_FILE = (
+    LAUNCH_FILE.parents[1] / 'config' / 'rear_camera.yaml'
+)
 
 
 def _root():
@@ -87,6 +91,14 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
         == '$(var start_rear_qr_distance)'
     )
     assert forwarded['qr_size'] == '$(var rear_qr_size)'
+
+
+def test_rear_camera_defaults_to_color_for_yolo() -> None:
+    launch_text = REAR_CAMERA_LAUNCH_FILE.read_text(encoding='utf-8')
+    config_text = REAR_CAMERA_CONFIG_FILE.read_text(encoding='utf-8')
+
+    assert "default_value='bgr8'" in launch_text
+    assert 'output_encoding: bgr8' in config_text
 
 
 def test_aruco_detector_is_not_started_by_integrated_launch() -> None:

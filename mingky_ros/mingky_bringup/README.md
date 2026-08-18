@@ -234,7 +234,8 @@ sudo apt install ros-jazzy-v4l2-camera
 ```
 
 후방 카메라는 번호가 바뀌는 `/dev/videoN` 대신 장치의 고정 by-id 경로를
-사용합니다. 기본 영상은 QR 거리 측정에 맞춘 `640x480 mono8`이며 로봇 내부의
+사용합니다. 기본 영상은 QR 거리 측정과 환자 YOLO 추론을 함께 지원하는
+`640x480 bgr8` 컬러이며 로봇 내부의
 다음 토픽으로 발행됩니다.
 
 ```text
@@ -258,7 +259,8 @@ ros2 topic echo /rear_qr/observation
 ros2 launch mingky_bringup rear_camera.launch.py video_device:=/dev/video8
 ```
 
-컬러 영상 확인이 필요하면 `output_encoding:=bgr8`을 추가합니다.
+QR 거리 측정만 단독 시험해 대역폭을 줄여야 할 때는
+`output_encoding:=mono8`으로 덮어쓸 수 있습니다.
 
 `camera_info_url`은 캘리브레이션 전까지 비워 둡니다. 영상 메시지의 frame은
 `rear_camera_optical_frame`이며 URDF의 `rear_camera_link` 아래에 등록됩니다.
