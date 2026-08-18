@@ -17,8 +17,16 @@ ROBOT_SYSTEMD_UNIT = (
     Path(__file__).resolve().parents[3]
     / 'deploy' / 'robot' / 'systemd' / 'mingky-system.service'
 )
+ROBOT_BATTERY_SYSTEMD_UNIT = (
+    Path(__file__).resolve().parents[3]
+    / 'deploy' / 'robot' / 'systemd' / 'mingky-battery-pub.service'
+)
 ROBOT_ENV_EXAMPLE = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'robot.env.example'
+)
+REAR_CAMERA_LAUNCH_FILE = LAUNCH_FILE.parent / 'rear_camera.launch.py'
+REAR_CAMERA_CONFIG_FILE = (
+    LAUNCH_FILE.parents[1] / 'config' / 'rear_camera.yaml'
 )
 
 
@@ -89,6 +97,14 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     assert forwarded['qr_size'] == '$(var rear_qr_size)'
 
 
+def test_rear_camera_defaults_to_color_for_yolo() -> None:
+    launch_text = REAR_CAMERA_LAUNCH_FILE.read_text(encoding='utf-8')
+    config_text = REAR_CAMERA_CONFIG_FILE.read_text(encoding='utf-8')
+
+    assert "default_value='bgr8'" in launch_text
+    assert 'output_encoding: bgr8' in config_text
+
+
 def test_aruco_detector_is_not_started_by_integrated_launch() -> None:
     system_text = LAUNCH_FILE.read_text(encoding='utf-8')
     camera_text = (
@@ -133,6 +149,16 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     }
     assert params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
 
+    navigation_manager = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'navigation_manager'
+    )
+    navigation_params = {
+        item.get('name'): item.get('value')
+        for item in navigation_manager.findall('param')
+    }
+    assert navigation_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+
     event_gateway = next(
         item for item in root.findall('node')
         if item.get('name') == 'event_gateway'
@@ -147,6 +173,78 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
     assert 'low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled}' in unit
     assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
+
+
+def test_patient_distance_guidance_is_enabled_for_test() -> None:
+    root = _root()
+
+    assert _argument(root, 'start_patient_follow').get('default') == 'true'
+    assert _argument(root, 'patient_follow_slow_distance').get('default') == '0.15'
+    assert _argument(root, 'patient_follow_stop_distance').get('default') == '0.30'
+    assert _argument(root, 'patient_follow_tracking_grace').get('default') == '2.0'
+    assert _argument(root, 'patient_follow_initial_acquire_grace').get('default') == '4.0'
+    assert _argument(root, 'patient_follow_initial_acquire_distance').get('default') == '0.30'
+    assert _argument(root, 'patient_follow_target_height').get('default') == '0.13'
+    assert _argument(
+        root, 'patient_follow_partial_bbox_max_distance'
+    ).get('default') == '0.35'
+    assert _argument(
+        root, 'patient_follow_partial_bbox_conf_threshold'
+    ).get('default') == '0.50'
+    follower = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'person_follow_node'
+    )
+    assert follower.get('if') == '$(var start_patient_follow)'
+    follower_params = {
+        item.get('name'): item.get('value')
+        for item in follower.findall('param')
+    }
+    assert follower_params['infer_server_url'] == (
+        '$(var patient_follow_infer_server_url)')
+    assert follower_params['slow_distance_m'] == (
+        '$(var patient_follow_slow_distance)')
+    assert follower_params['stop_distance_m'] == (
+        '$(var patient_follow_stop_distance)')
+    assert follower_params['tracking_grace_sec'] == (
+        '$(var patient_follow_tracking_grace)')
+    assert follower_params['initial_acquire_grace_sec'] == (
+        '$(var patient_follow_initial_acquire_grace)')
+    assert follower_params['initial_acquire_max_distance_m'] == (
+        '$(var patient_follow_initial_acquire_distance)')
+    assert follower_params['target_height_m'] == (
+        '$(var patient_follow_target_height)')
+    assert follower_params['partial_bbox_max_distance_m'] == (
+        '$(var patient_follow_partial_bbox_max_distance)')
+    assert follower_params['partial_bbox_conf_threshold'] == (
+        '$(var patient_follow_partial_bbox_conf_threshold)')
+
+    guide = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'guide_manager'
+    )
+    guide_params = {
+        item.get('name'): item.get('value')
+        for item in guide.findall('param')
+    }
+    assert guide_params['patient_follow_enabled'] == (
+        '$(var start_patient_follow)')
+
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
+    assert 'start_patient_follow:=${MINGKY_PATIENT_FOLLOW_ENABLED:-true}' in unit
+    assert (
+        '${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:+'
+        'patient_follow_infer_server_url:='
+        '${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL}}'
+    ) in unit
+    assert 'patient_follow_infer_server_url:=${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:-}' not in unit
+    assert 'MINGKY_PATIENT_FOLLOW_ENABLED=true' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.30' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC=2.0' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_GRACE_SEC=4.0' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_DISTANCE_M=0.30' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M=0.13' in env_example
 
 
 def test_non_clinical_navigation_has_a_separate_manager() -> None:
@@ -272,3 +370,9 @@ def test_systemd_starts_the_teleop_control_nodes() -> None:
     assert 'mingky-teleop-bridge' in enable_block
     assert 'fg-teleop' in enable_block
     assert 'mingky-system' in enable_block
+
+
+def test_battery_service_enables_ultrasonic_sensor_data() -> None:
+    unit = ROBOT_BATTERY_SYSTEMD_UNIT.read_text(encoding='utf-8')
+
+    assert 'sensor_rate_hz:=10.0' in unit

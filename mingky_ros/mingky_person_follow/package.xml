@@ -1,25 +1,22 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>mingky_navigation_manager</name>
+  <name>mingky_person_follow</name>
   <version>0.0.0</version>
-  <description>Non-clinical Nav2 goal manager for the Mingky Care project.</description>
+  <description>후방 카메라로 안내 손님 유무를 보고 Nav2 주행 속도를 조절한다 (조향은 건드리지 않음). YOLO 추론은 별도 HTTP 서버에 위탁한다.</description>
   <maintainer email="mingky-care@example.com">Mingky Care Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
-  <exec_depend>action_msgs</exec_depend>
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>mingky_interfaces</exec_depend>
-  <exec_depend>mingky_guide_manager</exec_depend>
-  <exec_depend>mingky_smart_recovery</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
-  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>mingky_interfaces</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>python3-requests</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

@@ -19,6 +19,7 @@ class QrDetection:
     quaternion: tuple[float, float, float, float]
     distance: float
     reprojection_error: float
+    image_center: tuple[float, float]
 
 
 class QrPoseEstimator:
@@ -81,4 +82,8 @@ class QrPoseEstimator:
             quaternion=rotation_matrix_to_quaternion(rotation_matrix),
             distance=float(np.linalg.norm(translation)),
             reprojection_error=error,
+            image_center=(
+                float(np.mean(points[:, 0])),
+                float(np.mean(points[:, 1])),
+            ),
         )

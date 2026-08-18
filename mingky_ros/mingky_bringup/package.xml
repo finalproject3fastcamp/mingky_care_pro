@@ -12,6 +12,7 @@
   <exec_depend>mingky_guide_manager</exec_depend>
   <exec_depend>mingky_lcd_status</exec_depend>
   <exec_depend>mingky_navigation_manager</exec_depend>
+  <exec_depend>mingky_person_follow</exec_depend>
   <exec_depend>mingky_battery_guard</exec_depend>
   <exec_depend>mingky_event_gateway</exec_depend>
   <exec_depend>mingky_fire_evac</exec_depend>
@@ -32,6 +33,7 @@
   <exec_depend>v4l2_camera</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

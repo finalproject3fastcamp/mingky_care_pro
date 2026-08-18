@@ -34,8 +34,8 @@ def generate_launch_description() -> LaunchDescription:
     )
     output_encoding_arg = DeclareLaunchArgument(
         'output_encoding',
-        default_value='mono8',
-        description='ROS Image 인코딩. 컬러 확인이 필요하면 bgr8 사용',
+        default_value='bgr8',
+        description='ROS Image 인코딩. YOLO 입력과 관제 미리보기는 컬러 사용',
     )
     camera_info_url_arg = DeclareLaunchArgument(
         'camera_info_url',

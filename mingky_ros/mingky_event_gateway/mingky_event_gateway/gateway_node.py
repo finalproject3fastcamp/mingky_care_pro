@@ -145,6 +145,47 @@ def matches_guided_patient(
     )
 
 
+def parse_patient_follow_status(
+    raw: str, session_id: int, patient_id: str,
+) -> dict | None:
+    """현재 안내 세션에 속한 환자 추적 heartbeat를 관제 계약으로 바꾼다."""
+    try:
+        payload = json.loads(raw)
+        state = str(payload['state'])
+        reported_session = int(payload.get('session_id', 0))
+        reported_patient = str(payload.get('patient_id') or '')
+        source = str(payload.get('source') or 'unknown')
+        distance = payload.get('distance')
+        distance = None if distance is None else float(distance)
+        qr_visible = payload.get('qr_visible', False)
+        visual_visible = payload.get('visual_visible', False)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if state not in ('inactive', 'normal', 'slow', 'waiting'):
+        return None
+    if source not in (
+            'none', 'qr', 'visual', 'partial_near', 'acquiring', 'grace',
+            'stale', 'unknown'):
+        return None
+    if distance is not None and (
+            not math.isfinite(distance) or distance <= 0.0):
+        return None
+    if not isinstance(qr_visible, bool) or not isinstance(visual_visible, bool):
+        return None
+    if state != 'inactive' and (
+            reported_session != session_id
+            or not patient_id
+            or reported_patient != patient_id):
+        return None
+    return {
+        'follow_state': state,
+        'follow_distance': distance,
+        'follow_source': source,
+        'qr_visible': qr_visible,
+        'visual_visible': visual_visible,
+    }
+
+
 class HeartbeatFailureGuard:
     """연속 heartbeat 실패가 세션 안전 임계값을 넘었는지 한 번만 알린다."""
 
@@ -417,6 +458,9 @@ class EventGateway(Node):
         self.create_subscription(
             QrObservation, "/rear_qr/observation",
             self._on_qr_observation, 10)
+        self.create_subscription(
+            String, "/person_follow/state",
+            self._on_patient_follow_state, 10)
         state_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -522,6 +566,8 @@ class EventGateway(Node):
         self._controller_parameters = AsyncParameterClient(
             self, "controller_server")
         self._guide_parameters = AsyncParameterClient(self, "guide_manager")
+        self._navigation_parameters = AsyncParameterClient(
+            self, "navigation_manager")
 
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -603,10 +649,41 @@ class EventGateway(Node):
             self.get_logger().warn(f"유효하지 않은 QR 거리 무시: {distance}")
             return
         with self._qr_lock:
-            self._qr_observation = {
+            current = dict(self._qr_observation or {
+                "visible": False,
+                "distance": None,
+                "follow_state": None,
+                "follow_distance": None,
+                "follow_source": None,
+                "qr_visible": False,
+                "visual_visible": False,
+            })
+            current.update({
                 "visible": matches_patient,
                 "distance": distance,
-            }
+            })
+            self._qr_observation = current
+        self._qr_wake.set()
+
+    def _on_patient_follow_state(self, msg: String) -> None:
+        status = parse_patient_follow_status(
+            msg.data, self._guide_session_id, self._guide_patient_id)
+        if status is None:
+            self.get_logger().warn(
+                '현재 안내와 맞지 않거나 잘못된 환자 추적 상태를 무시합니다.')
+            return
+        with self._qr_lock:
+            current = dict(self._qr_observation or {
+                "visible": False,
+                "distance": None,
+                "follow_state": None,
+                "follow_distance": None,
+                "follow_source": None,
+                "qr_visible": False,
+                "visual_visible": False,
+            })
+            current.update(status)
+            self._qr_observation = current
         self._qr_wake.set()
 
     def _on_map(self, msg: OccupancyGrid) -> None:
@@ -1115,8 +1192,11 @@ class EventGateway(Node):
                 payload = self._qr_observation
             if payload is None:
                 continue
-            # 보이는 동안은 거리 변화를 계속 보내고, 미인식 전이는 한 번만 보낸다.
-            if not payload["visible"] and payload == last_payload:
+            # 새 추적 노드는 heartbeat 자체가 생존 신호다. 상태가 같아도 서버의
+            # observed_at 을 갱신한다. 구버전 QR-only payload의 미인식 중복만
+            # 기존처럼 생략한다.
+            if (payload.get("follow_state") is None
+                    and not payload["visible"] and payload == last_payload):
                 continue
             last_payload = dict(payload)
             try:
@@ -1347,18 +1427,23 @@ class EventGateway(Node):
                 self.get_logger().error(
                     "안내 또는 안전 동작 중이라 회피 모드 변경을 거부했습니다.")
                 return True
-            if not self._guide_parameters.services_are_ready():
+            if (not self._guide_parameters.services_are_ready()
+                    or not self._navigation_parameters.services_are_ready()):
                 self.get_logger().warn(
-                    "guide_manager 파라미터 서비스가 아직 준비되지 않았습니다. "
+                    "안내/Waypoint 주행 관리자 파라미터 서비스가 아직 "
+                    "준비되지 않았습니다. "
                     "명령을 유지합니다.")
                 return False
-            future = self._guide_parameters.set_parameters([
+            previous = self._low_obstacle_mode
+            future = self._navigation_parameters.set_parameters([
                 Parameter("low_obstacle_mode", value=mode),
             ])
             future.add_done_callback(
-                lambda result, requested=mode: self._on_low_obstacle_mode_response(
-                    result, requested))
-            self.get_logger().info(f"저상 장애물 회피 모드 변경 요청: {mode}")
+                lambda result, requested=mode, old=previous:
+                self._on_navigation_low_obstacle_mode_response(
+                    result, requested, old))
+            self.get_logger().info(
+                f"Waypoint 시험 저상 장애물 회피 모드 변경 요청: {mode}")
             return True
 
         if command == "cancel_guidance":
@@ -1453,11 +1538,39 @@ class EventGateway(Node):
         self._navigation_speed_mps = requested
         self.get_logger().info(f"주행 속도 적용 완료: {requested:.2f} m/s")
 
-    def _on_low_obstacle_mode_response(self, future, requested: str) -> None:
+    def _on_navigation_low_obstacle_mode_response(
+            self, future, requested: str, previous: str) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(
+                f"Waypoint 시험 저상 장애물 회피 모드 변경 실패: {exc}")
+            return
+        results = response.results if response is not None else []
+        if not results or not all(result.successful for result in results):
+            reasons = ", ".join(
+                result.reason for result in (results or []) if result.reason)
+            self.get_logger().error(
+                "Waypoint 시험 저상 장애물 회피 모드 변경 거부: "
+                f"{reasons or '원인 확인 불가'}")
+            return
+        future = self._guide_parameters.set_parameters([
+            Parameter("low_obstacle_mode", value=requested),
+        ])
+        future.add_done_callback(
+            lambda result, mode=requested, old=previous:
+            self._on_low_obstacle_mode_response(result, mode, old))
+        self.get_logger().info(
+            f"안내 주행 저상 장애물 회피 모드 변경 요청: {requested}")
+
+    def _on_low_obstacle_mode_response(
+            self, future, requested: str, previous: str | None = None) -> None:
         try:
             response = future.result()
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error(f"저상 장애물 회피 모드 변경 실패: {exc}")
+            if previous is not None:
+                self._rollback_navigation_low_obstacle_mode(previous)
             return
         results = response.results if response is not None else []
         if not results or not all(result.successful for result in results):
@@ -1465,9 +1578,20 @@ class EventGateway(Node):
                 result.reason for result in (results or []) if result.reason)
             self.get_logger().error(
                 f"저상 장애물 회피 모드 변경 거부: {reasons or '원인 확인 불가'}")
+            if previous is not None:
+                self._rollback_navigation_low_obstacle_mode(previous)
             return
         self._low_obstacle_mode = requested
-        self.get_logger().info(f"저상 장애물 회피 모드 적용 완료: {requested}")
+        self.get_logger().info(
+            f"안내/Waypoint 시험 저상 장애물 회피 모드 적용 완료: {requested}")
+
+    def _rollback_navigation_low_obstacle_mode(self, previous: str) -> None:
+        self._navigation_parameters.set_parameters([
+            Parameter("low_obstacle_mode", value=previous),
+        ])
+        self.get_logger().warn(
+            "안내 주행 모드 적용 실패로 Waypoint 시험 모드를 "
+            f"{previous}(으)로 되돌립니다.")
 
     # ------------------------------------------------------------------ 종료
 

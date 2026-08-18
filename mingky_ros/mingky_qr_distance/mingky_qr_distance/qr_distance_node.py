@@ -95,6 +95,8 @@ class QrDistanceNode(Node):
         if detection is not None:
             observation.data = detection.data
             observation.distance = detection.distance
+            observation.center_x = detection.image_center[0]
+            observation.center_y = detection.image_center[1]
         self._observation_pub.publish(observation)
 
 

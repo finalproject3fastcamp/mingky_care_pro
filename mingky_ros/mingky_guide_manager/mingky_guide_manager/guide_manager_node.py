@@ -20,6 +20,7 @@
 import json
 import math
 import threading
+import time
 from pathlib import Path
 from typing import Mapping
 
@@ -102,7 +103,7 @@ class GuideManager(Node):
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
         self.declare_parameter('low_obstacle_confirmations', 2)
         self.declare_parameter('low_obstacle_max_sidesteps', 3)
-        self.declare_parameter('low_obstacle_trigger_distance', 0.25)
+        self.declare_parameter('low_obstacle_trigger_distance', 0.10)
         self.declare_parameter('low_obstacle_lidar_margin', 0.15)
         self.declare_parameter('low_obstacle_lidar_front_center_deg', 180.0)
         self.declare_parameter('low_obstacle_lidar_half_width_deg', 15.0)
@@ -113,8 +114,11 @@ class GuideManager(Node):
         self.declare_parameter('low_obstacle_drive_step', 0.08)
         self.declare_parameter('low_obstacle_drive_total', 0.35)
         self.declare_parameter('low_obstacle_drive_speed', 0.12)
-        self.declare_parameter('low_obstacle_min_drive_clearance', 0.10)
+        self.declare_parameter('low_obstacle_min_drive_clearance', 0.04)
         self.declare_parameter('low_obstacle_range_timeout_sec', 0.8)
+        # 환자 거리 관측은 옵션이며, 통합 launch에서 노드와 함께 켠다.
+        self.declare_parameter('patient_follow_enabled', False)
+        self.declare_parameter('patient_follow_timeout_sec', 2.0)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
@@ -198,6 +202,12 @@ class GuideManager(Node):
             minimum_drive_clearance_m=float(self.get_parameter(
                 'low_obstacle_min_drive_clearance').value),
         )
+        self.patient_follow_enabled = bool(
+            self.get_parameter('patient_follow_enabled').value)
+        self.patient_follow_timeout_sec = max(
+            0.5,
+            float(self.get_parameter('patient_follow_timeout_sec').value),
+        )
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -241,6 +251,12 @@ class GuideManager(Node):
         self._active_nav_context = None
         self._pending_low_obstacle_context = None
         self._low_obstacle_confirmed_count = 0
+        self._patient_follow_state = 'inactive'
+        self._patient_follow_last_at = 0.0
+        self._patient_wait_context = None
+        self._patient_wait_cancel_pending = False
+        self._patient_resume_pending = False
+        self._patient_pause_requested = False
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -292,6 +308,9 @@ class GuideManager(Node):
         self.create_subscription(
             Bool, '/auto_localize/active',
             self._on_localization_active, state_qos)
+        self.create_subscription(
+            String, '/person_follow/state',
+            self._on_patient_follow_state, state_qos)
         self.create_service(
             SetBool, '~/fire_evacuation', self._on_fire_evacuation)
 
@@ -334,6 +353,7 @@ class GuideManager(Node):
         self.add_on_set_parameters_callback(self._on_set_parameters)
 
         self.create_timer(1.0, self._publish_state)
+        self.create_timer(0.5, self._check_patient_follow_timeout)
         self.get_logger().info(
             f'guide_manager 시작 (robot_id={self.robot_id}, '
             f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint}, '
@@ -509,6 +529,7 @@ class GuideManager(Node):
         self._cancel_arrival_notice()
         self._cancel_adaptive_retry()
         self._cancel_low_obstacle_operation()
+        self._cancel_patient_wait_state()
         active_session_id = self.session_id
         self.robot_state = GuideState.ROBOT_BATTERY_LOW
         self.events.publish(
@@ -571,6 +592,7 @@ class GuideManager(Node):
         active_session_id = self.session_id
         self._nav_generation += 1
         self._cancel_low_obstacle_operation()
+        self._cancel_patient_wait_state()
         self._cancel_arrival_notice()
         self._cancel_adaptive_retry()
         self._cancel_dock_retry()
@@ -609,6 +631,7 @@ class GuideManager(Node):
             # 이후 도착하는 기존 안내 목표 결과는 상태와 이벤트에 반영하지 않는다.
             self._nav_generation += 1
             self._cancel_low_obstacle_operation()
+            self._cancel_patient_wait_state()
             self._cancel_arrival_notice()
             self._cancel_adaptive_retry()
             self._cancel_dock_retry()
@@ -653,6 +676,7 @@ class GuideManager(Node):
             # 세대를 넘겨 그 결과가 현재 상태를 덮어쓰지 못하게 한다.
             self._nav_generation += 1
             self._cancel_low_obstacle_operation()
+            self._cancel_patient_wait_state()
             self._cancel_arrival_notice()
             self._cancel_adaptive_retry()
             self._cancel_dock_retry()
@@ -949,6 +973,181 @@ class GuideManager(Node):
             f'검사 완료 QR 확인: step={completed_order}; '
             f'다음 검사실={self.current_visit!r}')
         self.send_goal(waypoint_name)
+
+    # ---------------------------------------------------------- 환자 거리 대기
+
+    def _on_patient_follow_state(self, msg: String) -> None:
+        if not self.patient_follow_enabled:
+            return
+        try:
+            payload = json.loads(msg.data)
+            state = str(payload['state'])
+            session_id = int(payload.get('session_id', 0))
+            patient_id = str(payload.get('patient_id') or '')
+            source = str(payload.get('source') or 'unknown')
+            raw_distance = payload.get('distance')
+            distance = None if raw_distance is None else float(raw_distance)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warn(f'환자 추적 상태 형식 오류: {exc}')
+            return
+        if state not in ('inactive', 'normal', 'slow', 'waiting'):
+            self.get_logger().warn(f'알 수 없는 환자 추적 상태: {state!r}')
+            return
+        if self.session_state != GuideState.SESSION_GUIDING:
+            if state == 'inactive':
+                self._cancel_patient_wait_state()
+            return
+        if session_id != self.session_id or patient_id != self.patient_id:
+            self.get_logger().warn(
+                '현재 안내와 다른 환자 추적 상태를 무시합니다: '
+                f'{session_id}/{patient_id!r}')
+            return
+
+        self._patient_follow_last_at = time.monotonic()
+        self._patient_follow_state = state
+        if state == 'waiting':
+            self._pause_for_patient(
+                reason='patient_distance', distance=distance, source=source)
+        elif state in ('normal', 'slow'):
+            self._resume_for_patient(source=source)
+
+    def _check_patient_follow_timeout(self) -> None:
+        if (not self.patient_follow_enabled
+                or self.session_state != GuideState.SESSION_GUIDING
+                or self.session_id <= 0):
+            return
+        now = time.monotonic()
+        if (self._patient_follow_last_at > 0.0
+                and now - self._patient_follow_last_at
+                <= self.patient_follow_timeout_sec):
+            return
+        self._patient_follow_state = 'waiting'
+        self._pause_for_patient(
+            reason='sensor_timeout', distance=None, source='watchdog')
+
+    def _pause_for_patient(
+            self, *, reason: str, distance: float | None,
+            source: str) -> None:
+        if (self.session_state != GuideState.SESSION_GUIDING
+                or self._battery_alarm
+                or self._emergency_engaged
+                or self._fire_evacuating):
+            return
+        if self._patient_wait_context is not None:
+            self.robot_state = GuideState.ROBOT_PAUSED
+            return
+        context = self._active_nav_context
+        if context is None or context['is_dock'] or context['is_waiting']:
+            return
+        handle = self._active_nav_goal_handle
+        result_future = self._active_nav_result_future
+        self.robot_state = GuideState.ROBOT_PAUSED
+        self._cancel_adaptive_retry()
+        if handle is None or result_future is None:
+            # Nav2가 목표를 수락하는 콜백에서 즉시 취소한다.
+            self._patient_pause_requested = True
+            return
+
+        self._nav_generation += 1
+        self._patient_wait_context = dict(context)
+        self._patient_wait_cancel_pending = True
+        self._patient_resume_pending = False
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = None
+        self.events.publish(
+            'patient.follow_wait_started',
+            {'reason': reason, 'source': source},
+            self.session_id,
+        )
+        self.get_logger().warn(
+            f'환자 대기로 안내 목표를 취소합니다 '
+            f'(distance={distance}, source={source}).')
+        cancel = handle.cancel_goal_async()
+        cancel.add_done_callback(
+            lambda done: self._on_patient_wait_cancel_response(
+                done, result_future, dict(context)))
+
+    def _on_patient_wait_cancel_response(
+            self, future, result_future, context: dict) -> None:
+        if self._patient_wait_context is None:
+            return
+        try:
+            response = future.result()
+            accepted = bool(response.goals_canceling)
+        except Exception as exc:  # noqa: BLE001
+            self._patient_wait_cancel_pending = False
+            self.get_logger().error(f'환자 대기 목표 취소 요청 실패: {exc}')
+            if self._patient_resume_pending:
+                self._resume_for_patient(source='cancel_error')
+            return
+        if not accepted:
+            self._patient_wait_cancel_pending = False
+            self.get_logger().error(
+                'Nav2가 환자 대기 목표 취소를 수락하지 않았습니다.')
+            if self._patient_resume_pending:
+                self._resume_for_patient(source='cancel_rejected')
+            return
+        result_future.add_done_callback(
+            lambda done: self._on_patient_wait_nav_cancelled(done, context))
+
+    def _on_patient_wait_nav_cancelled(self, future, context: dict) -> None:
+        if self._patient_wait_context is None:
+            return
+        try:
+            status = int(future.result().status)
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f'환자 대기 목표 취소 결과 실패: {exc}')
+            status = GoalStatus.STATUS_UNKNOWN
+        self._patient_wait_cancel_pending = False
+        if status != GoalStatus.STATUS_CANCELED:
+            self.get_logger().warn(
+                f'환자 대기 목표가 canceled가 아닙니다(status={status}).')
+        if self._patient_resume_pending:
+            self._resume_for_patient(source='patient_returned')
+
+    def _resume_for_patient(self, *, source: str) -> None:
+        context = self._patient_wait_context
+        if context is None:
+            # 목표 수락 전 대기 요청이 풀린 경우 기존 목표를 계속한다.
+            self._patient_pause_requested = False
+            return
+        if self._patient_wait_cancel_pending:
+            self._patient_resume_pending = True
+            return
+        if (self.session_state != GuideState.SESSION_GUIDING
+                or context['session_id'] != self.session_id
+                or self._battery_alarm
+                or self._emergency_engaged
+                or self._fire_evacuating):
+            return
+
+        self._patient_wait_context = None
+        self._patient_resume_pending = False
+        self.robot_state = GuideState.ROBOT_MOVING
+        self.events.publish(
+            'patient.follow_wait_ended', {'source': source}, self.session_id)
+        self.get_logger().info(
+            '환자가 복귀해 원래 안내 목표를 다시 전송합니다.')
+        self._send_nav_goal(
+            context['waypoint_name'],
+            is_dock=context['is_dock'],
+            session_id=context['session_id'],
+            is_waiting=context['is_waiting'],
+            recovery_attempt=context['recovery_attempt'],
+            recovery_failures=context['recovery_failures'],
+            announce=False,
+            low_obstacle_attempts=context['low_obstacle_attempts'],
+            low_obstacle_side=context['low_obstacle_side'],
+        )
+
+    def _cancel_patient_wait_state(self) -> None:
+        self._patient_follow_state = 'inactive'
+        self._patient_follow_last_at = 0.0
+        self._patient_wait_context = None
+        self._patient_wait_cancel_pending = False
+        self._patient_resume_pending = False
+        self._patient_pause_requested = False
 
     # ------------------------------------------------------------------ 주행
 
@@ -1411,6 +1610,9 @@ class GuideManager(Node):
             self.current_visit = self._visit_name_for_waypoint(waypoint_name)
             self.robot_state = GuideState.ROBOT_MOVING
             self.session_state = GuideState.SESSION_GUIDING
+            if self.patient_follow_enabled:
+                # 최초 상태 heartbeat가 도착할 유예 시간을 준다.
+                self._patient_follow_last_at = time.monotonic()
             if announce:
                 self.events.publish(
                     'nav.goal_sent', {'visit_name': self.current_visit}, session_id)
@@ -1463,6 +1665,14 @@ class GuideManager(Node):
             lambda done: self._on_goal_result(
                 done, generation, waypoint_name, is_dock, session_id,
                 is_waiting, recovery_attempt, dict(recovery_failures or {})))
+        if self._patient_pause_requested:
+            self._patient_pause_requested = False
+            if self._patient_follow_state == 'waiting':
+                self._pause_for_patient(
+                    reason='patient_distance',
+                    distance=None,
+                    source='goal_accept',
+                )
 
     def _on_goal_result(
             self, future, generation: int, waypoint_name: str,
@@ -1471,6 +1681,16 @@ class GuideManager(Node):
             recovery_failures: Mapping[str, int] | None = None):
         if generation != self._nav_generation:
             return
+        nav_context = dict(self._active_nav_context or {
+            'waypoint_name': waypoint_name,
+            'is_dock': is_dock,
+            'session_id': session_id,
+            'is_waiting': is_waiting,
+            'recovery_attempt': recovery_attempt,
+            'recovery_failures': dict(recovery_failures or {}),
+            'low_obstacle_attempts': 0,
+            'low_obstacle_side': None,
+        })
         self._active_nav_goal_handle = None
         self._active_nav_result_future = None
         self._active_nav_context = None
@@ -1516,6 +1736,22 @@ class GuideManager(Node):
                 self._play_arrival_chime()
                 self._schedule_waiting_move(visit_name, session_id)
         else:
+            if (self.patient_follow_enabled
+                    and self._patient_follow_state == 'waiting'
+                    and not is_dock and not is_waiting
+                    and session_id == self.session_id
+                    and self.session_state == GuideState.SESSION_GUIDING):
+                # 환자 대기 신호와 FollowPath ABORTED가 경합해도
+                # Adaptive Recovery로 넘기지 않고 원래 목표를 보존한다.
+                self._patient_wait_context = nav_context
+                self._patient_wait_cancel_pending = False
+                self.robot_state = GuideState.ROBOT_PAUSED
+                self.events.publish(
+                    'patient.follow_wait_started',
+                    {'reason': 'nav_aborted_while_waiting', 'source': 'nav2'},
+                    session_id,
+                )
+                return
             adaptive_dock = is_dock and recovery_attempt == 0
             if (not is_waiting and status == 6
                     and (not is_dock or adaptive_dock)

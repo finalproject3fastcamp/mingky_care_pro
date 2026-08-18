@@ -15,7 +15,7 @@ User=pinky
 # adc_reader 가 그 장치의 단독 소유자이고, 초음파·IR 도 같이 발행한다.
 # 주행 런치는 start_battery_publisher:=false 로 넘겨야 한다.
 EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run mingky_sensors adc_reader'
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run mingky_sensors adc_reader --ros-args -p sensor_rate_hz:=10.0'
 Restart=always
 RestartSec=10
 
