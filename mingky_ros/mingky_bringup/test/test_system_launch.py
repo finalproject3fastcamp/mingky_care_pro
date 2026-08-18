@@ -106,6 +106,17 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
 
     assert _argument(root, 'recovery_mode').get('default') == 'adaptive'
     assert _argument(root, 'planner_mode').get('default') == 'navfn'
+    managers = {
+        item.get('name'): item for item in root.findall('node')
+        if item.get('name') in ('guide_manager', 'navigation_manager')
+    }
+    for manager in managers.values():
+        params = {
+            item.get('name'): item.get('value')
+            for item in manager.findall('param')
+        }
+        assert params['recovery_mode'] == '$(var recovery_mode)'
+        assert params['planner_mode'] == '$(var planner_mode)'
 
 
 def test_low_obstacle_sidestep_is_opt_in() -> None:

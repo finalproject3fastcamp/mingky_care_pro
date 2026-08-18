@@ -1,17 +1,24 @@
 """비임상 Waypoint 시험 주행의 중재와 안전 차단 회귀 테스트."""
 
 import json
+import math
+from types import SimpleNamespace
 
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import PoseStamped
 from mingky_interfaces.msg import GuideState
 from mingky_navigation_manager.navigation_manager_node import (
     BUSY_ERROR,
     CLINICAL_ERROR,
     LOCALIZATION_ERROR,
     NavigationManager,
+    RECOVERY_ERROR,
     SAFETY_ERROR,
 )
 import pytest
 import rclpy
+from rclpy.parameter import Parameter
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 
 
@@ -24,17 +31,53 @@ class PendingFuture:
         self.callback = callback
 
 
+class ImmediateFuture:
+
+    def __init__(self, value):
+        self.value = value
+
+    def result(self):
+        return self.value
+
+    def add_done_callback(self, callback):
+        callback(self)
+
+
+class FakeActionHandle:
+
+    def __init__(self, *, accepted=True):
+        self.accepted = accepted
+        self.result_future = PendingFuture()
+        self.cancelled = 0
+
+    def get_result_async(self):
+        return self.result_future
+
+    def cancel_goal_async(self):
+        self.cancelled += 1
+        return ImmediateFuture(SimpleNamespace(goals_canceling=[object()]))
+
+
 class FakeNav:
 
     def __init__(self):
         self.sent = []
+        self.futures = []
+        self.feedback_callbacks = []
 
     def wait_for_server(self, timeout_sec):
         return True
 
-    def send_goal_async(self, goal):
+    def send_goal_async(self, goal, feedback_callback=None):
         self.sent.append(goal)
-        return PendingFuture()
+        self.feedback_callbacks.append(feedback_callback)
+        future = PendingFuture()
+        self.futures.append(future)
+        return future
+
+
+class FakePathPlanner(FakeNav):
+    pass
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -54,6 +97,20 @@ def manager():
     node.destroy_node()
 
 
+@pytest.fixture
+def adaptive_manager():
+    node = NavigationManager(parameter_overrides=[
+        Parameter('recovery_mode', value='adaptive'),
+        Parameter('recovery_retry_delay_sec', value=0.1),
+    ])
+    node.nav = FakeNav()
+    node.path_planner = FakePathPlanner()
+    published = []
+    node.result_pub.publish = lambda msg: published.append(json.loads(msg.data))
+    yield node, published
+    node.destroy_node()
+
+
 def _pose(name='draft') -> String:
     return String(data=json.dumps({
         'name': name,
@@ -61,6 +118,21 @@ def _pose(name='draft') -> String:
         'y': -0.5,
         'yaw': 1.2,
     }))
+
+
+def _set_fresh_recovery_inputs(node: NavigationManager) -> None:
+    scan = LaserScan()
+    scan.angle_min = -math.pi
+    scan.angle_increment = math.radians(1.0)
+    scan.range_min = 0.05
+    scan.range_max = 5.0
+    scan.ranges = [1.0] * 361
+    node._on_scan(scan)
+
+    pose = PoseStamped()
+    pose.pose.orientation.w = 1.0
+    node._latest_nav_pose = pose
+    node._latest_nav_pose_received_ns = node.get_clock().now().nanoseconds
 
 
 def test_test_metadata_does_not_replace_ros_context(manager):
@@ -78,6 +150,7 @@ def test_temporary_pose_starts_one_nav2_goal(manager):
 
     assert len(node.nav.sent) == 1
     assert node.nav.sent[0].pose.pose.position.x == pytest.approx(1.25)
+    assert node.nav.sent[0].behavior_tree == ''
     assert node._active is True
     assert published == [{
         'status': 'started',
@@ -184,3 +257,83 @@ def test_invalid_saved_waypoint_never_reaches_nav2(manager):
     assert node.nav.sent == []
     assert published[-1]['status'] == 'failed'
     assert published[-1]['error_code'] == -2
+
+
+def test_adaptive_mode_uses_motion_free_behavior_tree(adaptive_manager):
+    node, _ = adaptive_manager
+
+    node._on_goto_pose(_pose('adaptive_target'))
+
+    assert len(node.nav.sent) == 1
+    assert node.nav.sent[0].behavior_tree.endswith(
+        'navigate_no_recovery_navfn.xml')
+
+
+def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('adaptive_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+
+    assert len(node.path_planner.sent) == 1
+    assert node.path_planner.sent[0].planner_id == 'GridBased'
+    assert node.path_planner.sent[0].use_start is False
+    path_handle = FakeActionHandle()
+    node.path_planner.futures[0].callback(ImmediateFuture(path_handle))
+    path_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(
+            error_code=0,
+            path=SimpleNamespace(poses=[object(), object()]),
+        ),
+    )))
+
+    assert len(node.nav.sent) == 2
+    assert node.nav.sent[1].behavior_tree.endswith(
+        'navigate_no_recovery_navfn.xml')
+    recovery_handle = FakeActionHandle()
+    node.nav.futures[1].callback(ImmediateFuture(recovery_handle))
+    recovery_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+    )))
+
+    assert len(node.nav.sent) == 3
+    assert node.nav.sent[2].pose.pose.position.x == pytest.approx(1.25)
+    assert node.nav.sent[2].pose.pose.position.y == pytest.approx(-0.5)
+    assert node._test_context['recovery_attempt'] == 1
+
+
+def test_recovery_stops_after_configured_maximum(adaptive_manager):
+    node, published = adaptive_manager
+    node.recovery_max_attempts = 1
+    node._on_goto_pose(_pose('blocked_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+
+    assert node._active is False
+    assert published[-1]['status'] == 'failed'
+    assert published[-1]['error_code'] == RECOVERY_ERROR
+
+
+def test_emergency_cancels_scheduled_recovery_retry(adaptive_manager):
+    node, published = adaptive_manager
+    node._on_goto_pose(_pose('blocked_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+    assert node._recovery_retry_timer is not None
+
+    node._on_emergency(Bool(data=True))
+
+    assert node._active is False
+    assert node._recovery_retry_timer is None
+    assert published[-1]['error_code'] == SAFETY_ERROR
