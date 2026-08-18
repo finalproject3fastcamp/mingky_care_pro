@@ -44,3 +44,17 @@ def test_bbox_center_distance() -> None:
     a = _det('p001', 0, 0)
     b = _det('p001', 3, 4)
     assert bbox_center_distance(a, b) == 5.0
+
+
+def test_reacquire_keeps_verified_class_without_old_position() -> None:
+    detections = [_det('p001', 320, 240), _det('p002', 500, 240)]
+
+    target = pick_target(
+        detections,
+        None,
+        screen_center=(320.0, 240.0),
+        max_jump_px=200.0,
+        required_class='p002',
+    )
+
+    assert target['cls'] == 'p002'

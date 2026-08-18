@@ -4,3 +4,6 @@ std_msgs/Header header
 bool visible
 string data
 float32 distance
+# YOLO 박스와 현재 환자 QR을 결합할 때 쓰는 영상 픽셀 중심.
+float32 center_x
+float32 center_y

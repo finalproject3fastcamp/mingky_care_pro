@@ -1,81 +1,47 @@
-"""후방 카메라로 안내 대상(손님) 유무를 보고 주행 속도를 조절한다.
+"""QR 거리를 주 기준으로 안내 환자의 지연을 감지한다.
 
-핑키는 이미 정해진 경로로 안내 주행 중이다(Nav2, `guide_manager`/
-`navigation_manager`가 목표를 보낸다). 이 노드는 그 경로나 조향에는 전혀
-관여하지 않는다 -- 후방 카메라에 손님이 보이면 정상 속도로 계속 가게 두고,
-손님이 안 보이면 `/speed_limit`을 낮춰서 로봇이 제자리에서 기다리게 할
-뿐이다. "어디로 갈지"는 이미 있는 시스템의 몫이고, 이 노드는 "지금 가도
-되는지"만 결정한다.
-
-## 왜 조향이 아니라 속도만 건드리는가
-
-손님을 카메라로 보고 로봇이 직접 방향을 트는 것도 생각해봤지만, 병원
-안내로봇은 이미 검증된 경로(Nav2 웨이포인트)를 타야 한다 -- 손님 위치를
-따라 로봇이 스스로 진로를 바꾸면 오히려 정해진 동선을 벗어나 위험하다.
-그래서 손님이 "따라오고 있는지"만 확인하고, 못 따라오고 있으면 Nav2 의
-`/speed_limit` (nav2_msgs/SpeedLimit, velocity_smoother 가 구독)에 낮은
-값을 걸어 로봇을 제자리에 세워 기다리게 한다. Nav2 goal 자체는 안 건드리므로
-손님이 다시 나타나면 원래 경로를 그대로 이어서 간다.
-
-## YOLO 추론은 별도 HTTP 서버에 위탁 (mingky_fire_evac 과 같은 이유)
-
-핑키에는 GPU가 없고, 이 프로젝트 와이파이는 기기 간 순수 UDP(ROS2/DDS
-디스커버리가 쓰는 것)를 막아놔서 두 기기를 ROS2로 직접 못 붙인다. 그래서
-`mingky_fire_evac/infer_server.py`와 같은 패턴을 그대로 재사용한다: 이
-노드는 핑키 위에서 도는 평범한 ROS2 노드로 남고, 프레임(JPEG)만 HTTP로 GPU
-컴퓨터의 `infer_server.py`에 보내 검출 결과(박스 좌표+클래스+신뢰도)를
-받는다.
-
-## 여러 손님을 구분해야 한다 -- 왜 위치만으로 안 되는가
-
-인형(손님 역할)이 한 종류가 아니라 p001/p002/p003 세 클래스로 나뉘어 있다
--- 안내 도중 다른 손님이 비슷한 화면 위치로 끼어들었을 때 그 손님을 원래
-안내받던 손님인 척 계속 따라가면 안 되기 때문이다. 그래서 대상 잠금은
-위치만 보지 않고 **클래스가 같은 검출만** 후보로 삼는다
-(`target_lock.pick_target` 참고) -- 실제로 위치만으로 잠갔을 때 다른
-인형으로 잠금이 넘어가는 문제를 겪고 나서 넣은 조건이다.
-
-## `/speed_limit` 을 0.0 으로 보내면 안 된다
-
-nav2_msgs/SpeedLimit 은 `speed_limit=0.0`을 "제한 없음(무제한)"의 특수값으로
-정의한다 (메시지 정의 주석: "When no-limit it is set to 0.0"). 그래서
-"정지"를 표현하려면 0.0이 아니라 아주 작은 양수를 써야 한다 -- 실기에서
-0.0을 그대로 보냈다가 오히려 무제한으로 해석돼 로봇이 손님 없이 그냥
-출발해버리는 걸 직접 확인했다 (`stop_speed_percent` 파라미터 참고, 기본값
-0.1).
-
-## 정지 상태가 길어지면 Nav2 recovery(제자리 회전)가 끼어든다
-
-Nav2 controller_server 의 progress_checker(`movement_time_allowance`)가
-"이 시간 안에 최소 이 거리는 움직여야 한다"를 감시한다. 이 노드가 손님을
-오래 못 찾아 속도를 계속 낮게 걸어두면, Nav2 입장에서는 "제자리에 멈춰서
-못 움직이는 상태"로 보여 자체 recovery(제자리 회전 등)를 시작해버린다 --
-이건 이 노드가 의도한 "기다림"과 Nav2 가 오해한 "고장"이 충돌하는
-것이므로, 이 기능을 실제로 켜는 로봇에서는 `controller_server`의
-`progress_checker.movement_time_allowance`를 손님이 없어질 수 있는 최대
-시간보다 넉넉하게(예: 60초 이상) 잡아둬야 한다. 이 노드 자체는 그 파라미터를
-건드리지 않는다 -- nav2_params.yaml 은 팀 공용 설정이라 이 패키지가
-임의로 덮어쓰지 않는다.
+이 노드는 현재 안내 세션의 patient_id와 후방 QR의 data가 같을
+때만 거리를 신뢰한다. QR이 짧게 가려진 구간에서는 직전 QR 거리와
+YOLO 박스 크기를 결합해 제한된 시간 동안만 보간한다. 최신 거리를
+신뢰할 수 없으면 안전하게 waiting을 발행한다.
 """
 
 import collections
+import json
+import math
 import threading
 import time
 
+from mingky_interfaces.msg import GuideState, QrObservation
 from nav2_msgs.msg import SpeedLimit
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 import requests
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
+from .distance_policy import (
+    DistancePolicy,
+    estimate_visual_distance,
+    INACTIVE,
+    NORMAL,
+    select_mode,
+    SLOW,
+    WAITING,
+)
 from .event_publisher import PersonFollowEventPublisher
-from .follow_state import next_following_state
 from .target_lock import pick_target
+
 
 SPEED_LIMIT_TOPIC = '/speed_limit'
 FOLLOWING_ACTIVE_TOPIC = '/person_follow/following'
+FOLLOW_STATE_TOPIC = '/person_follow/state'
 
 
 class PersonFollowNode(Node):
@@ -84,188 +50,396 @@ class PersonFollowNode(Node):
         super().__init__('person_follow_node', **kwargs)
 
         self.declare_parameter('robot_id', 'pinky-01')
-        self.declare_parameter('image_topic', '/rear_camera/image_raw/compressed')
-        # 이 시간(초)보다 오래된 프레임은 판단에 안 쓴다 (카메라/네트워크 끊김 방지,
-        # mingky_fire_evac 과 같은 이유).
+        self.declare_parameter(
+            'image_topic', '/rear_camera/image_raw/compressed')
         self.declare_parameter('frame_max_age_sec', 2.0)
-        # AI 컴퓨터에서 도는 추론 서버 주소. 필수값이라 기본값을 비워두고,
-        # 없으면 바로 에러를 낸다 (mingky_fire_evac 과 같은 패턴).
+        # QR 거리가 주 센서이므로 YOLO 서버는 선택 기능이다.
         self.declare_parameter('infer_server_url', '')
         self.declare_parameter('infer_timeout_sec', 2.0)
-        # 검증 당시(흑백 카메라, 뒤에서 본 각도) p002 인형의 실측 신뢰도가
-        # 0.3 안팎까지 낮게 나온 적이 있어, fire_evac 의 기본값(0.3)보다
-        # 낮춰뒀다. 오탐이 늘면 window_size/required_detections 로 걸러진다.
         self.declare_parameter('conf_threshold', 0.25)
-        self.declare_parameter('window_size', 7)
-        self.declare_parameter('required_detections', 5)
-        # 직전 잠금 위치에서 이 픽셀 이상 벗어난 같은 클래스 검출은 다른
-        # 개체로 보고 버린다 (예: 같은 p002 인형이 화면 반대편에 하나 더
-        # 있는 경우).
         self.declare_parameter('max_jump_px', 200.0)
-        # SpeedLimit.speed_limit=0.0 은 "무제한" 특수값이라 정지 표현에
-        # 못 쓴다 (모듈 docstring 참고). 0보다 큰 값을 강제한다.
+        self.declare_parameter('target_reacquire_misses', 5)
+        self.declare_parameter('slow_distance_m', 1.5)
+        self.declare_parameter('stop_distance_m', 2.5)
+        self.declare_parameter('distance_hysteresis_m', 0.2)
+        self.declare_parameter('distance_window_size', 5)
+        self.declare_parameter('qr_stale_sec', 1.0)
+        self.declare_parameter('visual_fallback_sec', 2.0)
+        self.declare_parameter('status_period_sec', 0.5)
+        # 0.0은 Nav2에서 제한 해제이므로 정지 표현에 쓰지 않는다.
         self.declare_parameter('stop_speed_percent', 0.1)
-        self.declare_parameter('follow_speed_percent', 100.0)
+        self.declare_parameter('slow_speed_percent', 35.0)
+        self.declare_parameter('normal_speed_percent', 100.0)
 
         get = self.get_parameter
         self.robot_id = str(get('robot_id').value)
         self.image_topic = str(get('image_topic').value)
-        self.frame_max_age_sec = float(get('frame_max_age_sec').value)
-        self.infer_server_url = str(get('infer_server_url').value)
-        if not self.infer_server_url:
-            raise RuntimeError(
-                'infer_server_url 파라미터가 필요합니다 (GPU 컴퓨터의 추론 서버 주소).')
-        self.infer_timeout_sec = float(get('infer_timeout_sec').value)
+        self.frame_max_age_sec = max(
+            0.1, float(get('frame_max_age_sec').value))
+        self.infer_server_url = str(get('infer_server_url').value).strip()
+        self.infer_timeout_sec = max(
+            0.1, float(get('infer_timeout_sec').value))
         self.conf_threshold = float(get('conf_threshold').value)
-        self.window_size = int(get('window_size').value)
-        self.required_detections = int(get('required_detections').value)
-        if self.window_size <= 0:
-            raise ValueError('window_size는 1 이상이어야 합니다.')
-        if not 1 <= self.required_detections <= self.window_size:
-            raise ValueError(
-                'required_detections는 1 이상 window_size 이하여야 합니다.')
-        self.max_jump_px = float(get('max_jump_px').value)
+        self.max_jump_px = max(1.0, float(get('max_jump_px').value))
+        self.target_reacquire_misses = max(
+            1, int(get('target_reacquire_misses').value))
+        self.policy = DistancePolicy(
+            slow_distance_m=float(get('slow_distance_m').value),
+            stop_distance_m=float(get('stop_distance_m').value),
+            hysteresis_m=float(get('distance_hysteresis_m').value),
+        )
+        distance_window_size = max(
+            1, int(get('distance_window_size').value))
+        self.qr_stale_sec = max(0.1, float(get('qr_stale_sec').value))
+        self.visual_fallback_sec = max(
+            self.qr_stale_sec,
+            float(get('visual_fallback_sec').value),
+        )
+        self.status_period_sec = max(
+            0.1, float(get('status_period_sec').value))
         self.stop_speed_percent = float(get('stop_speed_percent').value)
-        if self.stop_speed_percent <= 0.0:
+        self.slow_speed_percent = float(get('slow_speed_percent').value)
+        self.normal_speed_percent = float(get('normal_speed_percent').value)
+        if not (
+                0.0 < self.stop_speed_percent
+                <= self.slow_speed_percent
+                <= self.normal_speed_percent
+                <= 100.0):
             raise ValueError(
-                'stop_speed_percent는 0보다 커야 합니다 '
-                '(0.0은 SpeedLimit 에서 "무제한" 특수값이라 정지에 못 씀).')
-        self.follow_speed_percent = float(get('follow_speed_percent').value)
+                '속도 비율은 0 < stop <= slow <= normal <= 100이어야 합니다.')
 
         self.events = PersonFollowEventPublisher(self, self.robot_id)
-
+        self._lock = threading.Lock()
         self._stop = False
+        self._active = False
+        self._session_id = 0
+        self._patient_id = ''
+        self._mode = INACTIVE
+        self._last_status_at = 0.0
+        self._qr_visible = False
+        self._last_qr_at: float | None = None
+        self._qr_center: tuple[float, float] | None = None
+        self._qr_distances = collections.deque(maxlen=distance_window_size)
         self._latest_jpeg: bytes | None = None
         self._latest_frame_at: float | None = None
         self._last_processed_at: float | None = None
         self._inference_available: bool | None = None
-        self._recent: collections.deque = collections.deque(maxlen=self.window_size)
         self._locked_target: dict | None = None
-        self._following = False
+        self._locked_class: str | None = None
+        self._target_misses = 0
+        self._visual_visible = False
+        self._last_visual_at: float | None = None
+        self._visual_height_px: float | None = None
+        self._visual_anchor_distance_m: float | None = None
+        self._visual_anchor_height_px: float | None = None
 
-        self.create_subscription(
-            CompressedImage, self.image_topic, self._on_image,
-            qos_profile_sensor_data)
-        self.speed_limit_pub = self.create_publisher(SpeedLimit, SPEED_LIMIT_TOPIC, 10)
+        state_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.speed_limit_pub = self.create_publisher(
+            SpeedLimit, SPEED_LIMIT_TOPIC, 10)
         self.following_active_pub = self.create_publisher(
-            Bool, FOLLOWING_ACTIVE_TOPIC, 10)
+            Bool, FOLLOWING_ACTIVE_TOPIC, state_qos)
+        self.follow_state_pub = self.create_publisher(
+            String, FOLLOW_STATE_TOPIC, state_qos)
+        self.create_subscription(
+            GuideState, '/guide_manager/state', self._on_guide_state, state_qos)
+        self.create_subscription(
+            QrObservation, '/rear_qr/observation', self._on_qr_observation, 10)
+        if self.infer_server_url:
+            self.create_subscription(
+                CompressedImage,
+                self.image_topic,
+                self._on_image,
+                qos_profile_sensor_data,
+            )
+            threading.Thread(
+                target=self._inference_loop,
+                daemon=True,
+                name='person-follow-inference',
+            ).start()
+            self.get_logger().info(
+                f'YOLO 보완 추론 서버: {self.infer_server_url}')
+        else:
+            self.get_logger().info('YOLO 보완 추적 비활성; QR 거리만 사용합니다.')
+        self.create_timer(0.1, self._control_tick)
 
-        self.get_logger().info(
-            f'추론 서버: {self.infer_server_url}. image_topic={self.image_topic}. '
-            f'감지 스레드 시작.')
-        # 시작 직후(아직 상태 전환이 없는 상태)엔 Nav2가 speed_limit을 한 번도
-        # 못 받아 기본값(무제한)으로 안다 -- 전환이 있을 때만 발행하면 이
-        # 틈을 놓친다. 시작하자마자 현재(정지) 상태를 명시적으로 한 번 보낸다.
-        self._publish_speed_limit()
-        threading.Thread(target=self._watch_loop, daemon=True).start()
+        # 안내 세션이 아니므로 시작 즉시 Nav2 속도 제한을 해제한다.
+        self._publish_speed_limit(INACTIVE)
+        self._publish_status(INACTIVE, None, 'none', force=True)
 
     def destroy_node(self):
         self._stop = True
+        # 정상 종료 시 다음 Nav2 목표에 제한이 남지 않게 한다.
+        self._publish_speed_limit(INACTIVE)
         super().destroy_node()
 
-    # ------------------------------------------------------------ 구독 콜백
+    def _reset_tracking(self) -> None:
+        self._qr_visible = False
+        self._last_qr_at = None
+        self._qr_center = None
+        self._qr_distances.clear()
+        self._locked_target = None
+        self._locked_class = None
+        self._target_misses = 0
+        self._visual_visible = False
+        self._last_visual_at = None
+        self._visual_height_px = None
+        self._visual_anchor_distance_m = None
+        self._visual_anchor_height_px = None
 
-    def _on_image(self, msg: CompressedImage):
-        # 디코드하지 않고 압축된 바이트 그대로 들고 있는다 -- 다시 볼 사람은
-        # 여기가 아니라 GPU 컴퓨터(HTTP로 그대로 전달)라, 여기서 디코드했다가
-        # 다시 인코드하는 건 낭비다.
-        self._latest_jpeg = bytes(msg.data)
-        self._latest_frame_at = time.monotonic()
+    def _on_guide_state(self, msg: GuideState) -> None:
+        active = (
+            msg.session_state == GuideState.SESSION_GUIDING
+            and msg.session_id > 0
+            and bool(msg.patient_id)
+        )
+        with self._lock:
+            changed_session = (
+                msg.session_id != self._session_id
+                or msg.patient_id != self._patient_id
+            )
+            if changed_session or (self._active and not active):
+                self._reset_tracking()
+            self._active = active
+            self._session_id = int(msg.session_id) if active else 0
+            self._patient_id = str(msg.patient_id) if active else ''
 
-    # ------------------------------------------------------------ 감지 루프
-    #
-    # HTTP 요청(GPU 컴퓨터 추론 서버 호출)은 블로킹이라 rclpy.spin(self)을
-    # 도는 메인 스레드에서 하면 다른 콜백까지 같이 밀린다. mingky_fire_evac과
-    # 같은 이유로 별도 스레드에서 폴링한다.
+    def _on_qr_observation(self, msg: QrObservation) -> None:
+        now = time.monotonic()
+        distance = float(msg.distance)
+        with self._lock:
+            if not self._active:
+                return
+            matches = (
+                msg.visible
+                and msg.data == self._patient_id
+                and math.isfinite(distance)
+                and distance > 0.0
+            )
+            self._qr_visible = matches
+            if not matches:
+                return
+            self._last_qr_at = now
+            self._qr_center = (float(msg.center_x), float(msg.center_y))
+            self._qr_distances.append(distance)
+            if self._visual_visible and self._visual_height_px:
+                self._visual_anchor_distance_m = self._median_qr_distance()
+                self._visual_anchor_height_px = self._visual_height_px
 
-    def _watch_loop(self):
+    def _on_image(self, msg: CompressedImage) -> None:
+        with self._lock:
+            self._latest_jpeg = bytes(msg.data)
+            self._latest_frame_at = time.monotonic()
+
+    def _median_qr_distance(self) -> float | None:
+        if not self._qr_distances:
+            return None
+        ordered = sorted(self._qr_distances)
+        middle = len(ordered) // 2
+        if len(ordered) % 2:
+            return float(ordered[middle])
+        return float((ordered[middle - 1] + ordered[middle]) / 2.0)
+
+    def _inference_loop(self) -> None:
         while rclpy.ok() and not self._stop:
-            time.sleep(0.1)
-            jpeg, frame_at = self._latest_jpeg, self._latest_frame_at
-            if jpeg is None or frame_at is None:
+            time.sleep(0.05)
+            with self._lock:
+                active = self._active
+                jpeg = self._latest_jpeg
+                frame_at = self._latest_frame_at
+                processed_at = self._last_processed_at
+                locked = self._locked_target
+                locked_class = self._locked_class
+                last_qr_at = self._last_qr_at
+                qr_center = self._qr_center
+            now = time.monotonic()
+            if not active or jpeg is None or frame_at is None:
                 continue
-            if time.monotonic() - frame_at > self.frame_max_age_sec:
+            if now - frame_at > self.frame_max_age_sec:
+                with self._lock:
+                    self._visual_visible = False
                 continue
-            if frame_at == self._last_processed_at:
+            if frame_at == processed_at:
                 continue
-            self._last_processed_at = frame_at
+            with self._lock:
+                self._last_processed_at = frame_at
 
             detections = self._detect(jpeg)
             target = pick_target(
-                detections, self._locked_target,
-                screen_center=(320.0, 240.0), max_jump_px=self.max_jump_px)
-            detected = target is not None
-            if detected:
+                detections,
+                locked,
+                screen_center=qr_center or (320.0, 240.0),
+                max_jump_px=self.max_jump_px,
+                required_class=locked_class,
+            )
+            qr_recent = (
+                last_qr_at is not None
+                and now - last_qr_at <= self.qr_stale_sec
+            )
+            with self._lock:
+                if target is None:
+                    self._target_misses += 1
+                    self._visual_visible = False
+                    if self._target_misses >= self.target_reacquire_misses:
+                        # 위치 잠금만 풀고 QR로 검증한 클래스는 유지한다.
+                        self._locked_target = None
+                    continue
+                if self._locked_class is None and not qr_recent:
+                    # QR로 현재 환자를 확인하기 전에는 임의 인형을
+                    # 잠그지 않는다.
+                    self._visual_visible = False
+                    continue
                 self._locked_target = target
+                self._locked_class = self._locked_class or str(target['cls'])
+                self._target_misses = 0
+                self._visual_visible = True
+                self._last_visual_at = now
+                self._visual_height_px = float(target['h'])
+                if qr_recent:
+                    self._visual_anchor_distance_m = self._median_qr_distance()
+                    self._visual_anchor_height_px = self._visual_height_px
 
-            was_following = self._following
-            self._following = next_following_state(
-                self._recent, detected, was_following,
-                required=self.required_detections)
+    def _control_tick(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            active = self._active
+            previous = self._mode
+            qr_fresh = (
+                self._qr_visible
+                and self._last_qr_at is not None
+                and now - self._last_qr_at <= self.qr_stale_sec
+            )
+            visual_fresh = (
+                self._visual_visible
+                and self._last_visual_at is not None
+                and self._last_qr_at is not None
+                and now - self._last_visual_at <= self.frame_max_age_sec
+                and now - self._last_qr_at <= self.visual_fallback_sec
+            )
+            if not active:
+                mode, distance, source = INACTIVE, None, 'none'
+            elif qr_fresh:
+                distance = self._median_qr_distance()
+                mode = select_mode(distance, previous, self.policy)
+                source = 'qr'
+            elif visual_fresh:
+                distance = estimate_visual_distance(
+                    self._visual_anchor_distance_m,
+                    self._visual_anchor_height_px,
+                    self._visual_height_px,
+                )
+                mode = select_mode(distance, previous, self.policy)
+                source = 'visual'
+            else:
+                distance = None
+                mode = WAITING
+                source = 'stale'
+            changed = mode != previous
+            self._mode = mode
 
-            if was_following != self._following:
-                state = 'FOLLOWING' if self._following else 'STOPPED'
-                self.get_logger().warn(f'>>> 상태 전환: {state} <<<')
-                self.events.publish(
-                    'person_follow.state_changed',
-                    {
-                        'following': self._following,
-                        'target_class': target['cls'] if target else None,
-                    })
-                self._publish_speed_limit()
-                self.following_active_pub.publish(Bool(data=self._following))
+        if changed:
+            self.get_logger().warn(
+                f'환자 추종 상태: {previous} -> {mode} '
+                f'(distance={distance}, source={source})')
+            self.events.publish('person_follow.state_changed', {
+                'state': mode,
+                'distance': distance,
+                'source': source,
+            })
+            self._publish_speed_limit(mode)
+            self.following_active_pub.publish(Bool(
+                data=mode in (NORMAL, SLOW)))
+        self._publish_status(mode, distance, source, force=changed)
+
+    def _publish_speed_limit(self, mode: str) -> None:
+        speed = {
+            WAITING: self.stop_speed_percent,
+            SLOW: self.slow_speed_percent,
+        }.get(mode, self.normal_speed_percent)
+        msg = SpeedLimit()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.percentage = True
+        msg.speed_limit = float(speed)
+        self.speed_limit_pub.publish(msg)
+        self.get_logger().info(f'speed_limit -> {speed:.1f}% ({mode})')
+
+    def _publish_status(
+            self, mode: str, distance: float | None, source: str,
+            *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_status_at < self.status_period_sec:
+            return
+        self._last_status_at = now
+        with self._lock:
+            payload = {
+                'state': mode,
+                'session_id': self._session_id,
+                'patient_id': self._patient_id,
+                'distance': distance,
+                'source': source,
+                'qr_visible': self._qr_visible,
+                'visual_visible': self._visual_visible,
+            }
+        self.follow_state_pub.publish(String(data=json.dumps(
+            payload, ensure_ascii=False, separators=(',', ':'))))
 
     def _detect(self, jpeg_bytes: bytes) -> list[dict]:
-        """GPU 컴퓨터의 추론 서버에 프레임을 보내고 검출 목록을 받는다.
-
-        네트워크/서버 문제로 요청이 실패해도 이 노드를 죽이면 안 된다 --
-        이번 프레임만 '검출 없음'으로 취급하고 다음 프레임에서 다시 시도한다.
-        """
+        """GPU 응답 오류가 추론 스레드를 종료하지 않도록 검증한다."""
         try:
-            resp = requests.post(
+            response = requests.post(
                 self.infer_server_url,
                 files={'image': ('frame.jpg', jpeg_bytes, 'image/jpeg')},
                 data={'conf': str(self.conf_threshold)},
                 timeout=self.infer_timeout_sec,
             )
-            resp.raise_for_status()
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict):
+                raise ValueError('추론 응답은 JSON 객체여야 합니다.')
+            payload = body.get('detections', [])
+            if not isinstance(payload, list):
+                raise ValueError('detections는 배열이어야 합니다.')
+            detections = []
+            for raw in payload:
+                if not isinstance(raw, dict):
+                    raise ValueError('검출 항목은 JSON 객체여야 합니다.')
+                detection = {
+                    'cls': str(raw['class']),
+                    'conf': float(raw['conf']),
+                    'x': float(raw['x']),
+                    'y': float(raw['y']),
+                    'w': float(raw['w']),
+                    'h': float(raw['h']),
+                }
+                numeric = [
+                    value for key, value in detection.items() if key != 'cls'
+                ]
+                if not all(math.isfinite(value) for value in numeric):
+                    raise ValueError(
+                        '검출 좌표와 신뢰도는 유한한 수여야 합니다.')
+                detections.append(detection)
             if self._inference_available is False:
                 self.events.publish('person_follow.inference_restored')
                 self.get_logger().info('추론 서버 연결이 복구됐습니다.')
             self._inference_available = True
-            payload = resp.json().get('detections', [])
-            return [
-                {
-                    'cls': d['class'],
-                    'conf': float(d['conf']),
-                    'x': float(d['x']),
-                    'y': float(d['y']),
-                    'w': float(d['w']),
-                    'h': float(d['h']),
-                }
-                for d in payload
-            ]
-        except (requests.RequestException, ValueError, KeyError) as exc:
+            return detections
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
             if self._inference_available is not False:
                 self.events.publish(
                     'person_follow.inference_unavailable',
-                    {'reason': str(exc)}, level='error')
+                    {'reason': str(exc)},
+                    level='error',
+                )
             self._inference_available = False
-            self.get_logger().warn(f'추론 서버 호출 실패: {exc}', throttle_duration_sec=5.0)
+            self.get_logger().warn(
+                f'추론 서버 호출 실패: {exc}', throttle_duration_sec=5.0)
             return []
 
-    def _publish_speed_limit(self):
-        msg = SpeedLimit()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.percentage = True
-        msg.speed_limit = (
-            self.follow_speed_percent if self._following
-            else self.stop_speed_percent)
-        self.speed_limit_pub.publish(msg)
-        self.get_logger().info(f'speed_limit -> {msg.speed_limit:.1f}%')
 
-
-def main():
+def main() -> None:
     rclpy.init()
     node = PersonFollowNode()
     try:

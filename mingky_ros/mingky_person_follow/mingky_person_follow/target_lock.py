@@ -36,6 +36,7 @@ def pick_target(
     *,
     screen_center: tuple[float, float],
     max_jump_px: float,
+    required_class: str | None = None,
 ) -> Detection | None:
     """이번 프레임에서 계속 따라갈 대상을 고른다.
 
@@ -46,6 +47,11 @@ def pick_target(
       클래스가 다른 검출은 아무리 가까워도 절대 후보에 넣지 않는다 --
       다른 손님으로 바뀌치기되는 걸 막는 핵심 조건이다.
     """
+    if required_class:
+        detections = [
+            detection for detection in detections
+            if detection['cls'] == required_class
+        ]
     if not detections:
         return None
 
