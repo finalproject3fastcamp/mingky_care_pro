@@ -92,6 +92,8 @@ battery
 라이다가 보지 못하고 `/us_sensor/range` 초음파에만 잡히는 낮은 장애물은
 선택적으로 직접 옆걸음 회피할 수 있습니다. 기본값은 기존 Nav2 동작을 보존하는
 `disabled`이며, 실제 로봇에서 기능을 시험할 때만 `sidestep`을 명시합니다.
+초음파 감지 임계값은 10cm 미만이고 2회 연속 확인해야 회피를 시작합니다. 회피
+이동 중 거리가 4cm 미만으로 줄어들면 안전을 위해 현재 동작을 즉시 취소합니다.
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \

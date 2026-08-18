@@ -368,8 +368,8 @@ def test_low_obstacle_sidestep_cancels_and_resumes_waypoint_test(manager):
     handle = FakeActionHandle()
     node.nav.futures[0].callback(ImmediateFuture(handle))
 
-    node._on_low_obstacle_range(Range(range=0.20))
-    node._on_low_obstacle_range(Range(range=0.20))
+    node._on_low_obstacle_range(Range(range=0.08))
+    node._on_low_obstacle_range(Range(range=0.08))
 
     assert handle.cancelled == 1
     handle.result_future.callback(ImmediateFuture(SimpleNamespace(
@@ -394,8 +394,8 @@ def test_disabled_low_obstacle_mode_keeps_waypoint_goal(manager):
     handle = FakeActionHandle()
     node.nav.futures[0].callback(ImmediateFuture(handle))
 
-    node._on_low_obstacle_range(Range(range=0.20))
-    node._on_low_obstacle_range(Range(range=0.20))
+    node._on_low_obstacle_range(Range(range=0.08))
+    node._on_low_obstacle_range(Range(range=0.08))
 
     assert handle.cancelled == 0
     assert node.low_obstacle_driver.started == []

@@ -103,7 +103,7 @@ class GuideManager(Node):
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
         self.declare_parameter('low_obstacle_confirmations', 2)
         self.declare_parameter('low_obstacle_max_sidesteps', 3)
-        self.declare_parameter('low_obstacle_trigger_distance', 0.25)
+        self.declare_parameter('low_obstacle_trigger_distance', 0.10)
         self.declare_parameter('low_obstacle_lidar_margin', 0.15)
         self.declare_parameter('low_obstacle_lidar_front_center_deg', 180.0)
         self.declare_parameter('low_obstacle_lidar_half_width_deg', 15.0)
@@ -114,7 +114,7 @@ class GuideManager(Node):
         self.declare_parameter('low_obstacle_drive_step', 0.08)
         self.declare_parameter('low_obstacle_drive_total', 0.35)
         self.declare_parameter('low_obstacle_drive_speed', 0.12)
-        self.declare_parameter('low_obstacle_min_drive_clearance', 0.10)
+        self.declare_parameter('low_obstacle_min_drive_clearance', 0.04)
         self.declare_parameter('low_obstacle_range_timeout_sec', 0.8)
         # 환자 거리 관측은 옵션이며, 통합 launch에서 노드와 함께 켠다.
         self.declare_parameter('patient_follow_enabled', False)
