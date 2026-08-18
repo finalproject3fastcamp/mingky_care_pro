@@ -149,6 +149,45 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
 
 
+def test_patient_distance_guidance_is_safe_opt_in() -> None:
+    root = _root()
+
+    assert _argument(root, 'start_patient_follow').get('default') == 'false'
+    assert _argument(root, 'patient_follow_slow_distance').get('default') == '1.5'
+    assert _argument(root, 'patient_follow_stop_distance').get('default') == '2.5'
+    follower = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'person_follow_node'
+    )
+    assert follower.get('if') == '$(var start_patient_follow)'
+    follower_params = {
+        item.get('name'): item.get('value')
+        for item in follower.findall('param')
+    }
+    assert follower_params['infer_server_url'] == (
+        '$(var patient_follow_infer_server_url)')
+    assert follower_params['slow_distance_m'] == (
+        '$(var patient_follow_slow_distance)')
+    assert follower_params['stop_distance_m'] == (
+        '$(var patient_follow_stop_distance)')
+
+    guide = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'guide_manager'
+    )
+    guide_params = {
+        item.get('name'): item.get('value')
+        for item in guide.findall('param')
+    }
+    assert guide_params['patient_follow_enabled'] == (
+        '$(var start_patient_follow)')
+
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
+    assert 'start_patient_follow:=${MINGKY_PATIENT_FOLLOW_ENABLED:-false}' in unit
+    assert 'MINGKY_PATIENT_FOLLOW_ENABLED=false' in env_example
+
+
 def test_non_clinical_navigation_has_a_separate_manager() -> None:
     root = _root()
     managers = {

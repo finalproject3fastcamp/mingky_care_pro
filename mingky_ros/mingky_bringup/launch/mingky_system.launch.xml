@@ -24,6 +24,13 @@
     <arg name="start_rear_camera_stream" default="true"/>
     <arg name="start_rear_qr_distance" default="true"/>
     <arg name="rear_qr_size" default="0.028"/>
+    <!-- 환자 QR 거리 기반 감속·대기. 실로봇 재검증 전에는 꺼둔다. -->
+    <arg name="start_patient_follow" default="false"/>
+    <arg name="patient_follow_infer_server_url" default=""/>
+    <arg name="patient_follow_slow_distance" default="1.5"/>
+    <arg name="patient_follow_stop_distance" default="2.5"/>
+    <arg name="patient_follow_slow_speed_percent" default="35.0"/>
+    <arg name="patient_follow_timeout" default="2.0"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
     <arg name="camera_profile" default=""/>
     <arg name="rear_preview_port" default="8092"/>
@@ -117,8 +124,27 @@
         <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
         <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="patient_follow_enabled"
+               value="$(var start_patient_follow)" type="bool"/>
+        <param name="patient_follow_timeout_sec"
+               value="$(var patient_follow_timeout)"/>
         <param name="arrival_notice_sec" value="$(var arrival_notice_sec)"/>
         <param name="use_arrival_chime" value="$(var use_buzzer)"/>
+    </node>
+
+    <!-- QR ID·거리가 주 판단이고 YOLO는 짧은 QR 가림만 보완한다. -->
+    <node pkg="mingky_person_follow" exec="person_follow_node"
+          name="person_follow_node" output="screen"
+          if="$(var start_patient_follow)">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="infer_server_url"
+               value="$(var patient_follow_infer_server_url)"/>
+        <param name="slow_distance_m"
+               value="$(var patient_follow_slow_distance)"/>
+        <param name="stop_distance_m"
+               value="$(var patient_follow_stop_distance)"/>
+        <param name="slow_speed_percent"
+               value="$(var patient_follow_slow_speed_percent)"/>
     </node>
 
     <node pkg="mingky_navigation_manager" exec="navigation_manager"
