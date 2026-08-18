@@ -241,7 +241,9 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.08
+        # MPPI footprint 대각 반경(약 0.099m)을 간신히 넘기는 최소값이다.
+        # 전역 경로의 0.08m는 유지해 좁은 통로 선택 특성은 바꾸지 않는다.
+        inflation_radius: 0.10
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True

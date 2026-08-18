@@ -39,7 +39,7 @@ def test_mppi_uses_live_costmap_for_dynamic_avoidance() -> None:
     assert local_costmap['update_frequency'] == pytest.approx(10.0)
     assert local_costmap['plugins'] == ['voxel_layer', 'inflation_layer']
     assert local_costmap['inflation_layer']['inflation_radius'] == pytest.approx(
-        0.08)
+        0.10)
 
 
 def test_smac2d_is_the_primary_global_planner() -> None:
