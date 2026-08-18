@@ -10,6 +10,11 @@ export function Layout() {
 
   useEffect(() => {
     if (!routeRef.current) return
+    const page = routeRef.current.firstElementChild
+    if (!page) return
+    const sections = page.querySelectorAll(
+      ':scope > :is(header, section, .card, .waypoint-workspace)',
+    )
     const scope = createScope({
       root: routeRef,
       mediaQueries: {
@@ -17,19 +22,21 @@ export function Layout() {
       },
     }).add((self) => {
       if (self?.matches.reduceMotion) return
-      animate('.route-stage > *', {
+      animate(page, {
         opacity: { from: 0 },
         y: { from: 10 },
         duration: 420,
         ease: 'out(4)',
       })
-      animate('.route-stage > * > :is(header, section, .card, .waypoint-workspace)', {
-        opacity: { from: 0 },
-        y: { from: 12 },
-        delay: stagger(45, { start: 60 }),
-        duration: 460,
-        ease: 'out(4)',
-      })
+      if (sections.length > 0) {
+        animate(sections, {
+          opacity: { from: 0 },
+          y: { from: 12 },
+          delay: stagger(45, { start: 60 }),
+          duration: 460,
+          ease: 'out(4)',
+        })
+      }
     })
     return () => scope.revert()
   }, [location.pathname])
