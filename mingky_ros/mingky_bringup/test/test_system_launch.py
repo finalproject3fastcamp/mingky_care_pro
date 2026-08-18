@@ -149,12 +149,12 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
 
 
-def test_patient_distance_guidance_is_safe_opt_in() -> None:
+def test_patient_distance_guidance_is_enabled_for_test() -> None:
     root = _root()
 
-    assert _argument(root, 'start_patient_follow').get('default') == 'false'
-    assert _argument(root, 'patient_follow_slow_distance').get('default') == '1.5'
-    assert _argument(root, 'patient_follow_stop_distance').get('default') == '2.5'
+    assert _argument(root, 'start_patient_follow').get('default') == 'true'
+    assert _argument(root, 'patient_follow_slow_distance').get('default') == '0.15'
+    assert _argument(root, 'patient_follow_stop_distance').get('default') == '0.20'
     follower = next(
         item for item in root.findall('node')
         if item.get('name') == 'person_follow_node'
@@ -184,8 +184,8 @@ def test_patient_distance_guidance_is_safe_opt_in() -> None:
 
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
-    assert 'start_patient_follow:=${MINGKY_PATIENT_FOLLOW_ENABLED:-false}' in unit
-    assert 'MINGKY_PATIENT_FOLLOW_ENABLED=false' in env_example
+    assert 'start_patient_follow:=${MINGKY_PATIENT_FOLLOW_ENABLED:-true}' in unit
+    assert 'MINGKY_PATIENT_FOLLOW_ENABLED=true' in env_example
 
 
 def test_non_clinical_navigation_has_a_separate_manager() -> None:

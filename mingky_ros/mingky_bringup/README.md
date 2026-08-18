@@ -155,21 +155,21 @@ Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`�
 ## 환자 거리 기반 안내
 
 `start_patient_follow:=true`를 주면 후방 카메라의 환자 QR ID·거리로
-안내 속도를 조절합니다. 기본 임계값은 1.5m 감속, 2.5m 대기이며
+안내 속도를 조절합니다. 시험 기본 임계값은 0.15m 감속, 0.20m 대기이며
 YOLO URL을 주면 QR이 짧게 가려진 구간만 인형 박스로 보완합니다.
 
 환자가 멀어지면 Guide Manager가 현재 Nav2 목표를 정상 취소해
 Adaptive Recovery가 실행되지 않게 하고, 환자가 복귀하면 같은 Waypoint를
 다시 전송합니다. 카메라·QR·추적 heartbeat가 끊겨도 대기로 전환합니다.
 
-실로봇 거리 재검증 전에는 기본값이 `false`입니다. 운영 로봇은
+현재 시험을 위해 기본값이 `true`입니다. 운영 로봇은
 `/etc/mingky/robot.env`에서 다음 값을 설정합니다.
 
 ```dotenv
 MINGKY_PATIENT_FOLLOW_ENABLED=true
 MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL=http://<GPU-PC-IP>:5001/infer
-MINGKY_PATIENT_FOLLOW_SLOW_DISTANCE_M=1.5
-MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=2.5
+MINGKY_PATIENT_FOLLOW_SLOW_DISTANCE_M=0.15
+MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.20
 MINGKY_PATIENT_FOLLOW_SLOW_SPEED_PERCENT=35.0
 ```
 

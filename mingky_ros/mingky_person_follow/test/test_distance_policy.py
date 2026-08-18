@@ -21,6 +21,14 @@ def policy() -> DistancePolicy:
     )
 
 
+def test_test_defaults_stay_within_twenty_centimeters() -> None:
+    policy = DistancePolicy()
+
+    assert policy.slow_distance_m == pytest.approx(0.15)
+    assert policy.stop_distance_m == pytest.approx(0.20)
+    assert policy.hysteresis_m == pytest.approx(0.02)
+
+
 @pytest.mark.parametrize(('distance', 'expected'), [
     (1.0, NORMAL),
     (2.0, SLOW),

@@ -12,9 +12,9 @@ WAITING = 'waiting'
 
 @dataclass(frozen=True)
 class DistancePolicy:
-    slow_distance_m: float = 1.5
-    stop_distance_m: float = 2.5
-    hysteresis_m: float = 0.2
+    slow_distance_m: float = 0.15
+    stop_distance_m: float = 0.20
+    hysteresis_m: float = 0.02
 
     def __post_init__(self) -> None:
         values = (

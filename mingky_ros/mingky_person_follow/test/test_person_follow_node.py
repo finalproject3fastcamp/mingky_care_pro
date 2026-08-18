@@ -37,7 +37,7 @@ def _guide(*, state=GuideState.SESSION_GUIDING, patient='patient-001'):
     )
 
 
-def _qr(patient='patient-001', distance=1.0, visible=True):
+def _qr(patient='patient-001', distance=0.10, visible=True):
     return QrObservation(
         visible=visible,
         data=patient,
@@ -50,7 +50,7 @@ def _qr(patient='patient-001', distance=1.0, visible=True):
 def test_matching_qr_controls_distance_band(node) -> None:
     instance, speeds, states = node
     instance._on_guide_state(_guide())
-    instance._on_qr_observation(_qr(distance=1.0))
+    instance._on_qr_observation(_qr(distance=0.10))
 
     instance._control_tick()
 
@@ -76,7 +76,7 @@ def test_other_patient_qr_is_not_used(node) -> None:
 def test_stale_qr_fails_safe_to_waiting(node) -> None:
     instance, speeds, _ = node
     instance._on_guide_state(_guide())
-    instance._on_qr_observation(_qr(distance=1.0))
+    instance._on_qr_observation(_qr(distance=0.10))
     instance._control_tick()
     with instance._lock:
         instance._last_qr_at = time.monotonic() - instance.qr_stale_sec - 0.1
@@ -104,19 +104,19 @@ def test_non_guiding_session_releases_speed_limit(node) -> None:
 def test_visual_fallback_is_bounded_by_last_qr(node) -> None:
     instance, _, states = node
     instance._on_guide_state(_guide())
-    instance._on_qr_observation(_qr(distance=2.0))
+    instance._on_qr_observation(_qr(distance=0.18))
     with instance._lock:
         instance._qr_visible = False
         instance._last_visual_at = time.monotonic()
         instance._visual_visible = True
-        instance._visual_anchor_distance_m = 2.0
+        instance._visual_anchor_distance_m = 0.18
         instance._visual_anchor_height_px = 200.0
         instance._visual_height_px = 200.0
 
     instance._control_tick()
 
     assert states[-1]['source'] == 'visual'
-    assert states[-1]['distance'] == pytest.approx(2.0)
+    assert states[-1]['distance'] == pytest.approx(0.18)
 
     with instance._lock:
         instance._last_qr_at = (

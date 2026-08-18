@@ -24,11 +24,11 @@
     <arg name="start_rear_camera_stream" default="true"/>
     <arg name="start_rear_qr_distance" default="true"/>
     <arg name="rear_qr_size" default="0.028"/>
-    <!-- 환자 QR 거리 기반 감속·대기. 실로봇 재검증 전에는 꺼둔다. -->
-    <arg name="start_patient_follow" default="false"/>
+    <!-- 환자 QR 거리 기반 감속·대기 시험을 기본으로 실행한다. -->
+    <arg name="start_patient_follow" default="true"/>
     <arg name="patient_follow_infer_server_url" default=""/>
-    <arg name="patient_follow_slow_distance" default="1.5"/>
-    <arg name="patient_follow_stop_distance" default="2.5"/>
+    <arg name="patient_follow_slow_distance" default="0.15"/>
+    <arg name="patient_follow_stop_distance" default="0.20"/>
     <arg name="patient_follow_slow_speed_percent" default="35.0"/>
     <arg name="patient_follow_timeout" default="2.0"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
