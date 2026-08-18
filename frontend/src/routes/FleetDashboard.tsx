@@ -254,8 +254,11 @@ export function FleetDashboard() {
   return (
     <div className="dashboard">
       <header className="waypoint-page-header">
-        <h1>Fleet</h1>
-        <p>세션 완주율과 오차 예산, 그리고 그 숫자를 움직인 개입.</p>
+        <div>
+          <span className="waypoint-page-header__eyebrow">FLEET INSIGHT</span>
+          <h1>Fleet</h1>
+          <p>세션 완주율과 오차 예산, 그리고 그 숫자를 움직인 개입.</p>
+        </div>
       </header>
 
       {slo.error != null && (

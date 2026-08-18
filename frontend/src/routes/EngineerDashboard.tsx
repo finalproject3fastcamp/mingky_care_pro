@@ -166,6 +166,13 @@ export function EngineerDashboard() {
 
   return (
     <div className="dashboard">
+      <header className="waypoint-page-header">
+        <div>
+          <span className="waypoint-page-header__eyebrow">OPERATIONS LOG</span>
+          <h1>수집 이벤트</h1>
+          <p>로봇 상태 전이와 제어 이력을 시간순으로 확인합니다.</p>
+        </div>
+      </header>
       <div className="card">
         <div className="card-title">수집 상태</div>
         <div className={`state-badge ok${live ? ' pulsing' : ''}`}>
