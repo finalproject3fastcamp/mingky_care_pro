@@ -13,7 +13,15 @@ type FollowTone = 'normal' | 'slow' | 'waiting' | 'inactive'
 function followPresentation(
   state: 'inactive' | 'normal' | 'slow' | 'waiting' | null | undefined,
   distance: number | null,
+  source: string | null | undefined,
 ) {
+  if (source === 'acquiring') {
+    return { tone: 'slow' as FollowTone, title: '환자 확인 위치 확보 중 · 저속 주행' }
+  }
+  if (source === 'grace') {
+    const tone = state === 'normal' ? 'normal' : 'slow'
+    return { tone: tone as FollowTone, title: '환자 추적 순간 유실 · 주행 유지' }
+  }
   switch (state) {
     case 'normal':
       return { tone: 'normal' as FollowTone, title: '환자 확인 · 정상 주행' }
@@ -33,7 +41,9 @@ function followPresentation(
 function sourceLabel(source: string | null | undefined): string {
   switch (source) {
     case 'qr': return 'QR 거리 측정'
-    case 'visual': return 'YOLO 임시 보완'
+    case 'visual': return 'YOLO 거리 추정'
+    case 'acquiring': return '출발 시야 확보'
+    case 'grace': return '추적 유실 유예'
     case 'stale': return '추적 정보 지연'
     case 'none': return '추적 비활성'
     default: return '상태 동기화 중'
@@ -51,7 +61,9 @@ export function GuidanceRearCamera({ robotId }: Props) {
   const data = observation.error ? null : observation.data
   const distance = data?.follow_distance
     ?? (data?.visible ? data.distance : null)
-  const presentation = followPresentation(data?.follow_state, distance)
+  const presentation = followPresentation(
+    data?.follow_state, distance, data?.follow_source,
+  )
 
   return (
     <section className="card guidance-rear-camera">
@@ -74,10 +86,14 @@ export function GuidanceRearCamera({ robotId }: Props) {
         role="status"
         aria-live="polite"
       >
-        {data?.qr_visible
+        {data?.follow_source === 'acquiring'
+          ? '벽에서 멀어지며 후방 카메라에서 환자를 확인할 공간을 확보하고 있습니다.'
+          : data?.follow_source === 'grace'
+            ? '추적 흔들림을 고려해 최대 2초간 직전 주행 상태를 유지합니다.'
+            : data?.qr_visible
           ? '현재 환자의 QR을 확인했습니다.'
           : data?.visual_visible
-            ? 'QR이 가려져 인형 영상으로 잠시 거리를 보완하고 있습니다.'
+            ? 'YOLO 인형 영상으로 환자 거리를 추정하고 있습니다.'
             : data?.follow_state === 'waiting'
               ? '환자를 다시 확인할 때까지 로봇이 현재 위치에서 기다립니다.'
               : '현재 환자의 추적 정보를 기다리고 있습니다.'}

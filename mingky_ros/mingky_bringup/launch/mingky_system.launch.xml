@@ -31,6 +31,8 @@
     <arg name="patient_follow_stop_distance" default="0.30"/>
     <arg name="patient_follow_slow_speed_percent" default="35.0"/>
     <arg name="patient_follow_tracking_grace" default="2.0"/>
+    <arg name="patient_follow_initial_acquire_grace" default="4.0"/>
+    <arg name="patient_follow_initial_acquire_distance" default="0.30"/>
     <arg name="patient_follow_target_height" default="0.13"/>
     <arg name="patient_follow_timeout" default="2.0"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
@@ -149,6 +151,10 @@
                value="$(var patient_follow_slow_speed_percent)"/>
         <param name="tracking_grace_sec"
                value="$(var patient_follow_tracking_grace)"/>
+        <param name="initial_acquire_grace_sec"
+               value="$(var patient_follow_initial_acquire_grace)"/>
+        <param name="initial_acquire_max_distance_m"
+               value="$(var patient_follow_initial_acquire_distance)"/>
         <param name="target_height_m"
                value="$(var patient_follow_target_height)"/>
     </node>

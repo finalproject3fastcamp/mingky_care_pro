@@ -50,6 +50,23 @@ def test_patient_follow_status_is_returned(monkeypatch):
     assert output.visual_visible is False
 
 
+def test_patient_acquisition_status_is_returned(monkeypatch):
+    monkeypatch.setattr(robots.heartbeat, 'is_tracked', lambda robot_id: True)
+
+    asyncio.run(robots.post_qr_observation(
+        'pinky-01', QrObservationIn(
+            visible=False,
+            follow_state='slow',
+            follow_distance=None,
+            follow_source='acquiring',
+        )))
+    output = asyncio.run(robots.get_qr_observation('pinky-01'))
+
+    assert output.follow_state == 'slow'
+    assert output.follow_distance is None
+    assert output.follow_source == 'acquiring'
+
+
 def test_stale_observation_is_hidden():
     qr_runtime.update('pinky-01', True, 0.42)
     old = qr_runtime._observations['pinky-01']

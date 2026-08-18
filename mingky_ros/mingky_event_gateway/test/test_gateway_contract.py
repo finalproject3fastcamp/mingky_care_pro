@@ -260,6 +260,22 @@ def test_patient_follow_status_accepts_current_session_patient():
     }
 
 
+def test_patient_follow_status_accepts_acquisition_source():
+    status = parse_patient_follow_status(json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': None,
+        'source': 'acquiring',
+        'qr_visible': False,
+        'visual_visible': False,
+    }), 42, 'patient-001')
+
+    assert status['follow_state'] == 'slow'
+    assert status['follow_distance'] is None
+    assert status['follow_source'] == 'acquiring'
+
+
 def test_patient_follow_status_rejects_other_patient_or_invalid_values():
     other_patient = json.dumps({
         'state': 'normal',

@@ -163,7 +163,8 @@ def parse_patient_follow_status(
         return None
     if state not in ('inactive', 'normal', 'slow', 'waiting'):
         return None
-    if source not in ('none', 'qr', 'visual', 'stale', 'unknown'):
+    if source not in (
+            'none', 'qr', 'visual', 'acquiring', 'grace', 'stale', 'unknown'):
         return None
     if distance is not None and (
             not math.isfinite(distance) or distance <= 0.0):

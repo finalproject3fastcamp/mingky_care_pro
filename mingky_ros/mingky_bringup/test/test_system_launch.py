@@ -182,6 +182,8 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     assert _argument(root, 'patient_follow_slow_distance').get('default') == '0.15'
     assert _argument(root, 'patient_follow_stop_distance').get('default') == '0.30'
     assert _argument(root, 'patient_follow_tracking_grace').get('default') == '2.0'
+    assert _argument(root, 'patient_follow_initial_acquire_grace').get('default') == '4.0'
+    assert _argument(root, 'patient_follow_initial_acquire_distance').get('default') == '0.30'
     assert _argument(root, 'patient_follow_target_height').get('default') == '0.13'
     follower = next(
         item for item in root.findall('node')
@@ -200,6 +202,10 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
         '$(var patient_follow_stop_distance)')
     assert follower_params['tracking_grace_sec'] == (
         '$(var patient_follow_tracking_grace)')
+    assert follower_params['initial_acquire_grace_sec'] == (
+        '$(var patient_follow_initial_acquire_grace)')
+    assert follower_params['initial_acquire_max_distance_m'] == (
+        '$(var patient_follow_initial_acquire_distance)')
     assert follower_params['target_height_m'] == (
         '$(var patient_follow_target_height)')
 
@@ -226,6 +232,8 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     assert 'MINGKY_PATIENT_FOLLOW_ENABLED=true' in env_example
     assert 'MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.30' in env_example
     assert 'MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC=2.0' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_GRACE_SEC=4.0' in env_example
+    assert 'MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_DISTANCE_M=0.30' in env_example
     assert 'MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M=0.13' in env_example
 
 

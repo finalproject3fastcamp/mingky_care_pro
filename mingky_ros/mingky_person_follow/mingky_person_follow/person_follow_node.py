@@ -13,6 +13,7 @@ import threading
 import time
 
 from mingky_interfaces.msg import GuideState, QrObservation
+from nav_msgs.msg import Odometry
 from nav2_msgs.msg import SpeedLimit
 import rclpy
 from rclpy.node import Node
@@ -57,6 +58,7 @@ class PersonFollowNode(Node):
             'image_topic', '/rear_camera/image_raw/compressed')
         self.declare_parameter(
             'camera_info_topic', '/rear_camera/camera_info')
+        self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('frame_max_age_sec', 2.0)
         # YOLO 서버를 비우면 QR 거리 단독으로 안전하게 폴백한다.
         self.declare_parameter('infer_server_url', '')
@@ -70,6 +72,8 @@ class PersonFollowNode(Node):
         self.declare_parameter('distance_window_size', 5)
         self.declare_parameter('qr_stale_sec', 1.0)
         self.declare_parameter('tracking_grace_sec', 2.0)
+        self.declare_parameter('initial_acquire_grace_sec', 4.0)
+        self.declare_parameter('initial_acquire_max_distance_m', 0.30)
         self.declare_parameter('target_height_m', 0.13)
         self.declare_parameter('bbox_edge_margin_px', 5.0)
         self.declare_parameter('status_period_sec', 0.5)
@@ -82,6 +86,7 @@ class PersonFollowNode(Node):
         self.robot_id = str(get('robot_id').value)
         self.image_topic = str(get('image_topic').value)
         self.camera_info_topic = str(get('camera_info_topic').value)
+        self.odom_topic = str(get('odom_topic').value)
         self.frame_max_age_sec = max(
             0.1, float(get('frame_max_age_sec').value))
         self.infer_server_url = str(get('infer_server_url').value).strip()
@@ -101,6 +106,10 @@ class PersonFollowNode(Node):
         self.qr_stale_sec = max(0.1, float(get('qr_stale_sec').value))
         self.tracking_grace_sec = max(
             0.0, float(get('tracking_grace_sec').value))
+        self.initial_acquire_grace_sec = max(
+            0.0, float(get('initial_acquire_grace_sec').value))
+        self.initial_acquire_max_distance_m = max(
+            0.0, float(get('initial_acquire_max_distance_m').value))
         self.target_height_m = float(get('target_height_m').value)
         self.bbox_edge_margin_px = max(
             0.0, float(get('bbox_edge_margin_px').value))
@@ -148,6 +157,10 @@ class PersonFollowNode(Node):
         self._visual_anchor_height_px: float | None = None
         self._camera_focal_y_px: float | None = None
         self._last_reliable_distance_m: float | None = None
+        self._guidance_started_at: float | None = None
+        self._odom_xy: tuple[float, float] | None = None
+        self._acquire_traveled_m = 0.0
+        self._acquire_odom_seen = False
 
         state_qos = QoSProfile(
             depth=1,
@@ -167,6 +180,8 @@ class PersonFollowNode(Node):
         self.create_subscription(
             CameraInfo, self.camera_info_topic, self._on_camera_info,
             qos_profile_sensor_data)
+        self.create_subscription(
+            Odometry, self.odom_topic, self._on_odom, qos_profile_sensor_data)
         if self.infer_server_url:
             self.create_subscription(
                 CompressedImage,
@@ -210,8 +225,12 @@ class PersonFollowNode(Node):
         self._visual_anchor_distance_m = None
         self._visual_anchor_height_px = None
         self._last_reliable_distance_m = None
+        self._guidance_started_at = None
+        self._acquire_traveled_m = 0.0
+        self._acquire_odom_seen = False
 
     def _on_guide_state(self, msg: GuideState) -> None:
+        now = time.monotonic()
         active = (
             msg.session_state == GuideState.SESSION_GUIDING
             and msg.session_id > 0
@@ -224,9 +243,12 @@ class PersonFollowNode(Node):
             )
             if changed_session or (self._active and not active):
                 self._reset_tracking()
+            starting = active and (changed_session or not self._active)
             self._active = active
             self._session_id = int(msg.session_id) if active else 0
             self._patient_id = str(msg.patient_id) if active else ''
+            if starting:
+                self._guidance_started_at = now
 
     def _on_qr_observation(self, msg: QrObservation) -> None:
         now = time.monotonic()
@@ -261,6 +283,20 @@ class PersonFollowNode(Node):
             return
         with self._lock:
             self._camera_focal_y_px = focal_y
+
+    def _on_odom(self, msg: Odometry) -> None:
+        position = msg.pose.pose.position
+        xy = (float(position.x), float(position.y))
+        if not all(math.isfinite(value) for value in xy):
+            return
+        with self._lock:
+            previous = self._odom_xy
+            self._odom_xy = xy
+            if self._active and self._last_reliable_distance_m is None:
+                self._acquire_odom_seen = True
+                if previous is not None:
+                    self._acquire_traveled_m += math.hypot(
+                        xy[0] - previous[0], xy[1] - previous[1])
 
     def _median_qr_distance(self) -> float | None:
         if not self._qr_distances:
@@ -391,12 +427,33 @@ class PersonFollowNode(Node):
                      if stamp is not None),
                     default=None,
                 )
+                acquire_elapsed = (
+                    None if self._guidance_started_at is None
+                    else now - self._guidance_started_at
+                )
+                acquire_distance = (
+                    self._acquire_traveled_m
+                    if self._acquire_odom_seen else None
+                )
+                acquiring = (
+                    self._last_reliable_distance_m is None
+                    and acquire_elapsed is not None
+                    and acquire_elapsed <= self.initial_acquire_grace_sec
+                    and (
+                        acquire_distance is None
+                        or acquire_distance
+                        <= self.initial_acquire_max_distance_m)
+                )
                 grace_active = (
                     previous in (NORMAL, SLOW)
                     and last_seen is not None
                     and now - last_seen <= self.tracking_grace_sec
                 )
-                if grace_active:
+                if acquiring:
+                    distance = None
+                    mode = SLOW
+                    source = 'acquiring'
+                elif grace_active:
                     distance = self._last_reliable_distance_m
                     mode = previous
                     source = 'grace'

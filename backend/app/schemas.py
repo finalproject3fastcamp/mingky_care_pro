@@ -675,7 +675,8 @@ class QrObservationIn(BaseModel):
     follow_distance: float | None = Field(
         default=None, gt=0, le=10, allow_inf_nan=False)
     follow_source: Literal[
-        "none", "qr", "visual", "stale", "unknown",
+        "none", "qr", "visual", "acquiring", "grace", "stale",
+        "unknown",
     ] | None = None
     qr_visible: bool = False
     visual_visible: bool = False
@@ -698,7 +699,8 @@ class QrObservationOut(BaseModel):
     ] | None = None
     follow_distance: float | None = None
     follow_source: Literal[
-        "none", "qr", "visual", "stale", "unknown",
+        "none", "qr", "visual", "acquiring", "grace", "stale",
+        "unknown",
     ] | None = None
     qr_visible: bool = False
     visual_visible: bool = False

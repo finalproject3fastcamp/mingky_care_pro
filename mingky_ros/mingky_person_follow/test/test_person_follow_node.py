@@ -4,7 +4,8 @@ import json
 import time
 
 from mingky_interfaces.msg import GuideState, QrObservation
-from mingky_person_follow.distance_policy import INACTIVE, NORMAL, WAITING
+from nav_msgs.msg import Odometry
+from mingky_person_follow.distance_policy import INACTIVE, NORMAL, SLOW, WAITING
 from mingky_person_follow.person_follow_node import PersonFollowNode
 import pytest
 import rclpy
@@ -65,12 +66,54 @@ def test_other_patient_qr_is_not_used(node) -> None:
     instance, speeds, states = node
     instance._on_guide_state(_guide())
     instance._on_qr_observation(_qr(patient='patient-999'))
+    with instance._lock:
+        instance._guidance_started_at = (
+            time.monotonic() - instance.initial_acquire_grace_sec - 0.1)
 
     instance._control_tick()
 
     assert instance._mode == WAITING
     assert speeds[-1] == pytest.approx(0.1)
     assert states[-1]['distance'] is None
+
+
+def test_initial_acquisition_moves_slowly_before_first_detection(node) -> None:
+    instance, speeds, states = node
+    instance._on_guide_state(_guide())
+
+    instance._control_tick()
+
+    assert instance._mode == SLOW
+    assert speeds[-1] == pytest.approx(35.0)
+    assert states[-1]['source'] == 'acquiring'
+    assert states[-1]['distance'] is None
+
+
+def test_initial_acquisition_stops_after_time_or_distance_limit(node) -> None:
+    instance, speeds, _ = node
+    instance._on_guide_state(_guide())
+    with instance._lock:
+        instance._acquire_odom_seen = True
+        instance._acquire_traveled_m = 0.31
+
+    instance._control_tick()
+
+    assert instance._mode == WAITING
+    assert speeds[-1] == pytest.approx(0.1)
+
+
+def test_initial_acquisition_counts_traveled_odom_distance(node) -> None:
+    instance, _, _ = node
+    first = Odometry()
+    second = Odometry()
+    second.pose.pose.position.x = 0.20
+    instance._on_guide_state(_guide())
+
+    instance._on_odom(first)
+    instance._on_odom(second)
+
+    assert instance._acquire_odom_seen is True
+    assert instance._acquire_traveled_m == pytest.approx(0.20)
 
 
 def test_stale_qr_fails_safe_to_waiting(node) -> None:
