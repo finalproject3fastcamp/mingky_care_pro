@@ -12,6 +12,7 @@ export function Layout() {
         </div>
         <nav className="app-primary-nav" aria-label="주요 화면">
           <NavLink to="/medical">의료진</NavLink>
+          <NavLink to="/pharmacy">약국</NavLink>
           <div className="app-nav-menu">
             <NavLink to="/engineer" className="app-nav-menu__trigger">
               엔지니어

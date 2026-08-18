@@ -11,8 +11,8 @@ from . import (
     db, heartbeat, inventory_rules, notify, registry, servo_health,
     topic_watch)
 from .routers import (
-    events, fleet, maps, orders, patients, qr, robots, sessions, slo, teleop,
-    waypoints)
+    events, fleet, maps, orders, patients, pharmacy, qr, robots, sessions, slo,
+    teleop, waypoints)
 
 log = logging.getLogger("mingky")
 
@@ -205,6 +205,7 @@ app.include_router(fleet.router)
 app.include_router(maps.router)
 app.include_router(waypoints.router)
 app.include_router(teleop.router)
+app.include_router(pharmacy.router)
 
 
 @app.get("/health")

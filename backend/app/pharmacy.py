@@ -1,0 +1,618 @@
+"""약국 조제 화면 — 상태·워커·SSE 브로드캐스터.
+
+Flask 판(`omx/web/app.py`) 을 FastAPI 로 이관한 것. 이유:
+  - 관제 백엔드가 이미 FastAPI 라 서비스를 하나로 유지한다
+  - 프론트가 `/api/*` 프록시로 이 백엔드와만 통신한다 (vite.config.ts)
+
+## 데이터 원본은 관제 DB
+
+환자·병명·약품·처방 조합은 모두 관제 Postgres (`patients` · `conditions` ·
+`medications` · `condition_medications`) 에서 읽는다. `database/seeds/001_initial_data.sql`
+이 시드한 그 테이블을 그대로 쓴다. **QR 로 등록된 환자가 여기서도 그대로
+보이도록** 정본을 하나로 유지한다.
+
+시드에 없는 시연용 텍스트 (약 성분·복용법·담당의·특이사항) 는 모듈 상단
+폴백 dict 에 둔다. 실제 시스템으로 가면 마이그레이션으로 컬럼을 옮긴다.
+
+## 설계상 중요한 점 (원본 Flask 의 계약을 그대로 유지)
+
+  - **모델은 "지정된 알약 하나 집기" 만 안다.** 처방 조합을 순서대로 처리하는 것은
+    모델이 아니라 이 서버가 담당한다 — 색마다 pick 을 한 번씩 호출한다.
+  - **시뮬레이션이 기본, 실제 모드는 명시적 opt-in.** `PHARMACY_REAL=1` 환경 변수로
+    켠다. 실제 모드는 `pharmacy.py` (OMX 카메라·로봇팔) 모듈과 학습된 정책이
+    필요해서 데모 환경에서는 못 돈다.
+  - **조제는 한 번에 하나.** 로봇이 한 대뿐이라 동시에 두 조제를 못 돌린다.
+  - **트레이 카메라가 검은 화면을 주면 오류로 올린다** — 자동노출 잡히기 전
+    프레임을 0개로 판정하면 "알약이 하나도 없다" 가 된다.
+  - **화면이 보낸 조합이 언제나 우선.** 무작위로 다시 뽑기 후 서버 원본과
+    화면 상태가 다르므로, 조제 요청은 조합을 함께 실어 보내야 한다.
+
+## SSE 브로드캐스트
+
+Flask 판은 단일 `queue.Queue` 라 브라우저 두 개가 붙으면 이벤트를 나눠 가져갔다.
+여기서는 구독자별 `asyncio.Queue` 로 fan-out 해서 여러 화면이 같은 진행 상황을
+동시에 본다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import random
+import sys
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import AsyncIterator
+
+from .db import get_pool
+
+log = logging.getLogger("mingky.pharmacy")
+
+# ── 데이터/모듈 경로 ────────────────────────────────────────────────────
+# 학습된 정책 목록만 파일로 남는다 (pharmacy 전용 · 관제 DB 와 무관).
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DATA_DIR = _PROJECT_ROOT / "omx" / "web"
+_OMX_ROOT = _PROJECT_ROOT / "omx"
+
+# 실제 모드에서 lazy import 되는 pharmacy.count_pills 를 위해 sys.path 를
+# 한 번만 확장한다. 시뮬 모드에서는 import 자체가 안 일어난다.
+if str(_OMX_ROOT) not in sys.path:
+    sys.path.insert(0, str(_OMX_ROOT))
+
+_POL_RAW = json.loads((_DATA_DIR / "policies.json").read_text(encoding="utf-8"))["정책"]
+_POLICIES = {p["id"]: p for p in _POL_RAW}
+
+# ── DB → pharmacy 어휘 매핑 ─────────────────────────────────────────────
+# DB 는 medications.color 를 한글로("빨간색"), pharmacy CSS 는 영어 슬러그(red)를
+# 쓴다. 매핑에 없는 색은 조용히 건너뛴다 — 화면이 그릴 수 있는 것만 태운다.
+_COLOR_MAP = {"빨간색": "red", "노란색": "yellow", "초록색": "green"}
+_COLOR_SHORT = {"red": "빨강", "yellow": "노랑", "green": "초록"}
+
+# 시드에 없는 시연용 텍스트. 컬럼을 추가하는 대신 여기서 채운다.
+_INGREDIENT = {
+    "소염진통제": "이부프로펜 400mg",
+    "신경진정제": "가바펜틴 300mg",
+    "관절재활제": "글루코사민 500mg",
+}
+_DOSAGE = {
+    "퇴행성 무릎 관절염": "1일 3회, 식후 30분",
+    "단순 팔 골절": "1일 2회, 아침·저녁 식후",
+    "십자인대 파열": "1일 3회, 식후 즉시",
+}
+# 병명별 처방 설명. 없으면 조합의 약품명을 이어붙인 것을 기본으로 쓴다.
+_RX_DESC = {
+    "퇴행성 무릎 관절염": "소염진통제 + 관절재활제 장기 복용",
+    "단순 팔 골절": "골 회복을 위한 관절재활제 단독",
+    "십자인대 파열": "소염진통제·신경진정제·관절재활제 병용",
+}
+_DOCTOR = {
+    "p001": "정형외과 이준호",
+    "p002": "정형외과 이준호",
+    "p003": "재활의학과 최서연",
+}
+_NOTES = {
+    "p001": "장기 복용 — 위장 상태 주기 확인",
+    "p002": "없음",
+    "p003": "재활 병행",
+}
+
+# ── 환경 변수 ──────────────────────────────────────────────────────────
+# Flask 판은 CLI 플래그였다. FastAPI 는 단일 앱이라 CLI 를 쓸 수 없다 —
+# 환경 변수로 옮긴다. 기본은 항상 시뮬레이션 (실수로 실제 로봇을 움직이지 않게).
+REAL_MODE = os.environ.get("PHARMACY_REAL", "0") == "1"
+DEFAULT_POLICY = os.environ.get("POLICY", "xy")
+SHOW_WINDOW = os.environ.get("SHOW", "1") != "0"   # 카메라 창을 띄울지
+RECORD = os.environ.get("REC", "0") != "0"         # 정책이 본 화면을 mp4 로 남길지
+
+PICK_TIMEOUT = 150          # 색 하나에 주는 최대 시간 (초)
+REST = 5                    # 색별 정책에서 색 사이 카메라 회복 대기 (초)
+TRAY_FRAMES = 5             # 트레이를 몇 장 찍어 최빈값을 낼지
+
+# 빨강·노랑은 반경 기준으로 보정값을 잡아 왔다 (색별 정책에만 해당).
+EXTRA = {"red": "--radial-offset", "yellow": "--radial-offset", "green": ""}
+
+# ── UI 계약: run.sh / run_policy 출력 문자열 ──────────────────────────
+LOG_STEP_DONE = "담기 완료"
+LOG_NEXT_TARGET = "다음 목표"
+LOG_ALL_DONE = "처방 조제 완료"
+LOG_MISS = "놓쳤습니다"
+LOG_STALL = "제자리"
+
+# ── 상태 ──────────────────────────────────────────────────────────────
+_JOB: dict = {"id": None, "상태": "대기", "단계": [],
+              "환자": None, "처방": None, "정책": None, "중단요청": False}
+_JOB_LOCK = asyncio.Lock()
+_JOB_TASK: asyncio.Task | None = None
+_JOB_PROC: asyncio.subprocess.Process | None = None
+
+# 약품 캐시. DB 를 매 단계마다 조회하지 않기 위해 첫 로드 뒤 메모리에 두고,
+# `prescriptions()` (약국 화면 진입 시 호출) 이 갱신한다. 시연 세션 동안 약품
+# 테이블이 바뀔 일은 없으므로 TTL 을 두지 않는다.
+_MEDS_CACHE: dict[str, dict] = {}
+
+# 진행 상황 fan-out.
+_SUBSCRIBERS: set[asyncio.Queue] = set()
+
+
+def _rx_code(condition_id: int) -> str:
+    return f"CN-{condition_id:02d}"
+
+
+# ── DB 로드 ────────────────────────────────────────────────────────────
+async def _load_meds() -> dict[str, dict]:
+    """약품 dict — `{color_slug: {이름, 성분, 색이름}}`."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT medication_name, color FROM medications ORDER BY medication_id")
+    out: dict[str, dict] = {}
+    for r in rows:
+        slug = _COLOR_MAP.get(r["color"])
+        if slug is None:
+            log.debug("알 수 없는 약품 색 (매핑 없음): %s", r["color"])
+            continue
+        out[slug] = {
+            "이름": r["medication_name"],
+            "성분": _INGREDIENT.get(r["medication_name"], ""),
+            "색이름": _COLOR_SHORT[slug],
+        }
+    return out
+
+
+async def _load_rx() -> list[dict]:
+    """처방 목록 — 병명별 색 조합.
+
+    한 방에 조인해서 병명 하나당 한 행. 조합 순서는 medication_id 오름차순 —
+    시드의 논리적 순서를 그대로 반영한다.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT c.condition_id, c.condition_name,
+                   COALESCE(
+                     ARRAY_AGG(m.color ORDER BY m.medication_id)
+                     FILTER (WHERE m.medication_id IS NOT NULL),
+                     ARRAY[]::text[]
+                   ) AS colors
+            FROM conditions c
+            LEFT JOIN condition_medications cm ON cm.condition_id = c.condition_id
+            LEFT JOIN medications m ON m.medication_id = cm.medication_id
+            GROUP BY c.condition_id, c.condition_name
+            ORDER BY c.condition_id
+        """)
+    result: list[dict] = []
+    for r in rows:
+        combo = [_COLOR_MAP[c] for c in r["colors"] if c in _COLOR_MAP]
+        result.append({
+            "코드": _rx_code(r["condition_id"]),
+            "병명": r["condition_name"],
+            "조합": combo,
+            "설명": _RX_DESC.get(r["condition_name"], ""),
+            "복용": _DOSAGE.get(r["condition_name"], "복용법 미정"),
+        })
+    return result
+
+
+async def _load_patients(q: str) -> list[dict]:
+    """환자 목록 + 각자의 병명·처방. `q` 가 비면 전체."""
+    pool = get_pool()
+    q_lower = q.strip().lower()
+    like = f"%{q_lower}%"
+    base = """
+        SELECT p.patient_id, p.name, p.birth_date, p.gender,
+               c.condition_id, c.condition_name,
+               COALESCE(
+                 ARRAY_AGG(m.color ORDER BY m.medication_id)
+                 FILTER (WHERE m.medication_id IS NOT NULL),
+                 ARRAY[]::text[]
+               ) AS colors
+        FROM patients p
+        JOIN conditions c ON c.condition_id = p.condition_id
+        LEFT JOIN condition_medications cm ON cm.condition_id = c.condition_id
+        LEFT JOIN medications m ON m.medication_id = cm.medication_id
+        {where}
+        GROUP BY p.patient_id, p.name, p.birth_date, p.gender,
+                 c.condition_id, c.condition_name
+        ORDER BY p.patient_id
+    """
+    async with pool.acquire() as conn:
+        if q_lower:
+            rows = await conn.fetch(base.format(where="""
+                WHERE LOWER(p.patient_id) LIKE $1
+                   OR LOWER(p.name) LIKE $1
+                   OR p.birth_date::text LIKE $1
+                   OR LOWER(c.condition_name) LIKE $1
+            """), like)
+        else:
+            rows = await conn.fetch(base.format(where=""))
+
+    result: list[dict] = []
+    for r in rows:
+        combo = [_COLOR_MAP[c] for c in r["colors"] if c in _COLOR_MAP]
+        pid = r["patient_id"]
+        code = _rx_code(r["condition_id"])
+        result.append({
+            "id": pid,
+            "이름": r["name"],
+            "생년": r["birth_date"].isoformat(),
+            # 시드는 '남자'/'여자' 로 저장돼 있다. 화면 폭을 위해 첫 글자만.
+            "성별": (r["gender"] or "")[:1],
+            "병명": r["condition_name"],
+            "처방코드": code,
+            "담당의": _DOCTOR.get(pid, ""),
+            "특이사항": _NOTES.get(pid, ""),
+            "처방": {
+                "코드": code,
+                "병명": r["condition_name"],
+                "조합": combo,
+                "설명": _RX_DESC.get(r["condition_name"], ""),
+                "복용": _DOSAGE.get(r["condition_name"], "복용법 미정"),
+            },
+        })
+    return result
+
+
+# ── 공개 조회 API ──────────────────────────────────────────────────────
+async def prescriptions() -> dict:
+    """약품 + 처방 목록. 원본 (랜덤 안 뽑은 상태)."""
+    meds = await _load_meds()
+    _MEDS_CACHE.clear()
+    _MEDS_CACHE.update(meds)   # 워커에서 참조하려고 캐시에 남긴다
+    rx = await _load_rx()
+    return {"약품": meds, "처방": rx}
+
+
+def policies() -> dict:
+    return {"정책": _POL_RAW, "기본": DEFAULT_POLICY}
+
+
+async def patients(q: str = "") -> dict:
+    """이름·생년월일·환자ID·병명으로 찾는다. 빈 검색어면 전체.
+
+    병명에 맞는 처방을 함께 붙여 준다 — 화면에서 한 번 더 찾을 필요가 없게.
+    """
+    return {"환자": await _load_patients(q)}
+
+
+async def _find_prescription(코드: str) -> dict | None:
+    for r in await _load_rx():
+        if r["코드"] == 코드:
+            return r
+    return None
+
+
+async def _get_meds() -> dict[str, dict]:
+    """워커에서 부르는 약품 dict. 캐시가 비었으면 채운다 (첫 진입이 아직 안 온 경우)."""
+    if not _MEDS_CACHE:
+        _MEDS_CACHE.update(await _load_meds())
+    return _MEDS_CACHE
+
+
+# ── 트레이 상태 ────────────────────────────────────────────────────────
+def read_tray() -> dict:
+    """트레이에 각 색이 몇 개 있는지. 실제 모드에서만 카메라를 연다."""
+    if not REAL_MODE:
+        return {"모드": "시뮬레이션", "개수": {"red": 1, "yellow": 1, "green": 1}}
+    try:
+        from pharmacy import count_pills  # noqa: PLC0415
+
+        n = count_pills(TRAY_FRAMES)
+        if not n:
+            return {"모드": "실제",
+                    "오류": "top 카메라가 검은 화면만 줍니다 — USB 를 다시 꽂아 주세요"}
+        return {"모드": "실제", "개수": n}
+    except Exception as e:  # noqa: BLE001
+        return {"모드": "실제", "오류": f"{type(e).__name__}: {e}"}
+
+
+async def random_prescriptions() -> tuple[dict, int]:
+    """모든 처방의 색 조합을 새로 뽑는다. 응답과 HTTP 상태를 함께 돌려준다."""
+    tray = read_tray()
+    if tray.get("오류"):
+        return {"오류": tray["오류"]}, 503
+    있는색 = [c for c, n in tray["개수"].items() if n > 0]
+    if not 있는색:
+        return {"오류": "트레이에 알약이 없습니다 — 알약을 놓고 다시 확인하세요"}, 400
+
+    meds = await _get_meds()
+    rx_list = await _load_rx()
+
+    최대 = min(len(있는색), 3)
+    후보 = list(range(1, 최대 + 1))
+    가중 = [{1: 11.5, 2: 24.0, 3: 64.6}[k] for k in 후보]
+
+    처방 = []
+    for r in rx_list:
+        개수 = random.choices(후보, weights=가중, k=1)[0]
+        조합 = random.sample(있는색, 개수)   # sample 은 조합과 순서를 함께 섞는다
+        처방.append({**r, "조합": 조합,
+                     "설명": " → ".join(meds[c]["색이름"] for c in 조합 if c in meds)})
+    return {"처방": 처방, "트레이": tray["개수"]}, 200
+
+
+# ── SSE 브로드캐스트 ───────────────────────────────────────────────────
+def _push(event: dict) -> None:
+    data = json.dumps(event, ensure_ascii=False)
+    for q in list(_SUBSCRIBERS):
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            log.debug("SSE 구독자 큐 가득 — 이벤트 누락")
+
+
+async def subscribe() -> AsyncIterator[str]:
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    _SUBSCRIBERS.add(q)
+    try:
+        yield "retry: 3000\n\n"
+        while True:
+            try:
+                data = await asyncio.wait_for(q.get(), timeout=20)
+                yield f"data: {data}\n\n"
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+    finally:
+        _SUBSCRIBERS.discard(q)
+
+
+# ── 조제 실행 ──────────────────────────────────────────────────────────
+async def _단계시작(i: int, color: str) -> None:
+    meds = await _get_meds()
+    약 = meds.get(color, {"이름": color, "색이름": _COLOR_SHORT.get(color, color)})
+    async with _JOB_LOCK:
+        _JOB["단계"].append(
+            {"순번": i, "색": color, "약": 약["이름"], "상태": "진행"})
+    _push({"종류": "단계시작", "순번": i, "색": color,
+           "약": 약["이름"], "색이름": 약["색이름"]})
+
+
+async def _단계끝(i: int, color: str, ok: bool, 메모: str) -> None:
+    async with _JOB_LOCK:
+        for step in _JOB["단계"]:
+            if step["순번"] == i:
+                step.update({"상태": "완료" if ok else "실패", "메모": 메모})
+                break
+    _push({"종류": "단계끝", "순번": i, "색": color, "성공": ok, "메모": 메모})
+
+
+async def _중단(이유: str) -> None:
+    async with _JOB_LOCK:
+        _JOB["상태"] = "중단"
+    _push({"종류": "중단", "이유": 이유})
+
+
+async def _조제완료(job_id: str) -> None:
+    async with _JOB_LOCK:
+        _JOB["상태"] = "조제완료"
+    _push({"종류": "조제완료", "job": job_id,
+           "시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+
+async def _dispense_worker(job_id: str, 처방: dict, policy_id: str) -> None:
+    조합 = 처방["조합"]
+    _push({"종류": "시작", "job": job_id, "총단계": len(조합)})
+
+    if not REAL_MODE:
+        for i, color in enumerate(조합, 1):
+            await _단계시작(i, color)
+            for _ in range(16):
+                if _JOB.get("중단요청"):
+                    await _중단("사용자가 중단했습니다")
+                    return
+                await asyncio.sleep(0.25)
+            await _단계끝(i, color, True, "시뮬레이션")
+        await _조제완료(job_id)
+        return
+
+    ok, 메모 = await _run_sequence(조합, policy_id)
+    if not ok:
+        await _중단(메모)
+        return
+    await _조제완료(job_id)
+
+
+async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
+    global _JOB_PROC
+
+    pol = _POLICIES.get(policy_id, _POLICIES[DEFAULT_POLICY])
+    단일 = pol["단일정책"]
+
+    if not 단일:
+        for i, color in enumerate(조합, 1):
+            if _JOB.get("중단요청"):
+                return False, "사용자가 중단했습니다"
+            await _단계시작(i, color)
+            ok, 메모 = await _run_one(pol, color, last=(i == len(조합)))
+            await _단계끝(i, color, ok, 메모)
+            if not ok:
+                return False, 메모
+            await asyncio.sleep(REST)
+        return True, "완료"
+
+    cmd = ["timeout", "-s", "INT", str(PICK_TIMEOUT * len(조합)),
+           "bash", str(_OMX_ROOT / "run.sh"), pol["ckpt"],
+           "--repo-id", pol["repo"], "--relax-on-exit",
+           "--no-freeze-on-grasp", "--offset-step", "1",
+           "--sequence", ",".join(조합), "--trace",
+           "--dump-grasp", str(_OMX_ROOT / "grasp_shots" / policy_id)]
+    if RECORD:
+        cmd += ["--record-video",
+                str(_OMX_ROOT / "report" / f"web_{policy_id}_{datetime.now():%H%M%S}.mp4")]
+    if pol.get("앙상블", True):
+        cmd.append("--temporal-ensemble")
+    if SHOW_WINDOW:
+        cmd += ["--show", "--local-keys"]
+
+    env = {**os.environ, "RUN": pol["run"], "TASK": f"pick {조합[0]} pill",
+           "HF_HUB_OFFLINE": "1"}
+
+    i = 1
+    await _단계시작(i, 조합[0])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=str(_OMX_ROOT), env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        _JOB_PROC = proc
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            if _JOB.get("중단요청"):
+                proc.send_signal(2)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                return False, "사용자가 중단했습니다"
+            if LOG_STEP_DONE in line:
+                await _단계끝(i, 조합[i - 1], True, f"{pol['이름']}")
+            elif LOG_NEXT_TARGET in line and i < len(조합):
+                i += 1
+                await _단계시작(i, 조합[i - 1])
+            elif LOG_MISS in line:
+                _push({"종류": "알림",
+                       "글": "놓쳤습니다 — 다시 시도합니다", "급": "warn"})
+            elif LOG_STALL in line:
+                _push({"종류": "알림",
+                       "글": "제자리에 멈춰 홈으로 되돌립니다", "급": "warn"})
+            elif LOG_ALL_DONE in line:
+                pass
+        await proc.wait()
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        _JOB_PROC = None
+
+    async with _JOB_LOCK:
+        done = sum(1 for s in _JOB["단계"] if s["상태"] == "완료")
+    if done < len(조합):
+        await _단계끝(i, 조합[i - 1], False, "제한 시간 안에 담지 못했습니다")
+        return False, f"{done}/{len(조합)} 만 담았습니다"
+    return True, "완료"
+
+
+async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]:
+    cmd = ["timeout", "-s", "INT", str(PICK_TIMEOUT),
+           "bash", str(_OMX_ROOT / "run.sh"), pol["ckpt"][color],
+           "--repo-id", pol["repo"],
+           "--no-freeze-on-grasp", "--offset-step", "1", "--trace"]
+    if last:
+        cmd.append("--relax-on-exit")
+    if pol.get("앙상블", True):
+        cmd.append("--temporal-ensemble")
+    if EXTRA[color]:
+        cmd.append(EXTRA[color])
+    if SHOW_WINDOW:
+        cmd += ["--show", "--local-keys"]
+    env = {**os.environ, "RUN": pol["run"][color], "TASK": f"pick {color} pill",
+           "HF_HUB_OFFLINE": "1"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=str(_OMX_ROOT), env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=PICK_TIMEOUT + 30)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return False, f"제한 시간({PICK_TIMEOUT}초)을 넘겼습니다"
+        ok = LOG_STEP_DONE in stdout.decode(errors="replace")
+        return (ok, pol["이름"] if ok else "제한 시간을 넘겼습니다")
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
+
+
+async def _pack_worker(job_id: str) -> None:
+    _push({"종류": "포장시작", "job": job_id})
+    async with _JOB_LOCK:
+        _JOB["상태"] = "포장중"
+    for 단계 in ("봉투 준비", "약 투입", "라벨 인쇄", "밀봉"):
+        _push({"종류": "포장단계", "이름": 단계})
+        await asyncio.sleep(1.2)
+    async with _JOB_LOCK:
+        _JOB["상태"] = "완료"
+    _push({"종류": "완료", "job": job_id,
+           "시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+
+# ── 조작 API ──────────────────────────────────────────────────────────
+async def start_dispense(body: dict) -> tuple[dict, int]:
+    global _JOB_TASK
+
+    환자 = body.get("환자") or {}
+    처방 = await _find_prescription(body.get("처방코드") or "")
+    meds = await _get_meds()
+    # **화면이 보낸 조합이 언제나 우선이다.** 무작위로 다시 뽑기 후 서버가 다시
+    # DB 조회를 하면 원본이 나오므로, 화면이 보낸 조합만 통과시킨다.
+    조합 = [c for c in (body.get("조합") or []) if c in meds]
+    if 조합:
+        바탕 = 처방 or {}
+        처방 = {**바탕,
+                "코드": body.get("처방코드") or "RND",
+                "병명": body.get("병명") or 바탕.get("병명") or "임의 조합 (시연용)",
+                "조합": 조합,
+                "설명": " → ".join(meds[c]["색이름"] for c in 조합),
+                "복용": 바탕.get("복용", "시연용 — 실제 복용법이 아닙니다")}
+    policy_id = body.get("정책") or DEFAULT_POLICY
+
+    if not 환자.get("이름"):
+        return {"오류": "환자 이름을 입력하세요"}, 400
+    if 처방 is None:
+        return {"오류": "처방을 선택하세요"}, 400
+    if policy_id not in _POLICIES:
+        return {"오류": f"모르는 정책입니다: {policy_id}"}, 400
+
+    async with _JOB_LOCK:
+        if _JOB["상태"] == "조제중":
+            return {"오류": "이미 조제가 진행 중입니다"}, 409
+        job_id = uuid.uuid4().hex[:8]
+        _JOB.update({"id": job_id, "상태": "조제중", "단계": [],
+                     "환자": 환자, "처방": 처방, "정책": policy_id,
+                     "중단요청": False})
+
+    if REAL_MODE:
+        tray = read_tray()
+        부족 = [c for c in 처방["조합"] if tray.get("개수", {}).get(c, 0) < 1]
+        if 부족:
+            async with _JOB_LOCK:
+                _JOB["상태"] = "대기"
+            이름 = ", ".join(meds[c]["색이름"] for c in 부족 if c in meds)
+            return {"오류": f"트레이에 {이름} 알약이 없습니다"}, 400
+
+    _JOB_TASK = asyncio.create_task(
+        _dispense_worker(job_id, 처방, policy_id))
+    return {"job": job_id, "처방": 처방,
+            "정책": _POLICIES[policy_id]["이름"]}, 200
+
+
+async def stop_dispense() -> dict:
+    async with _JOB_LOCK:
+        _JOB["중단요청"] = True
+    _push({"종류": "중단요청"})
+    return {"결과": "중단 요청을 보냈습니다"}
+
+
+async def start_pack() -> tuple[dict, int]:
+    async with _JOB_LOCK:
+        if _JOB["상태"] not in ("조제완료", "완료"):
+            return {"오류": "조제가 끝난 뒤에 포장할 수 있습니다"}, 409
+        job_id = _JOB["id"]
+    asyncio.create_task(_pack_worker(job_id))
+    return {"결과": "포장을 시작했습니다"}, 200
+
+
+async def reset_state() -> tuple[dict, int]:
+    async with _JOB_LOCK:
+        if _JOB["상태"] == "조제중":
+            return {"오류": "조제 중입니다 — 먼저 중단하세요"}, 409
+        _JOB.update({"id": None, "상태": "대기", "단계": [],
+                     "환자": None, "처방": None, "정책": None, "중단요청": False})
+    _push({"종류": "리셋"})
+    return {"결과": "초기화"}, 200
+
+
+async def snapshot() -> dict:
+    async with _JOB_LOCK:
+        return dict(_JOB)

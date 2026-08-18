@@ -163,14 +163,18 @@
 
 .app-main {
   flex: 1;
-  padding: 32px;
+  /* 세 화면 (의료진 · 약국 · 엔지니어) 공통 여백. 상단 24 · 좌우 24 · 하단 80.
+     상단을 0 으로 두면 첫 카드가 헤더 바닥선에 붙어 눌려 보인다. */
+  padding: 24px 24px 80px;
 }
 
 .dashboard {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 1080px;
+  /* 약국·엔지니어와 동일한 최대 폭. 셋 다 1240 으로 맞춰 화면을 오갈 때
+     좌우 여백이 튀지 않는다. */
+  max-width: 1240px;
   margin: 0 auto;
 }
 
@@ -185,7 +189,7 @@
     grid-template-columns: 1fr;
   }
   .app-main {
-    padding: 20px;
+    padding: 16px 16px 60px;
   }
 }
 
@@ -1598,7 +1602,8 @@
 
 /* Engineer workspace */
 .engineer-shell {
-  width: min(1760px, 100%);
+  /* .dashboard / .pharm-container 와 동일한 최대 폭. */
+  width: min(1240px, 100%);
   margin: 0 auto;
 }
 .engineer-content { min-width: 0; }

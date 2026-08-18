@@ -1,0 +1,705 @@
+/* 약국 조제 화면 — 색·타이포는 index.css / App.css 의 토큰을 재사용한다.
+   pharmacy 만의 고유 정체성 (녹십자 · 처방전 종이) 은 접었고, medical 대시보드와
+   같은 blue accent · Pretendard · shadow-sm 축으로 통일한다.
+
+   pharm-* 접두사는 유지한다 — 다른 대시보드의 `.card` / `.btn` 등과 이름이
+   겹치는 것을 피해, 이 화면을 리팩터할 때 다른 곳에 여파가 가지 않도록. */
+
+.pharm {
+  /* 알약 색은 실제 트레이의 물리적 색이라 accent 와 무관 — 유지한다. */
+  --pill-red: #d8443f;
+  --pill-yellow: #d9a52c;
+  --pill-green: #3aa564;
+
+  /* padding·min-height 는 상위 .app-main 이 관리한다. 여기에 다시 적으면
+     의료진·엔지니어 화면과 여백이 어긋난다. */
+  background: var(--bg);
+  color: var(--text);
+  font: 15.5px/1.55 var(--font-sans);
+}
+.pharm * {
+  box-sizing: border-box;
+}
+.pharm button {
+  font: inherit;
+  cursor: pointer;
+}
+.pharm input,
+.pharm select {
+  font: inherit;
+}
+
+.pharm-container {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.pharm-mode {
+  display: inline-block;
+  margin-bottom: 18px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.pharm-mode.real {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+
+.pharm-grid {
+  display: grid;
+  gap: 16px;
+}
+.pharm-g2 {
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 900px) {
+  .pharm-g2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pharm-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* 환자·트레이 카드는 환자 선택 상태와 관계없이 같은 높이를 유지한다.
+   이전 min-height 는 카드가 300 "이상" 으로 자라는 것을 허용해 여전히 리스트가
+   길면 화면이 튀었다. height 로 고정한다. 검색 리스트는 flex 로 남는 공간만
+   채우고 넘치면 내부 스크롤 (base .pharm-hits 의 overflow-y: auto). */
+.pharm-grid.pharm-g2 > .pharm-card {
+  height: 308px;
+  display: flex;
+  flex-direction: column;
+}
+.pharm-grid.pharm-g2 > .pharm-card .pharm-picker,
+.pharm-grid.pharm-g2 > .pharm-card .pharm-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.pharm-grid.pharm-g2 > .pharm-card .pharm-hits {
+  flex: 1;
+  min-height: 0;
+  max-height: none; /* 부모 flex 가 상한 역할 */
+}
+.pharm-card h2 {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+  margin: 0 0 14px;
+}
+
+/* 카드 헤더 — h2 옆에 액션 버튼(예: 처방 무작위 뽑기)을 오른쪽 정렬로 놓는다. */
+.pharm-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.pharm-card__head h2 {
+  margin: 0;
+}
+
+/* 정의형 목록 */
+.pharm dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  row-gap: 6px;
+  align-items: center;
+}
+.pharm dt {
+  color: var(--text-subtle);
+  font-size: 0.85rem;
+}
+.pharm dd {
+  margin: 0;
+  font-weight: 500;
+}
+.pharm dd.mono {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  letter-spacing: -0.01em;
+}
+.pharm-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+
+/* 환자 검색 */
+.pharm-search {
+  position: relative;
+}
+.pharm-search input {
+  width: 100%;
+  padding: 10px 12px 10px 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface)
+    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cpath d='M10 10l3 3'/%3E%3C/svg%3E")
+    no-repeat 12px center;
+  color: var(--text);
+}
+.pharm-search input:focus {
+  outline: 2px solid var(--accent-bg);
+  border-color: var(--accent);
+}
+.pharm-hint {
+  color: var(--text-subtle);
+  font-size: 0.82rem;
+  margin: 10px 2px 12px;
+}
+
+/* 환자 검색 결과 — 흐름 안에 놓이는 인라인 리스트.
+   이전 판은 `position: absolute` 팝오버라 아래 카드를 덮어 처방 선택이 안 보였다.
+   이제는 카드 안에서 max-height 스크롤 되므로 다른 섹션을 가리지 않는다. */
+.pharm-hits {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.pharm-hit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+.pharm-hit:last-child {
+  border-bottom: 0;
+}
+.pharm-hit:hover {
+  background: var(--surface-2);
+}
+.pharm-hit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.pharm-hit b {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.pharm-hit .m {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+}
+.pharm-hit .dxc {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  white-space: nowrap;
+}
+
+.pharm-ptop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.pharm-ptop .pharm-name {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+.pharm-info dl {
+  margin-top: 10px;
+}
+.pharm-dx {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  flex-wrap: wrap;
+}
+.pharm-tag {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  border: 1px solid var(--accent);
+}
+
+@keyframes pharm-flash {
+  0% {
+    background: var(--accent-bg);
+  }
+  100% {
+    background: transparent;
+  }
+}
+.pharm-flash {
+  animation: pharm-flash 0.8s ease-out;
+}
+
+/* 처방 — 트레이와 같은 카드 그리드. 알약 도트를 위에 두고 병명·설명을 아래에
+   깔아, 좌우로 나열된 트레이 슬롯과 시각적 축이 맞도록 한다. */
+.pharm-rx {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.pharm-rxit {
+  position: relative; /* 좌상단 라디오를 절대 위치로 얹기 위한 기준 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: center;
+  width: 100%;
+  color: var(--text);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.pharm-rxit > .pharm-radio {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+}
+.pharm-rxit:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.pharm-rxit.on {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.pharm-rxit-body {
+  min-height: 42px;
+} /* 두 줄 텍스트 자리를 확보해 카드 높이가 균일 */
+.pharm-rxit b {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+/* 처방 코드 — 병명 옆 괄호. 병명 자체보다 톤 다운해 이름이 먼저 읽히게. */
+.pharm-rxit b .code {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.pharm-rxit small {
+  display: block;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.pharm-pills {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+.pharm-pill {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.pharm-pill.red {
+  background: var(--pill-red);
+}
+.pharm-pill.yellow {
+  background: var(--pill-yellow);
+}
+.pharm-pill.green {
+  background: var(--pill-green);
+}
+
+/* 정책 */
+.pharm-pol {
+  display: grid;
+  gap: 8px;
+}
+.pharm-polit {
+  display: flex;
+  align-items: center; /* 라디오·본문·배지를 세로 가운데 정렬 */
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: left;
+  width: 100%;
+  color: var(--text);
+}
+.pharm-polit:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.pharm-polit.on {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* 라디오 표시 — 실제 input 이 아니라 순수 시각용. 카드 전체가 클릭 대상이다.
+   기본은 빈 원, .on 일 때 안쪽이 accent 로 채워진다. */
+.pharm-radio {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  position: relative;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.pharm-radio.on {
+  border-color: var(--accent);
+}
+.pharm-radio.on::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.pharm-polit .t {
+  font-weight: 600;
+}
+.pharm-polit .s {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+.pharm-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 4px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.pharm-badge.rec {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.pharm-badge.exp {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.pharm-polnote {
+  margin-top: 13px;
+  padding: 13px 15px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+/* 트레이 */
+.pharm-tray {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.pharm-tc {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  background: var(--surface);
+}
+/* 알약(캡슐) 모양 — 좌 절반은 약 색, 우 절반은 흰색.
+   실제 캡슐약처럼 보이도록 원형이 아니라 rectangle + 완전 라운드로 잡는다.
+   배경 그라디언트는 인라인 style 로 색이 주입된다. */
+.pharm-tc .dot {
+  width: 18px;
+  height: 36px;
+  border-radius: 999px;
+  margin: 0 auto 6px;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.pharm-tc .n {
+  font-size: 1.3rem;
+  font-weight: 700;
+  line-height: 1;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+}
+.pharm-tc .n .unit {
+  margin-left: 3px;
+  font-size: 1.3rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+}
+.pharm-tc .l {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+.pharm-tc.zero {
+  opacity: 0.4;
+}
+.pharm-tc.zero .n {
+  color: var(--danger);
+}
+
+/* 진행 단계 */
+.pharm-steps {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 4px;
+}
+.pharm-st {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  min-width: 0;
+}
+.pharm-st .bar {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+  z-index: 0;
+}
+.pharm-st:last-child .bar {
+  display: none;
+}
+.pharm-st .bar.done {
+  background: var(--accent);
+}
+.pharm-st .c {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--text-muted);
+  z-index: 1;
+  font-family: var(--font-mono);
+}
+.pharm-st.done .c {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+.pharm-st.now .c {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-bg);
+  animation: pharm-pulse 1.5s ease-in-out infinite;
+}
+.pharm-st.fail .c {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--surface);
+}
+@keyframes pharm-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.32);
+  }
+  50% {
+    box-shadow: 0 0 0 9px rgba(59, 130, 246, 0);
+  }
+}
+.pharm-st .lb {
+  margin-top: 10px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: center;
+}
+.pharm-st.now .lb,
+.pharm-st.done .lb {
+  color: var(--text);
+}
+.pharm-st.now .lb {
+  color: var(--accent-strong);
+}
+
+/* 알림 */
+.pharm-logs {
+  display: grid;
+  gap: 6px;
+  max-height: 290px;
+  overflow-y: auto;
+}
+.pharm-log {
+  display: flex;
+  gap: 12px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+  font-size: 0.88rem;
+}
+.pharm-log.ok {
+  background: var(--success-bg);
+  border-color: var(--success);
+}
+.pharm-log.warn {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.pharm-log.bad {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.pharm-log .t {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.pharm-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px;
+  font-size: 0.88rem;
+}
+
+/* 버튼 — 기본 상태에도 배경색이 있어 카드(흰) 위에서 구분이 된다.
+   accent(파랑) / success(초록) 변형은 액션의 종류를 색으로 드러낸다. */
+.pharm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.pharm-actions--center {
+  justify-content: center;
+}
+/* 세로 스택 — 상태 문구를 위에 두고 버튼을 아래에 (트레이 카드의 "다시 확인" 자리). */
+.pharm-actions--stack {
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.pharm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.86rem;
+  font-weight: 500;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.pharm-btn svg {
+  flex-shrink: 0;
+}
+.pharm-btn:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+.pharm-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pharm-btn.pri {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+.pharm-btn.pri:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--surface);
+}
+.pharm-btn.ok {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+.pharm-btn.ok:hover:not(:disabled) {
+  background: var(--success);
+  color: var(--surface);
+}
+.pharm-btn.sm {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+}
+
+.pharm-state {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.pharm-state.run {
+  background: var(--accent-bg);
+  color: var(--accent-strong);
+}
+.pharm-state.done {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.pharm-state.bad {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.pharm-state .d {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  margin-right: 7px;
+  vertical-align: 1px;
+}
