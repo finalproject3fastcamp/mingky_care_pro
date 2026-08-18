@@ -1,8 +1,46 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { animate, createScope, stagger } from 'animejs'
+import { useEffect, useRef } from 'react'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { ActorField } from './ActorField'
 
 export function Layout() {
+  const location = useLocation()
+  const routeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!routeRef.current) return
+    const page = routeRef.current.firstElementChild
+    if (!page) return
+    const sections = page.querySelectorAll(
+      ':scope > :is(header, section, .card, .waypoint-workspace)',
+    )
+    const scope = createScope({
+      root: routeRef,
+      mediaQueries: {
+        reduceMotion: '(prefers-reduced-motion: reduce)',
+      },
+    }).add((self) => {
+      if (self?.matches.reduceMotion) return
+      animate(page, {
+        opacity: { from: 0 },
+        y: { from: 10 },
+        duration: 420,
+        ease: 'out(4)',
+      })
+      if (sections.length > 0) {
+        animate(sections, {
+          opacity: { from: 0 },
+          y: { from: 12 },
+          delay: stagger(45, { start: 60 }),
+          duration: 460,
+          ease: 'out(4)',
+        })
+      }
+    })
+    return () => scope.revert()
+  }, [location.pathname])
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -44,7 +82,9 @@ export function Layout() {
         </nav>
       </header>
       <main className="app-main">
-        <Outlet />
+        <div className="route-stage" ref={routeRef} key={location.pathname}>
+          <Outlet />
+        </div>
       </main>
     </div>
   )

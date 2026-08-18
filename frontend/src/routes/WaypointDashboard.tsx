@@ -277,64 +277,80 @@ export function WaypointDashboard() {
       {notice && <div className="waypoint-notice" role="status">{notice}</div>}
 
       <div className="waypoint-workspace">
-        <section className="waypoint-control-column">
-          {selectedRobotId && (
-            <RobotModeControl
-              robotId={selectedRobotId}
-              mode={mode}
-              appliedMode={teleop.appliedMode}
-              modeStatusRevision={teleop.modeStatusRevision}
-              robotConnected={teleop.robotConnected}
-            />
-          )}
-          <section className="card waypoint-localize-control">
-            <div className="card-title">로봇 위치 다시 찾기</div>
-            <strong className={selectedRobot?.localization_active ? 'waypoint-localize-running' : ''}>
-              {selectedRobot?.localization_active
-                ? '위치를 찾는 중입니다'
-                : '지도와 실제 위치가 다를 때 실행하세요'}
-            </strong>
-            <p>로봇이 주변을 확인하며 제자리에서 돌거나 앞뒤로 잠시 움직일 수 있습니다.</p>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || !localizationEnabled}
-              onClick={findRobotLocation}
-            >
-              위치 다시 찾기
-            </button>
-            {activeSession && (
-              <p className="waypoint-localize-disabled">환자 안내 중에는 위치를 다시 찾을 수 없습니다.</p>
-            )}
-          </section>
-          <TeleopPad
-            drive={drive}
-            enabled={teleopEnabled}
-            disabledReason={activeSession
-              ? '환자 안내 중에는 수동 조작할 수 없습니다.'
-              : !teleop.robotConnected
-                ? '로봇이 관제에 연결되어 있지 않습니다.'
-                : teleop.appliedMode === null
-                  ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
-                : mode !== teleop.appliedMode
-                  ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
-                : teleop.appliedMode === 'estop'
-                  ? '비상정지가 걸려 있습니다.'
-                  : '수동 조작 모드로 전환하세요.'}
-              />
+        <section className="waypoint-map-panel">
+          <header className="waypoint-map-panel__header">
+            <div>
+              <span className="waypoint-page-header__eyebrow">LIVE MAP</span>
+              <strong>{selectedRobot?.display_name ?? '작업 로봇을 선택하세요'}</strong>
+            </div>
+            <span className={`control-deck__connection${teleop.robotConnected ? ' is-online' : ' is-offline'}`}>
+              <i aria-hidden="true" />
+              {teleop.robotConnected ? '실시간 연결' : '연결 끊김'}
+            </span>
+          </header>
+          <LazyHospitalMap3D
+            pose={teleop.pose}
+            live={teleop.robotConnected}
+            scan={teleop.scan}
+            particles={teleop.particles}
+            plan={teleop.plan}
+            waypoints={markers}
+            onSelectWaypoint={setSelectedName}
+          />
         </section>
 
-        <LazyHospitalMap3D
-          pose={teleop.pose}
-          live={teleop.robotConnected}
-          scan={teleop.scan}
-          particles={teleop.particles}
-          plan={teleop.plan}
-          waypoints={markers}
-          onSelectWaypoint={setSelectedName}
-        />
-
-        <section className="waypoint-editor card">
+        <aside className="waypoint-command-rail" aria-label="Waypoint 작업 제어">
+          <header className="waypoint-command-rail__header">
+            <span className="waypoint-page-header__eyebrow">OPERATOR RAIL</span>
+            <strong>주행 및 좌표 도구</strong>
+          </header>
+          <section className="waypoint-control-column">
+            {selectedRobotId && (
+              <RobotModeControl
+                robotId={selectedRobotId}
+                mode={mode}
+                appliedMode={teleop.appliedMode}
+                modeStatusRevision={teleop.modeStatusRevision}
+                robotConnected={teleop.robotConnected}
+              />
+            )}
+            <section className="card waypoint-localize-control">
+              <div className="card-title">로봇 위치 다시 찾기</div>
+              <strong className={selectedRobot?.localization_active ? 'waypoint-localize-running' : ''}>
+                {selectedRobot?.localization_active
+                  ? '위치를 찾는 중입니다'
+                  : '지도와 실제 위치가 다를 때 실행하세요'}
+              </strong>
+              <p>로봇이 주변을 확인하며 제자리에서 돌거나 앞뒤로 잠시 움직일 수 있습니다.</p>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !localizationEnabled}
+                onClick={findRobotLocation}
+              >
+                위치 다시 찾기
+              </button>
+              {activeSession && (
+                <p className="waypoint-localize-disabled">환자 안내 중에는 위치를 다시 찾을 수 없습니다.</p>
+              )}
+            </section>
+            <TeleopPad
+              drive={drive}
+              enabled={teleopEnabled}
+              disabledReason={activeSession
+                ? '환자 안내 중에는 수동 조작할 수 없습니다.'
+                : !teleop.robotConnected
+                  ? '로봇이 관제에 연결되어 있지 않습니다.'
+                  : teleop.appliedMode === null
+                    ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
+                  : mode !== teleop.appliedMode
+                    ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
+                  : teleop.appliedMode === 'estop'
+                    ? '비상정지가 걸려 있습니다.'
+                    : '수동 조작 모드로 전환하세요.'}
+            />
+          </section>
+          <section className="waypoint-editor card">
           <div className="card-title">좌표 초안</div>
           <div className="waypoint-add-row">
             <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="새 waypoint 이름" />
@@ -380,7 +396,8 @@ export function WaypointDashboard() {
               ))}
             </div>
           )}
-        </section>
+          </section>
+        </aside>
       </div>
     </div>
   )

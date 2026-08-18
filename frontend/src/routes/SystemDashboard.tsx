@@ -145,9 +145,11 @@ export function SystemDashboard() {
   return (
     <div className="system-dashboard">
       <header className="waypoint-page-header">
-        <span className="waypoint-page-header__eyebrow">ENGINEER TOOL</span>
-        <h1>로봇 시스템 관리</h1>
-        <p>로봇 통합 시스템의 가동 상태를 확인하고 제어합니다.</p>
+        <div>
+          <span className="waypoint-page-header__eyebrow">SYSTEM CONTROL</span>
+          <h1>로봇 시스템 관리</h1>
+          <p>로봇 통합 시스템의 가동 상태를 확인하고 제어합니다.</p>
+        </div>
       </header>
 
       <section className="waypoint-robot-picker" aria-label="관리할 로봇 선택">
