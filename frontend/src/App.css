@@ -244,9 +244,56 @@
 }
 
 .guidance-rear-camera__distance {
-  color: var(--text);
-  font-size: 1.6rem;
+  margin-top: 5px;
+  color: var(--text-subtle);
+  font-size: 0.9rem;
   font-variant-numeric: tabular-nums;
+}
+
+.guidance-rear-camera__state {
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.guidance-rear-camera__state--normal { color: var(--success); }
+.guidance-rear-camera__state--slow { color: var(--warning); }
+.guidance-rear-camera__state--waiting { color: var(--danger); }
+.guidance-rear-camera__state--inactive { color: var(--text-muted); }
+
+.guidance-rear-camera__summary {
+  padding: 10px 12px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-subtle);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.guidance-rear-camera__summary--normal {
+  border-left-color: var(--success);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.guidance-rear-camera__summary--slow {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.guidance-rear-camera__summary--waiting {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.camera-state--normal { background: var(--success-bg); color: var(--success); }
+.camera-state--slow { background: var(--warning-bg); color: var(--warning); }
+.camera-state--inactive { background: var(--surface-2); color: var(--text-muted); }
+.guidance-rear-camera .camera-state--waiting {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .guidance-rear-camera__stream {

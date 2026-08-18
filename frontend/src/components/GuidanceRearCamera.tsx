@@ -8,6 +8,38 @@ interface Props {
   robotId: string
 }
 
+type FollowTone = 'normal' | 'slow' | 'waiting' | 'inactive'
+
+function followPresentation(
+  state: 'inactive' | 'normal' | 'slow' | 'waiting' | null | undefined,
+  distance: number | null,
+) {
+  switch (state) {
+    case 'normal':
+      return { tone: 'normal' as FollowTone, title: '환자 확인 · 정상 주행' }
+    case 'slow':
+      return { tone: 'slow' as FollowTone, title: '환자 멀어짐 · 감속 35%' }
+    case 'waiting':
+      return distance == null
+        ? { tone: 'waiting' as FollowTone, title: '환자 추적 끊김 · 안전 대기' }
+        : { tone: 'waiting' as FollowTone, title: '환자 멀어짐 · 대기 중' }
+    case 'inactive':
+      return { tone: 'inactive' as FollowTone, title: '환자 추적 비활성' }
+    default:
+      return { tone: 'inactive' as FollowTone, title: '환자 추적 상태 확인 중' }
+  }
+}
+
+function sourceLabel(source: string | null | undefined): string {
+  switch (source) {
+    case 'qr': return 'QR 거리 측정'
+    case 'visual': return 'YOLO 임시 보완'
+    case 'stale': return '추적 정보 지연'
+    case 'none': return '추적 비활성'
+    default: return '상태 동기화 중'
+  }
+}
+
 
 export function GuidanceRearCamera({ robotId }: Props) {
   const observation = usePolling(
@@ -16,22 +48,39 @@ export function GuidanceRearCamera({ robotId }: Props) {
   )
   const [streamFailed, setStreamFailed] = useState(false)
   const [streamKey, setStreamKey] = useState(0)
-  const distance = !observation.error && observation.data?.visible
-    ? observation.data.distance
-    : null
+  const data = observation.error ? null : observation.data
+  const distance = data?.follow_distance
+    ?? (data?.visible ? data.distance : null)
+  const presentation = followPresentation(data?.follow_state, distance)
 
   return (
     <section className="card guidance-rear-camera">
       <div className="guidance-rear-camera__header">
         <div>
-          <div className="card-title">환자와의 거리</div>
-          <strong className="guidance-rear-camera__distance">
-            {distance != null ? `${distance.toFixed(2)} m` : 'QR 인식되지 않음'}
+          <div className="card-title">환자 추적 상태</div>
+          <strong className={`guidance-rear-camera__state guidance-rear-camera__state--${presentation.tone}`}>
+            {presentation.title}
           </strong>
+          <div className="guidance-rear-camera__distance">
+            {distance != null ? `측정 거리 ${distance.toFixed(2)} m` : '측정 거리 없음'}
+          </div>
         </div>
-        <span className={`camera-state camera-state--${distance != null ? 'live' : 'waiting'}`}>
-          {distance != null ? 'QR 인식 중' : 'QR 탐색 중'}
+        <span className={`camera-state camera-state--${presentation.tone}`}>
+          {sourceLabel(data?.follow_source)}
         </span>
+      </div>
+      <div
+        className={`guidance-rear-camera__summary guidance-rear-camera__summary--${presentation.tone}`}
+        role="status"
+        aria-live="polite"
+      >
+        {data?.qr_visible
+          ? '현재 환자의 QR을 확인했습니다.'
+          : data?.visual_visible
+            ? 'QR이 가려져 인형 영상으로 잠시 거리를 보완하고 있습니다.'
+            : data?.follow_state === 'waiting'
+              ? '환자를 다시 확인할 때까지 로봇이 현재 위치에서 기다립니다.'
+              : '현재 환자의 추적 정보를 기다리고 있습니다.'}
       </div>
       {Boolean(observation.error) && (
         <p className="guidance-rear-camera__notice" role="status">
@@ -63,7 +112,7 @@ export function GuidanceRearCamera({ robotId }: Props) {
         />
       )}
       <p className="guidance-rear-camera__hint">
-        안내 주행 중 후방 카메라에 보이는 환자 QR까지의 거리입니다.
+        안내 경로는 유지하며, 환자와의 거리에 따라 정상·감속·대기를 전환합니다.
       </p>
     </section>
   )

@@ -669,6 +669,16 @@ class QrObservationIn(BaseModel):
     visible: bool
     distance: float | None = Field(
         default=None, gt=0, le=10, allow_inf_nan=False)
+    follow_state: Literal[
+        "inactive", "normal", "slow", "waiting",
+    ] | None = None
+    follow_distance: float | None = Field(
+        default=None, gt=0, le=10, allow_inf_nan=False)
+    follow_source: Literal[
+        "none", "qr", "visual", "stale", "unknown",
+    ] | None = None
+    qr_visible: bool = False
+    visual_visible: bool = False
 
     @model_validator(mode="after")
     def visible_has_distance(self):
@@ -683,6 +693,15 @@ class QrObservationOut(BaseModel):
     robot_id: str
     visible: bool = False
     distance: float | None = None
+    follow_state: Literal[
+        "inactive", "normal", "slow", "waiting",
+    ] | None = None
+    follow_distance: float | None = None
+    follow_source: Literal[
+        "none", "qr", "visual", "stale", "unknown",
+    ] | None = None
+    qr_visible: bool = False
+    visual_visible: bool = False
     observed_at: datetime | None = None
 
 

@@ -329,6 +329,11 @@ export interface QrObservation {
   robot_id: string
   visible: boolean
   distance: number | null
+  follow_state: 'inactive' | 'normal' | 'slow' | 'waiting' | null
+  follow_distance: number | null
+  follow_source: 'none' | 'qr' | 'visual' | 'stale' | 'unknown' | null
+  qr_visible: boolean
+  visual_visible: boolean
   observed_at: string | null
 }
 

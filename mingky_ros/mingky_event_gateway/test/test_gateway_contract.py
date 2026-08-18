@@ -17,6 +17,7 @@ from mingky_event_gateway.gateway_node import (
     battery_is_stale,
     isolate_rejected,
     matches_guided_patient,
+    parse_patient_follow_status,
     parse_navigation_speed,
     parse_low_obstacle_mode,
     send_outcome,
@@ -196,6 +197,48 @@ def test_qr_distance_only_accepts_current_patient_while_guiding():
         observation, GuideState.SESSION_GUIDING, 'patient-002') is False
     assert matches_guided_patient(
         observation, GuideState.SESSION_IN_ROOM, 'patient-001') is False
+
+
+def test_patient_follow_status_accepts_current_session_patient():
+    status = parse_patient_follow_status(json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': 0.18,
+        'source': 'qr',
+        'qr_visible': True,
+        'visual_visible': False,
+    }), 42, 'patient-001')
+
+    assert status == {
+        'follow_state': 'slow',
+        'follow_distance': 0.18,
+        'follow_source': 'qr',
+        'qr_visible': True,
+        'visual_visible': False,
+    }
+
+
+def test_patient_follow_status_rejects_other_patient_or_invalid_values():
+    other_patient = json.dumps({
+        'state': 'normal',
+        'session_id': 42,
+        'patient_id': 'patient-002',
+        'distance': 0.10,
+        'source': 'qr',
+    })
+    invalid_distance = json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': 'nan',
+        'source': 'qr',
+    })
+
+    assert parse_patient_follow_status(
+        other_patient, 42, 'patient-001') is None
+    assert parse_patient_follow_status(
+        invalid_distance, 42, 'patient-001') is None
 
 
 def test_interval_gate_starts_with_a_full_wait_period():

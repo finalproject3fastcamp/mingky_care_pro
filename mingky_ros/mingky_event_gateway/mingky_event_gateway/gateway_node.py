@@ -145,6 +145,45 @@ def matches_guided_patient(
     )
 
 
+def parse_patient_follow_status(
+    raw: str, session_id: int, patient_id: str,
+) -> dict | None:
+    """현재 안내 세션에 속한 환자 추적 heartbeat를 관제 계약으로 바꾼다."""
+    try:
+        payload = json.loads(raw)
+        state = str(payload['state'])
+        reported_session = int(payload.get('session_id', 0))
+        reported_patient = str(payload.get('patient_id') or '')
+        source = str(payload.get('source') or 'unknown')
+        distance = payload.get('distance')
+        distance = None if distance is None else float(distance)
+        qr_visible = payload.get('qr_visible', False)
+        visual_visible = payload.get('visual_visible', False)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if state not in ('inactive', 'normal', 'slow', 'waiting'):
+        return None
+    if source not in ('none', 'qr', 'visual', 'stale', 'unknown'):
+        return None
+    if distance is not None and (
+            not math.isfinite(distance) or distance <= 0.0):
+        return None
+    if not isinstance(qr_visible, bool) or not isinstance(visual_visible, bool):
+        return None
+    if state != 'inactive' and (
+            reported_session != session_id
+            or not patient_id
+            or reported_patient != patient_id):
+        return None
+    return {
+        'follow_state': state,
+        'follow_distance': distance,
+        'follow_source': source,
+        'qr_visible': qr_visible,
+        'visual_visible': visual_visible,
+    }
+
+
 class HeartbeatFailureGuard:
     """연속 heartbeat 실패가 세션 안전 임계값을 넘었는지 한 번만 알린다."""
 
@@ -417,6 +456,9 @@ class EventGateway(Node):
         self.create_subscription(
             QrObservation, "/rear_qr/observation",
             self._on_qr_observation, 10)
+        self.create_subscription(
+            String, "/person_follow/state",
+            self._on_patient_follow_state, 10)
         state_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -603,10 +645,41 @@ class EventGateway(Node):
             self.get_logger().warn(f"유효하지 않은 QR 거리 무시: {distance}")
             return
         with self._qr_lock:
-            self._qr_observation = {
+            current = dict(self._qr_observation or {
+                "visible": False,
+                "distance": None,
+                "follow_state": None,
+                "follow_distance": None,
+                "follow_source": None,
+                "qr_visible": False,
+                "visual_visible": False,
+            })
+            current.update({
                 "visible": matches_patient,
                 "distance": distance,
-            }
+            })
+            self._qr_observation = current
+        self._qr_wake.set()
+
+    def _on_patient_follow_state(self, msg: String) -> None:
+        status = parse_patient_follow_status(
+            msg.data, self._guide_session_id, self._guide_patient_id)
+        if status is None:
+            self.get_logger().warn(
+                '현재 안내와 맞지 않거나 잘못된 환자 추적 상태를 무시합니다.')
+            return
+        with self._qr_lock:
+            current = dict(self._qr_observation or {
+                "visible": False,
+                "distance": None,
+                "follow_state": None,
+                "follow_distance": None,
+                "follow_source": None,
+                "qr_visible": False,
+                "visual_visible": False,
+            })
+            current.update(status)
+            self._qr_observation = current
         self._qr_wake.set()
 
     def _on_map(self, msg: OccupancyGrid) -> None:
@@ -1115,8 +1188,11 @@ class EventGateway(Node):
                 payload = self._qr_observation
             if payload is None:
                 continue
-            # 보이는 동안은 거리 변화를 계속 보내고, 미인식 전이는 한 번만 보낸다.
-            if not payload["visible"] and payload == last_payload:
+            # 새 추적 노드는 heartbeat 자체가 생존 신호다. 상태가 같아도 서버의
+            # observed_at 을 갱신한다. 구버전 QR-only payload의 미인식 중복만
+            # 기존처럼 생략한다.
+            if (payload.get("follow_state") is None
+                    and not payload["visible"] and payload == last_payload):
                 continue
             last_payload = dict(payload)
             try:

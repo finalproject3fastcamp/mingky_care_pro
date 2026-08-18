@@ -690,7 +690,16 @@ async def post_qr_observation(
     """후방 QR 거리 최신값을 갱신한다. 이벤트·DB에는 저장하지 않는다."""
     if not heartbeat.is_tracked(robot_id):
         raise HTTPException(status_code=409, detail="robot is not connected")
-    qr_runtime.update(robot_id, observation.visible, observation.distance)
+    qr_runtime.update(
+        robot_id,
+        observation.visible,
+        observation.distance,
+        follow_state=observation.follow_state,
+        follow_distance=observation.follow_distance,
+        follow_source=observation.follow_source,
+        qr_visible=observation.qr_visible,
+        visual_visible=observation.visual_visible,
+    )
     return Response(status_code=204)
 
 
@@ -704,5 +713,10 @@ async def get_qr_observation(robot_id: str) -> QrObservationOut:
         robot_id=robot_id,
         visible=observation.visible,
         distance=observation.distance,
+        follow_state=observation.follow_state,
+        follow_distance=observation.follow_distance,
+        follow_source=observation.follow_source,
+        qr_visible=observation.qr_visible,
+        visual_visible=observation.visual_visible,
         observed_at=observation.observed_at,
     )
