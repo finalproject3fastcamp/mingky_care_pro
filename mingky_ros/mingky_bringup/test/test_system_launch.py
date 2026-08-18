@@ -197,6 +197,12 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
     assert 'start_patient_follow:=${MINGKY_PATIENT_FOLLOW_ENABLED:-true}' in unit
+    assert (
+        '${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:+'
+        'patient_follow_infer_server_url:='
+        '${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL}}'
+    ) in unit
+    assert 'patient_follow_infer_server_url:=${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:-}' not in unit
     assert 'MINGKY_PATIENT_FOLLOW_ENABLED=true' in env_example
 
 
