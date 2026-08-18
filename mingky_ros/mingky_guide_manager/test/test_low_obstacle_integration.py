@@ -121,9 +121,9 @@ def test_confirmed_low_obstacle_cancels_goal_before_sidestep(manager):
     handle = _set_active_goal(manager)
     manager._on_scan(_clear_scan())
 
-    manager._on_low_obstacle_range(Range(range=0.20))
+    manager._on_low_obstacle_range(Range(range=0.08))
     assert handle.cancelled == 0
-    manager._on_low_obstacle_range(Range(range=0.20))
+    manager._on_low_obstacle_range(Range(range=0.08))
 
     assert handle.cancelled == 1
     assert manager.low_obstacle_driver.started == [None]
@@ -134,8 +134,8 @@ def test_disabled_mode_keeps_current_navigation(manager):
     handle = _set_active_goal(manager)
     manager._on_scan(_clear_scan())
 
-    manager._on_low_obstacle_range(Range(range=0.20))
-    manager._on_low_obstacle_range(Range(range=0.20))
+    manager._on_low_obstacle_range(Range(range=0.08))
+    manager._on_low_obstacle_range(Range(range=0.08))
 
     assert handle.cancelled == 0
 

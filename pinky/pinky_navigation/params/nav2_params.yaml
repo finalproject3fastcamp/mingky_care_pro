@@ -179,9 +179,11 @@ controller_server:
     progress_checker_plugins: ["progress_checker"]
 
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
-      movement_time_allowance: 10.0              # [s] 이 시간 동안 아래 거리만큼 못 움직이면 끼인 것으로 판단
-      required_movement_radius: 0.5              # [m] 위 시간 동안 최소 0.5m 반경은 벗어나야 함 (못 벗어나면 Recovery 실행)
+      # 소형 로봇이 코너에서 제자리 회전해도 진행으로 인정한다.
+      plugin: "nav2_controller::PoseProgressChecker"
+      movement_time_allowance: 10.0              # [s] 이 시간 안에 아래 거리 또는 각도를 진행해야 함
+      required_movement_radius: 0.10             # [m] 현재 맵·로봇 크기에 맞춘 최소 이동 거리
+      required_movement_angle: 0.25              # [rad] 제자리 회전 약 14도도 정상 진행으로 인정
 
 
 local_costmap:

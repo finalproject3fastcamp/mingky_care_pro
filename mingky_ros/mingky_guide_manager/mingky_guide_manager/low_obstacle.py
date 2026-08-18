@@ -9,7 +9,7 @@ MotionKind = Literal['spin', 'drive']
 
 @dataclass(frozen=True)
 class LowObstacleConfig:
-    trigger_distance_m: float = 0.25
+    trigger_distance_m: float = 0.10
     lidar_margin_m: float = 0.15
     lidar_front_center_deg: float = 180.0
     lidar_half_width_deg: float = 15.0
@@ -20,7 +20,7 @@ class LowObstacleConfig:
     drive_step_m: float = 0.08
     drive_total_m: float = 0.35
     drive_speed_mps: float = 0.12
-    minimum_drive_clearance_m: float = 0.10
+    minimum_drive_clearance_m: float = 0.04
 
 
 @dataclass(frozen=True)

@@ -40,6 +40,8 @@ def test_detects_synthetic_qr_and_estimates_distance():
     assert detection.data == 'patient-001'
     assert detection.translation[0] == pytest.approx(0.0, abs=0.002)
     assert detection.translation[1] == pytest.approx(0.0, abs=0.002)
+    assert detection.image_center[0] == pytest.approx(320.0, abs=1.0)
+    assert detection.image_center[1] == pytest.approx(240.0, abs=1.0)
     # QRCodeEncoder 결과의 quiet zone은 자세 계산 모서리에 포함되지 않는다.
     # 200px 전체 중 실제 심볼 약 167px를 28mm로 보므로 약 15.1cm다.
     assert detection.distance == pytest.approx(0.151, abs=0.006)

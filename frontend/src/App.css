@@ -8,12 +8,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 32px;
-  background: var(--surface);
+  min-height: 68px;
+  padding: 12px clamp(20px, 3vw, 48px);
+  background: rgb(255 255 255 / 92%);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 10;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 1px 12px rgb(15 23 42 / 4%);
 }
 
 .app-brand {
@@ -23,13 +26,13 @@
 }
 
 .app-logo {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: block;
 }
 
 .app-header h1 {
-  font-size: 1.05rem;
+  font-size: 1.08rem;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -42,15 +45,17 @@
 .app-header nav a {
   color: var(--text-muted);
   text-decoration: none;
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  font-weight: 500;
-  transition: background 0.15s, color 0.15s;
+  padding: 8px 14px;
+  border-radius: 9px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: background 0.18s, color 0.18s, transform 0.18s;
 }
 
 .app-header nav a:hover {
   background: var(--surface-2);
   color: var(--text);
+  transform: translateY(-1px);
 }
 
 .app-header nav a.active {
@@ -161,11 +166,58 @@
   font-weight: 600;
 }
 
+@media (max-width: 640px) {
+  .app-header {
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 16px;
+  }
+
+  .app-brand {
+    flex: 0 0 auto;
+    padding-top: 3px;
+  }
+
+  .app-brand h1 {
+    display: none;
+  }
+
+  .app-primary-nav {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .app-header nav a {
+    padding: 5px 9px;
+    white-space: nowrap;
+  }
+
+  .app-actor {
+    flex: 0 0 100%;
+    justify-content: flex-end;
+    margin: 4px 0 0;
+    padding: 7px 0 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .app-actor__input {
+    width: 100px;
+  }
+}
+
 .app-main {
   flex: 1;
-  /* 세 화면 (의료진 · 약국 · 엔지니어) 공통 여백. 상단 24 · 좌우 24 · 하단 80.
-     상단을 0 으로 두면 첫 카드가 헤더 바닥선에 붙어 눌려 보인다. */
-  padding: 24px 24px 80px;
+  /* 뷰포트에 따라 22~44px 로 부드럽게 스케일. 세 화면(의료진·약국·엔지니어)이
+     같은 규칙을 공유한다. */
+  padding: clamp(22px, 3vw, 44px);
+}
+
+.route-stage {
+  width: 100%;
+  min-width: 0;
 }
 
 .dashboard {
@@ -188,9 +240,7 @@
   .dashboard-row {
     grid-template-columns: 1fr;
   }
-  .app-main {
-    padding: 16px 16px 60px;
-  }
+  /* .app-main padding 은 clamp() 가 이미 반응형이라 override 불필요. */
 }
 
 /* 폴링 실패 배너. 카드 위에 얹혀 이전 데이터를 그대로 유지한 채 상태만 알린다. */
@@ -206,16 +256,22 @@
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px 22px;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-lg);
+  padding: clamp(18px, 2vw, 24px);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 4%);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.card:hover {
+  border-color: #d8e0ea;
+  box-shadow: 0 10px 30px rgb(15 23 42 / 6%);
 }
 
 .card-title {
   font-size: 0.78rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.09em;
   color: var(--text-subtle);
   margin-bottom: 14px;
 }
@@ -248,9 +304,56 @@
 }
 
 .guidance-rear-camera__distance {
-  color: var(--text);
-  font-size: 1.6rem;
+  margin-top: 5px;
+  color: var(--text-subtle);
+  font-size: 0.9rem;
   font-variant-numeric: tabular-nums;
+}
+
+.guidance-rear-camera__state {
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.guidance-rear-camera__state--normal { color: var(--success); }
+.guidance-rear-camera__state--slow { color: var(--warning); }
+.guidance-rear-camera__state--waiting { color: var(--danger); }
+.guidance-rear-camera__state--inactive { color: var(--text-muted); }
+
+.guidance-rear-camera__summary {
+  padding: 10px 12px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-subtle);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.guidance-rear-camera__summary--normal {
+  border-left-color: var(--success);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.guidance-rear-camera__summary--slow {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.guidance-rear-camera__summary--waiting {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.camera-state--normal { background: var(--success-bg); color: var(--success); }
+.camera-state--slow { background: var(--warning-bg); color: var(--warning); }
+.camera-state--inactive { background: var(--surface-2); color: var(--text-muted); }
+.guidance-rear-camera .camera-state--waiting {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .guidance-rear-camera__stream {
@@ -1372,85 +1475,237 @@
 }
 
 /* Control deck ------------------------------------------------------------
-   데스크톱에서는 지도를 작업 화면 자체로 쓰고 조작 카드를 그 위에 띄운다.
-   지도와 조작을 나란히 놓으면 지도가 좁아져 위치 판단이 어려워진다. */
+   지도 위에 조작 카드가 떠 있던 구성을 없애고, 지도와 제어 rail을 하나의
+   작업 화면으로 묶는다. 가림 없이 공간의 관계를 보면서 조작할 수 있다. */
 .dashboard--medical {
   width: min(1440px, 100%);
   max-width: none;
 }
 
 .control-deck {
-  position: relative;
-  min-height: clamp(620px, 72dvh, 860px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 328px;
+  min-height: clamp(620px, 72dvh, 820px);
   margin-top: 14px;
-  border-radius: var(--radius);
+  border: 1px solid #d8dee8;
+  border-radius: 16px;
   overflow: hidden;
-  background: var(--surface-2);
-  box-shadow: var(--shadow-sm);
+  background: #f8fafc;
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 4%),
+    0 18px 48px rgb(15 23 42 / 8%);
 }
 
-.control-deck > .robot-map {
-  position: absolute;
-  inset: 0;
+.control-deck__map-shell {
+  min-width: 0;
+  padding: 12px;
+  background: #eef2f6;
+}
+
+.control-deck__map-shell > .robot-map {
   display: flex;
   flex-direction: column;
-  min-width: 0;
   height: 100%;
-  box-sizing: border-box;
+  padding: 14px;
+  border-color: #dbe2ea;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 5%);
 }
 
-.control-deck > .robot-map .map3d__stage {
+.control-deck__map-shell .map3d__stage {
   flex: 1;
   min-height: 0;
   aspect-ratio: auto;
+  border: 1px solid #cfd7e2;
+  border-radius: 8px;
 }
 
-.control-deck > .mode-control,
-.control-deck > .teleop-pad {
-  position: absolute;
-  z-index: 2;
-  width: min(300px, calc(100% - 36px));
+.control-deck__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 20px;
+  border-left: 1px solid #d8dee8;
+  background: #fff;
+}
+
+.control-deck__rail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 14px;
+  border-bottom: 1px solid #e5e9f0;
+}
+
+.control-deck__rail-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.control-deck__rail-header strong {
+  color: #172033;
+  font-size: 1.02rem;
+  letter-spacing: -0.02em;
+}
+
+.control-deck__eyebrow {
+  color: #78859a;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.control-deck__connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #f8fafc;
+}
+
+.control-deck__connection i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px rgb(100 116 139 / 10%);
+}
+
+.control-deck__connection.is-online {
+  color: #15803d;
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.control-deck__connection.is-offline {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.control-deck__rail > .mode-control,
+.control-deck__rail > .teleop-pad {
   margin: 0;
-  border-color: color-mix(in srgb, var(--border-strong) 75%, transparent);
-  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
+  padding: 16px;
+  border-color: #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  box-shadow: none;
 }
 
-.control-deck > .mode-control {
-  top: 88px;
-  left: 18px;
+.control-deck__rail > .teleop-pad {
+  margin-top: auto;
 }
 
-.control-deck > .teleop-pad {
-  right: 18px;
-  bottom: 18px;
+.control-deck__rail .mode-control__buttons {
+  padding: 3px;
+  gap: 3px;
+  border: 1px solid #dfe5ed;
+  border-radius: 8px;
+  background: #eef2f6;
+}
+
+.control-deck__rail .mode-control__buttons .btn {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.control-deck__rail .mode-control__buttons .btn:hover:not(:disabled) {
+  border-color: #d7dee8;
+  background: #fff;
+}
+
+.control-deck__rail .mode-control__buttons .btn:disabled {
+  border-color: #d7e3f5;
+  color: #1d4ed8;
+  background: #fff;
+  opacity: 1;
+}
+
+.control-deck__rail .teleop-pad__grid {
+  width: min(100%, 236px);
+  margin: 2px auto 0;
+}
+
+.control-deck__rail .teleop-pad__btn {
+  min-height: 52px;
+  padding: 10px 0;
+  border-color: #d9e0e9;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 5%);
+  transition: border-color 140ms ease, background 140ms ease, transform 100ms ease;
+}
+
+.control-deck__rail .teleop-pad__btn:active:not(:disabled) {
+  border-color: #93b4e8;
+  background: #eaf2ff;
+  transform: scale(0.96);
+}
+
+.control-deck__rail .teleop-pad__btn--stop {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fff5f5;
 }
 
 /* 좁은 화면에서는 한 줄로 쌓는다. 병실 태블릿을 가로로만 쓰지 않는다. */
 @media (max-width: 900px) {
   .control-deck {
-    display: grid;
     grid-template-columns: 1fr;
-    grid-template-areas: 'offline' 'mode' 'map' 'pad';
-    gap: 14px;
     min-height: 0;
-    overflow: visible;
-    background: transparent;
-    box-shadow: none;
   }
 
-  .control-deck > .robot-map,
-  .control-deck > .mode-control,
-  .control-deck > .teleop-pad {
-    position: static;
-    width: auto;
-    height: auto;
-    box-shadow: none;
+  .control-deck__map-shell .map3d__stage {
+    min-height: 420px;
+    aspect-ratio: 16 / 9;
   }
 
-  .control-deck > .robot-map { grid-area: map; }
-  .control-deck > .mode-control { grid-area: mode; }
-  .control-deck > .teleop-pad { grid-area: pad; }
-  .control-deck > .robot-map .map3d__stage { aspect-ratio: 16 / 9; }
+  .control-deck__rail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: 1px solid #d8dee8;
+    border-left: 0;
+  }
+
+  .control-deck__rail-header {
+    grid-column: 1 / -1;
+  }
+
+  .control-deck__rail > .teleop-pad {
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .control-deck {
+    border-radius: 12px;
+  }
+
+  .control-deck__map-shell {
+    padding: 8px;
+  }
+
+  .control-deck__map-shell .map3d__stage {
+    min-height: 300px;
+  }
+
+  .control-deck__rail {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .control-deck__rail-header {
+    grid-column: auto;
+  }
 }
 
 /* Map */
@@ -1572,31 +1827,26 @@
 /* 로봇 연결 끊김 — 조작과 비상정지가 안 닿는 상태다. 지도·모드·패드
    어디를 봐도 이유를 알 수 있게 데크 맨 위에 걸쳐 놓는다. */
 .control-deck__offline {
-  position: absolute;
-  z-index: 3;
-  top: 74px;
-  left: 50%;
-  width: min(620px, calc(100% - 36px));
+  grid-column: 1 / -1;
   box-sizing: border-box;
   margin: 0;
   padding: 10px 14px;
-  border-radius: var(--radius-sm);
+  border-bottom: 1px solid #fecaca;
   background: var(--danger-bg);
-  border: 1px solid var(--danger);
   color: var(--danger);
   font-size: 0.86rem;
   font-weight: 600;
-  transform: translateX(-50%);
-  box-shadow: 0 10px 24px rgb(127 29 29 / 16%);
 }
 
 @media (max-width: 900px) {
   .control-deck__offline {
-    position: static;
-    grid-area: offline;
-    width: auto;
-    transform: none;
-    box-shadow: none;
+    grid-column: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .control-deck__rail .teleop-pad__btn {
+    transition: none;
   }
 }
 
@@ -1609,15 +1859,38 @@
 .engineer-content { min-width: 0; }
 .engineer-content .dashboard { max-width: none; }
 
+.waypoint-dashboard,
+.system-dashboard,
+.camera-dashboard {
+  width: min(1480px, 100%);
+  margin: 0 auto;
+}
+
+.camera-dashboard { width: min(1280px, 100%); }
+
 /* On-demand camera monitoring */
 .camera-dashboard { display: grid; gap: 18px; }
-.camera-page-header h1 { margin: 3px 0 5px; font-size: 1.65rem; }
+.camera-page-header {
+  padding: 4px 2px 6px;
+}
+.camera-page-header h1 { margin: 5px 0 6px; font-size: clamp(1.6rem, 2vw, 2rem); letter-spacing: -0.035em; }
 .camera-page-header p { margin: 0; color: var(--text-muted); }
 .camera-page-header__eyebrow {
   color: var(--accent-strong);
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.12em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 .camera-controls {
   display: flex;
@@ -1767,10 +2040,11 @@
 .waypoint-page-header {
   display: flex;
   justify-content: space-between;
-  align-items: end;
+  align-items: flex-end;
   gap: 18px;
+  padding: 4px 2px 6px;
 }
-.waypoint-page-header h1 { margin: 3px 0 5px; font-size: 1.65rem; }
+.waypoint-page-header h1 { margin: 5px 0 6px; font-size: clamp(1.6rem, 2vw, 2rem); letter-spacing: -0.035em; }
 .waypoint-page-header p { margin: 0; color: var(--text-muted); }
 .waypoint-page-header__eyebrow {
   color: var(--accent-strong);
@@ -1798,9 +2072,9 @@
 .waypoint-robot-picker {
   display: grid;
   gap: 12px;
-  padding: 16px;
+  padding: 18px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
@@ -1827,15 +2101,15 @@
   min-height: 128px;
   padding: 11px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s, transform 0.18s;
 }
 .waypoint-robot-card__content { min-width: 0; display: grid; gap: 9px; }
-.waypoint-robot-card:hover { border-color: var(--accent); }
+.waypoint-robot-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 24px rgb(15 23 42 / 7%); }
 .waypoint-robot-card.selected {
   border-color: var(--accent);
   background: var(--accent-bg);
@@ -1867,59 +2141,84 @@
 .waypoint-safety-banner { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
 .waypoint-notice { background: var(--accent-bg); color: var(--accent-strong); }
 .waypoint-workspace {
-  position: relative;
-  min-height: clamp(680px, 78dvh, 920px);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--surface-2);
-  box-shadow: var(--shadow-sm);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 370px;
+  gap: 18px;
+  align-items: start;
 }
-.waypoint-workspace > .robot-map {
-  position: absolute;
-  inset: 0;
+.waypoint-map-panel {
+  min-width: 0;
+  min-height: clamp(660px, 76dvh, 860px);
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  height: 100%;
-  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: #e9eef5;
+  box-shadow: 0 12px 36px rgb(15 23 42 / 7%);
 }
-.waypoint-workspace > .robot-map .map3d__stage {
+.waypoint-map-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 58px;
+  padding: 4px 8px 14px;
+}
+.waypoint-map-panel__header > div { display: grid; gap: 3px; }
+.waypoint-map-panel__header strong { font-size: 1rem; letter-spacing: -0.02em; }
+.waypoint-map-panel > .robot-map {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border-color: #d8e0ea;
+  border-radius: var(--radius);
+  box-shadow: 0 1px 4px rgb(15 23 42 / 5%);
+}
+.waypoint-map-panel > .robot-map .map3d__stage {
   flex: 1;
   min-height: 0;
   aspect-ratio: auto;
 }
+.waypoint-command-rail {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 12px 36px rgb(15 23 42 / 7%);
+}
+.waypoint-command-rail__header {
+  display: grid;
+  gap: 4px;
+  padding: 0 2px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.waypoint-command-rail__header strong { font-size: 1rem; letter-spacing: -0.02em; }
 .waypoint-control-column {
-  position: absolute;
-  z-index: 2;
-  top: 88px;
-  bottom: 18px;
-  left: 18px;
   display: grid;
   align-content: start;
-  gap: 14px;
-  width: min(260px, calc(100% - 36px));
-  overflow-y: auto;
-  scrollbar-width: thin;
+  gap: 12px;
+  min-width: 0;
 }
 .waypoint-control-column .mode-control,
 .waypoint-control-column .teleop-pad {
   min-width: 0;
   margin-top: 0;
-  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
+  border-color: var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: none;
 }
 .waypoint-editor {
-  position: absolute;
-  z-index: 2;
-  top: 88px;
-  right: 18px;
   display: grid;
   gap: 13px;
-  width: min(320px, calc(100% - 36px));
-  max-height: calc(100% - 106px);
-  box-sizing: border-box;
-  overflow-y: auto;
-  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
-  scrollbar-width: thin;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow: none;
 }
 .waypoint-editor .card-title { margin-bottom: 0; }
 .waypoint-add-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
@@ -1943,36 +2242,34 @@
 
 @media (max-width: 1180px) {
   .waypoint-workspace {
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    gap: 16px;
-    align-items: start;
-    min-height: 0;
-    overflow: visible;
-    background: transparent;
-    box-shadow: none;
+    grid-template-columns: minmax(0, 1fr) 330px;
   }
-  .waypoint-workspace > .robot-map,
-  .waypoint-control-column,
-  .waypoint-editor {
-    position: static;
-    width: auto;
-    height: auto;
-    max-height: none;
-    overflow: visible;
-    box-shadow: none;
-  }
-  .waypoint-workspace > .robot-map .map3d__stage { aspect-ratio: 16 / 9; }
-  .waypoint-editor { grid-column: 1 / -1; }
+  .waypoint-map-panel { min-height: 620px; }
+}
+
+@media (max-width: 940px) {
+  .waypoint-workspace { grid-template-columns: 1fr; }
+  .waypoint-map-panel { min-height: 0; }
+  .waypoint-map-panel > .robot-map .map3d__stage { aspect-ratio: 16 / 9; }
+  .waypoint-command-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .waypoint-command-rail__header { grid-column: 1 / -1; }
+  .waypoint-editor { align-self: start; }
 }
 
 @media (max-width: 820px) {
-  .waypoint-workspace { grid-template-columns: 1fr; }
-  .waypoint-editor { grid-column: auto; }
   .waypoint-page-header { align-items: stretch; flex-direction: column; }
   .waypoint-robot-picker__heading { align-items: flex-start; flex-direction: column; gap: 3px; }
   .waypoint-robot-cards { grid-template-columns: 1fr; }
   .system-control-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .waypoint-command-rail { grid-template-columns: 1fr; padding: 14px; }
+  .waypoint-command-rail__header { grid-column: auto; }
+  .waypoint-map-panel { padding: 8px; }
+  .waypoint-map-panel__header { padding: 5px 6px 12px; }
+  .waypoint-robot-card { grid-template-columns: 96px minmax(0, 1fr); }
+  .pinky-model-viewer { width: 96px; height: 82px; }
 }
 
 .medical-location-control {

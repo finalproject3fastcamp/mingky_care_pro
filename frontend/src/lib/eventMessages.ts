@@ -14,6 +14,18 @@ export function messageFor(code: string, payload: Record<string, unknown>): stri
       return `환자 놓침 (marker ${p.marker_id ?? '?'})`
     case 'patient.regained':
       return '환자 재확인'
+    case 'patient.follow_wait_started':
+      return p.reason === 'sensor_timeout'
+        ? '환자 추적 정보가 끊겨 안전 대기합니다.'
+        : '환자가 멀어져 현재 위치에서 기다립니다.'
+    case 'patient.follow_wait_ended':
+      return '환자가 복귀해 안내를 다시 시작합니다.'
+    case 'person_follow.state_changed':
+      return `환자 추적 상태 변경: ${p.state ?? '알 수 없음'}`
+    case 'person_follow.inference_unavailable':
+      return 'YOLO 연결이 끊겨 QR 거리만 사용합니다.'
+    case 'person_follow.inference_restored':
+      return 'YOLO 연결이 복구되었습니다.'
     case 'fire.detected':
       return '화재 감지'
     case 'fire.evacuation_started':

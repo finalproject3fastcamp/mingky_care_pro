@@ -140,6 +140,33 @@ nav.stuck:
   payload: { x: float, y: float }
   # progress checker 발동.
 
+# 환자 거리 대기는 장애·수동정지가 아닌 정상 안내 흐름이다.
+# robot.paused를 쓰면 안내 완주율 SLO의 수동 정지로 오판되어 별도로 둔다.
+patient.follow_wait_started:
+  robot_types: [mobile]
+  level: info
+  payload: { reason: string, source: string }
+
+patient.follow_wait_ended:
+  robot_types: [mobile]
+  level: info
+  payload: { source: string }
+
+person_follow.state_changed:
+  robot_types: [mobile]
+  level: info
+  payload: { state: string, distance: float, source: string }
+
+person_follow.inference_unavailable:
+  robot_types: [mobile]
+  level: warning
+  payload: { reason: string }
+
+person_follow.inference_restored:
+  robot_types: [mobile]
+  level: info
+  payload: {}
+
 waypoint.test_started:
   robot_types: [mobile]
   level: info

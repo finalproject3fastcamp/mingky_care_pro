@@ -3,6 +3,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from mingky_event_gateway.gateway_node import (
     ACTIVE_GUIDE_SESSION_STATES,
     HeartbeatFailureGuard,
@@ -17,6 +19,7 @@ from mingky_event_gateway.gateway_node import (
     battery_is_stale,
     isolate_rejected,
     matches_guided_patient,
+    parse_patient_follow_status,
     parse_navigation_speed,
     parse_low_obstacle_mode,
     send_outcome,
@@ -70,6 +73,15 @@ class _Future:
         return self.response
 
 
+class _ParameterClient:
+    def __init__(self):
+        self.requests = []
+
+    def set_parameters(self, parameters):
+        self.requests.append(parameters)
+        return SimpleNamespace(add_done_callback=lambda callback: None)
+
+
 def test_navigation_speed_updates_reported_value_after_parameter_success():
     gateway = object.__new__(EventGateway)
     gateway._navigation_speed_mps = 0.20
@@ -108,6 +120,38 @@ def test_low_obstacle_mode_keeps_previous_value_after_parameter_rejection():
     gateway._on_low_obstacle_mode_response(_Future(False), 'sidestep')
 
     assert gateway._low_obstacle_mode == 'disabled'
+
+
+def test_waypoint_mode_is_applied_before_guide_mode():
+    gateway = object.__new__(EventGateway)
+    gateway._guide_parameters = _ParameterClient()
+    gateway.get_logger = lambda: _Logger()
+
+    gateway._on_navigation_low_obstacle_mode_response(
+        _Future(True), 'sidestep', 'disabled')
+
+    assert len(gateway._guide_parameters.requests) == 1
+    parameter = gateway._guide_parameters.requests[0][0]
+    assert parameter.name == 'low_obstacle_mode'
+    assert parameter.value == 'sidestep'
+
+
+def test_guide_mode_rejection_rolls_waypoint_mode_back():
+    gateway = object.__new__(EventGateway)
+    gateway._low_obstacle_mode = 'disabled'
+    gateway._navigation_parameters = _ParameterClient()
+    gateway.get_logger = lambda: SimpleNamespace(
+        info=lambda message: None,
+        warn=lambda message: None,
+        error=lambda message: None,
+    )
+
+    gateway._on_low_obstacle_mode_response(
+        _Future(False), 'sidestep', 'disabled')
+
+    assert gateway._low_obstacle_mode == 'disabled'
+    parameter = gateway._navigation_parameters.requests[0][0]
+    assert parameter.value == 'disabled'
 
 
 def test_active_guidance_states_cover_confirmation_through_room_waiting():
@@ -196,6 +240,80 @@ def test_qr_distance_only_accepts_current_patient_while_guiding():
         observation, GuideState.SESSION_GUIDING, 'patient-002') is False
     assert matches_guided_patient(
         observation, GuideState.SESSION_IN_ROOM, 'patient-001') is False
+
+
+def test_patient_follow_status_accepts_current_session_patient():
+    status = parse_patient_follow_status(json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': 0.18,
+        'source': 'qr',
+        'qr_visible': True,
+        'visual_visible': False,
+    }), 42, 'patient-001')
+
+    assert status == {
+        'follow_state': 'slow',
+        'follow_distance': 0.18,
+        'follow_source': 'qr',
+        'qr_visible': True,
+        'visual_visible': False,
+    }
+
+
+def test_patient_follow_status_accepts_acquisition_source():
+    status = parse_patient_follow_status(json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': None,
+        'source': 'acquiring',
+        'qr_visible': False,
+        'visual_visible': False,
+    }), 42, 'patient-001')
+
+    assert status['follow_state'] == 'slow'
+    assert status['follow_distance'] is None
+    assert status['follow_source'] == 'acquiring'
+
+
+def test_patient_follow_status_accepts_near_partial_visual_source():
+    status = parse_patient_follow_status(json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': 0.34,
+        'source': 'partial_near',
+        'qr_visible': False,
+        'visual_visible': True,
+    }), 42, 'patient-001')
+
+    assert status['follow_state'] == 'slow'
+    assert status['follow_distance'] == pytest.approx(0.34)
+    assert status['follow_source'] == 'partial_near'
+
+
+def test_patient_follow_status_rejects_other_patient_or_invalid_values():
+    other_patient = json.dumps({
+        'state': 'normal',
+        'session_id': 42,
+        'patient_id': 'patient-002',
+        'distance': 0.10,
+        'source': 'qr',
+    })
+    invalid_distance = json.dumps({
+        'state': 'slow',
+        'session_id': 42,
+        'patient_id': 'patient-001',
+        'distance': 'nan',
+        'source': 'qr',
+    })
+
+    assert parse_patient_follow_status(
+        other_patient, 42, 'patient-001') is None
+    assert parse_patient_follow_status(
+        invalid_distance, 42, 'patient-001') is None
 
 
 def test_interval_gate_starts_with_a_full_wait_period():

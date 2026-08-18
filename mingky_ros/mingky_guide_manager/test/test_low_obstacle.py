@@ -23,6 +23,13 @@ def test_low_obstacle_requires_ultrasonic_only_detection() -> None:
         0.40, 0.60, trigger_distance_m=0.25, lidar_margin_m=0.15)
 
 
+def test_default_ultrasonic_thresholds_match_robot_safety_policy() -> None:
+    config = LowObstacleConfig()
+
+    assert config.trigger_distance_m == pytest.approx(0.10)
+    assert config.minimum_drive_clearance_m == pytest.approx(0.04)
+
+
 def test_lidar_sector_uses_configured_sensor_front() -> None:
     ranges = [2.0] * 9
     ranges[0] = 0.30  # -pi, 센서 좌표계에서 로봇 정면
@@ -130,7 +137,7 @@ def test_sidestep_stops_after_dangerous_drive_reading() -> None:
     command = sequence.send(MotionResult(True, 0.50))  # probe
     command = sequence.send(MotionResult(True))        # 여유각
     assert command.kind == 'drive'
-    command = sequence.send(MotionResult(True, 0.05))
+    command = sequence.send(MotionResult(True, 0.03))
     assert command.kind == 'spin'                      # 즉시 방향 복원
     with pytest.raises(StopIteration) as finished:
         sequence.send(MotionResult(True))

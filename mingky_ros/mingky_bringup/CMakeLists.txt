@@ -39,6 +39,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_system_launch test/test_system_launch.py)
   ament_add_pytest_test(test_waypoint_config test/test_waypoint_config.py)
   ament_add_pytest_test(test_battery_command test/test_battery_command.py)
+  ament_add_pytest_test(test_nav2_progress_config test/test_nav2_progress_config.py)
 endif()
 
 ament_package()
