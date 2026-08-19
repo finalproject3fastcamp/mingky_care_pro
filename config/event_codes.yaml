@@ -95,6 +95,11 @@ fire.evacuation_failed:
   level: error
   payload: { reason: string, status: int }
 
+fire.evacuation_canceled:
+  robot_types: [mobile]
+  level: warning
+  payload: { reason: string }
+
 fire.inference_unavailable:
   robot_types: [mobile]
   level: error

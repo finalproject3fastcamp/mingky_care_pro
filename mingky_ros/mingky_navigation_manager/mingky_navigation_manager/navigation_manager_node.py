@@ -588,12 +588,11 @@ class NavigationManager(Node):
 
     def _start_test(self, name: str, waypoint: dict) -> None:
         if self._active:
-            self._publish_result('rejected', {
-                'waypoint_name': name,
-                'error_code': BUSY_ERROR,
-                'message': '다른 Waypoint 시험 주행이 진행 중입니다.',
-            })
-            return
+            self._cancel_active(
+                BUSY_ERROR,
+                '새 Waypoint가 요청되어 기존 시험 주행을 취소했습니다.',
+                status='canceled',
+            )
         if self._clinical_active:
             self._publish_result('rejected', {
                 'waypoint_name': name,
@@ -996,7 +995,8 @@ class NavigationManager(Node):
             if key in context
         }
 
-    def _cancel_active(self, error_code: int, message: str) -> None:
+    def _cancel_active(
+            self, error_code: int, message: str, *, status: str = 'failed') -> None:
         context = self._public_test_context()
         self._generation += 1
         self._cancel_recovery_retry()
@@ -1008,7 +1008,7 @@ class NavigationManager(Node):
         self._active = False
         self._test_context = None
         self._publish_active()
-        self._publish_result('failed', {
+        self._publish_result(status, {
             **context,
             'error_code': error_code,
             'message': message,

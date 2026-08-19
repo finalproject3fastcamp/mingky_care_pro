@@ -557,12 +557,16 @@ class EventGateway(Node):
         }
         self._session_cancel_pub = self.create_publisher(
             String, "/guide_manager/cancel_session", 10)
+        self._navigation_cancel_pub = self.create_publisher(
+            Bool, "/navigation_manager/cancel", 10)
         self._communication_stop_pub = self.create_publisher(
             Bool, "/emergency_stop/communication", 10)
         self._localize_client = self.create_client(
             Trigger, "/auto_localize/trigger")
         self._fire_alarm_reset_client = self.create_client(
             Trigger, "/fire_evac/reset_alarm")
+        self._fire_evac_cancel_client = self.create_client(
+            Trigger, "/fire_evac/cancel")
         self._controller_parameters = AsyncParameterClient(
             self, "controller_server")
         self._guide_parameters = AsyncParameterClient(self, "guide_manager")
@@ -1381,6 +1385,35 @@ class EventGateway(Node):
             self.get_logger().info("명령 실행: fire_alarm_reset(run)")
             return True
 
+        if command == "cancel_fire_evacuation":
+            if argument != "run":
+                self.get_logger().error(
+                    f"잘못된 비상대피 취소 인자: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            if self._system_state() != "active":
+                self.get_logger().error(
+                    "통합 시스템이 가동 중이 아니라 비상대피 취소를 거부했습니다.")
+                return True
+            if not self._fire_evac_cancel_client.service_is_ready():
+                self.get_logger().warn(
+                    "비상대피 취소 서비스가 아직 준비되지 않았습니다. 명령을 유지합니다.")
+                return False
+            future = self._fire_evac_cancel_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_fire_evac_cancel_response)
+            self.get_logger().info("명령 실행: cancel_fire_evacuation(run)")
+            return True
+
+        if command == "cancel_navigation":
+            if argument != "run":
+                self.get_logger().error(
+                    f"잘못된 시험주행 취소 인자: {argument!r} "
+                    f"(order_id={order.get('order_id')})")
+                return True
+            self._navigation_cancel_pub.publish(Bool(data=True))
+            self.get_logger().info("명령 실행: cancel_navigation(run)")
+            return True
+
         if command == "set_navigation_speed":
             speed = parse_navigation_speed(argument)
             if speed is None:
@@ -1521,6 +1554,17 @@ class EventGateway(Node):
             self.get_logger().info(f"화재 경보 해제 완료: {response.message}")
         else:
             self.get_logger().warn(f"화재 경보 해제 거부: {response.message}")
+
+    def _on_fire_evac_cancel_response(self, future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"비상대피 취소 요청 실패: {exc}")
+            return
+        if response.success:
+            self.get_logger().warn(f"비상대피 취소 완료: {response.message}")
+        else:
+            self.get_logger().warn(f"비상대피 취소 거부: {response.message}")
 
     def _on_navigation_speed_response(self, future, requested: float) -> None:
         try:

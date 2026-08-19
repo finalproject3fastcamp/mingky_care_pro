@@ -176,6 +176,20 @@ export function WaypointDashboard() {
     }
   }
 
+  async function cancelTestDrive() {
+    if (!selectedRobotId) return
+    if (!window.confirm(`${selectedRobotId}의 현재 시험 주행과 복구 동작을 취소할까요?`)) return
+    setBusy(true)
+    try {
+      await sendOrder(selectedRobotId, 'cancel_navigation', 'run')
+      setNotice('시험 주행 취소 명령을 보냈습니다.')
+    } catch {
+      setNotice('시험 주행 취소 명령을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function findRobotLocation() {
     if (!localizationEnabled || !selectedRobotId) return
     if (!window.confirm(
@@ -386,6 +400,10 @@ export function WaypointDashboard() {
           <div className="waypoint-editor-actions">
             <button type="button" className="btn" disabled={busy} onClick={runCheck}>Waypoint Check</button>
             <button type="button" className="btn primary" disabled={busy || !testEnabled} onClick={testDrive}>선택 지점 시험 주행</button>
+            <button type="button" className="btn danger"
+              disabled={busy || !selectedRobotId || !teleop.robotConnected
+                || selectedRobot?.system_state !== 'active'}
+              onClick={cancelTestDrive}>시험 주행 취소</button>
             <button type="button" className="btn" disabled={!source} onClick={exportYaml}>YAML 내보내기</button>
           </div>
           {checkResult && checkResult.conflicts.length > 0 && (

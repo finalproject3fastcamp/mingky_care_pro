@@ -41,11 +41,11 @@ log = logging.getLogger("mingky")
 # **덮어써진다.** 조작자는 정지를 눌렀는데 로봇은 그 명령을 본 적이 없다.
 # 로그에만 남고 화면에는 성공으로 보이므로 알아채기도 어렵다.
 _SAFETY_COMMANDS = frozenset({"set_mode"})
-_FIRE_COMMANDS = frozenset({"fire_alarm_reset"})
+_FIRE_COMMANDS = frozenset({"fire_alarm_reset", "cancel_fire_evacuation"})
 _SYSTEM_COMMANDS = frozenset({"system_start", "system_stop", "system_restart"})
 _CONFIG_COMMANDS = frozenset({"set_navigation_speed"})
 _LOW_OBSTACLE_CONFIG_COMMANDS = frozenset({"set_low_obstacle_mode"})
-_SESSION_COMMANDS = frozenset({"cancel_guidance"})
+_SESSION_COMMANDS = frozenset({"cancel_guidance", "cancel_navigation"})
 
 # robot_id → 대기 중인 주행 명령. 로봇당 하나만 둔다.
 #

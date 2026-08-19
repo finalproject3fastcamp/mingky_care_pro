@@ -9,7 +9,6 @@ from geometry_msgs.msg import PoseStamped
 from mingky_guide_manager.low_obstacle import SidestepOutcome
 from mingky_interfaces.msg import GuideState
 from mingky_navigation_manager.navigation_manager_node import (
-    BUSY_ERROR,
     CLINICAL_ERROR,
     LOCALIZATION_ERROR,
     NavigationManager,
@@ -180,16 +179,33 @@ def test_temporary_pose_starts_one_nav2_goal(manager):
     }]
 
 
-def test_second_goal_is_rejected_while_test_is_active(manager):
+def test_second_goal_cancels_and_replaces_active_test(manager):
     node, published = manager
     node._on_goto_pose(_pose('first'))
+    first_handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(first_handle))
 
     node._on_goto_pose(_pose('second'))
 
-    assert len(node.nav.sent) == 1
-    assert published[-1]['status'] == 'rejected'
+    assert first_handle.cancelled == 1
+    assert len(node.nav.sent) == 2
+    assert published[-2]['status'] == 'canceled'
+    assert published[-2]['waypoint_name'] == 'first'
+    assert published[-1]['status'] == 'started'
     assert published[-1]['waypoint_name'] == 'second'
-    assert published[-1]['error_code'] == BUSY_ERROR
+
+
+def test_cancel_command_stops_active_test(manager):
+    node, published = manager
+    node._on_goto_pose(_pose('first'))
+    handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(handle))
+
+    node._on_cancel(Bool(data=True))
+
+    assert handle.cancelled == 1
+    assert node._active is False
+    assert published[-1]['status'] == 'failed'
 
 
 def test_patient_session_blocks_waypoint_test(manager):

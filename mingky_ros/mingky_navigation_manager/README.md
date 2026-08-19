@@ -5,10 +5,10 @@
 ## 책임
 
 - 저장 Waypoint와 화면에서 만든 임시 좌표를 `NavigateToPose` 목표로 변환
-- 동시에 하나의 시험 목표만 허용
+- 동시에 하나의 시험 목표만 실행하며 새 목표는 기존 목표·복구를 취소하고 교체
 - `/guide_manager/state`를 확인해 환자 안내 중 시험 주행 차단
 - 저전압·비상정지·환자 세션 시작 시 진행 중인 시험 목표 취소
-- 시작·성공·실패 결과를 `/navigation_manager/result`로 반환
+- 시작·성공·실패·교체 취소 결과를 `/navigation_manager/result`로 반환
 - 통합 실행에서는 Nav2 실패 시 프로젝트 Adaptive Recovery로 원래 목표 재시도
 
 환자 안내 순서, 검사실 goal에서 waiting 지점으로 이어지는 상태 전이, 충전소
@@ -25,7 +25,7 @@
 | 입력 | `/navigation_manager/cancel` | 상위 작업 취소 요청 (`std_msgs/Bool`) |
 | 입력 | `/scan` | Adaptive Recovery 탈출 후보 계산 (`sensor_msgs/LaserScan`) |
 | 출력 | `/navigation_manager/active` | 시험 목표 진행 여부 (`std_msgs/Bool`) |
-| 출력 | `/navigation_manager/result` | 시작·성공·실패 JSON (`std_msgs/String`) |
+| 출력 | `/navigation_manager/result` | 시작·성공·실패·취소 JSON (`std_msgs/String`) |
 
 ## Adaptive Recovery
 

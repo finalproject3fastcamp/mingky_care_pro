@@ -34,6 +34,8 @@ export function messageFor(code: string, payload: Record<string, unknown>): stri
       return '화재 대피소 도착'
     case 'fire.evacuation_failed':
       return `화재 대피 실패: ${p.reason ?? '알 수 없는 이유'}`
+    case 'fire.evacuation_canceled':
+      return '운영자 요청으로 화재 대피 주행 중단'
     case 'fire.inference_unavailable':
       return '화재 감지 서버 연결 끊김'
     case 'fire.inference_restored':
