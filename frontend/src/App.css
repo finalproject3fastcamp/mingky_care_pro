@@ -1346,6 +1346,26 @@
 .robot-map__toggle--particles::before { background: #10b981; }
 .robot-map__toggle--plan::before { background: #2563eb; }
 
+.robot-map__recovery-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.robot-map__recovery-key::before {
+  width: 16px;
+  height: 2px;
+  content: '';
+  background: repeating-linear-gradient(
+    90deg,
+    #f97316 0 5px,
+    transparent 5px 8px
+  );
+}
+
 .robot-map__toggle.off {
   opacity: 0.4;
   text-decoration: line-through;

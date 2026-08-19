@@ -19,9 +19,9 @@ def test_progress_checker_matches_small_robot_motion_scale() -> None:
     progress = params['controller_server']['ros__parameters']['progress_checker']
 
     assert progress['plugin'] == 'nav2_controller::PoseProgressChecker'
-    assert progress['required_movement_radius'] == pytest.approx(0.10)
-    assert progress['required_movement_angle'] == pytest.approx(0.25)
-    assert progress['movement_time_allowance'] == pytest.approx(10.0)
+    assert progress['required_movement_radius'] == pytest.approx(0.03)
+    assert progress['required_movement_angle'] == pytest.approx(0.10)
+    assert progress['movement_time_allowance'] == pytest.approx(8.0)
 
 
 def test_mppi_uses_live_costmap_for_dynamic_avoidance() -> None:
@@ -36,8 +36,10 @@ def test_mppi_uses_live_costmap_for_dynamic_avoidance() -> None:
     assert follow_path['model_dt'] * follow_path['time_steps'] == pytest.approx(2.0)
     assert follow_path['time_steps'] == 20
     assert follow_path['model_dt'] == pytest.approx(0.1)
-    assert follow_path['batch_size'] == 300
+    assert follow_path['batch_size'] == 200
     assert follow_path['iteration_count'] == 1
+    assert follow_path['vx_min'] == pytest.approx(0.0)
+    assert follow_path['PreferForwardCritic']['cost_weight'] == pytest.approx(8.0)
     assert follow_path['CostCritic']['consider_footprint'] is True
     assert controller['controller_frequency'] == pytest.approx(10.0)
     assert controller['failure_tolerance'] == pytest.approx(1.0)

@@ -81,7 +81,7 @@ interface LabelHandle {
 const LAYER_LABEL = {
   scan: '라이다',
   particles: '파티클',
-  plan: '경로',
+  plan: '원래 경로',
   signs: '안내',
 } as const
 
@@ -113,6 +113,7 @@ export interface Look {
   planWidth: number
   planOpacity: number
   planColor: string
+  recoveryPlanColor: string
   viewFrom: readonly [number, number, number]
 }
 
@@ -150,6 +151,7 @@ const LOOK: Look = {
   planWidth: 2.6,
   planOpacity: 0.71,
   planColor: '#2563eb',
+  recoveryPlanColor: '#f97316',
   /**
    * 기본 시점 방향. 건물 중심에서 이쪽으로 물러나 바라본다.
    * 낮게 볼수록 입체감은 살지만 바닥이 벽에 가린다 — 바닥에 그리는 라이다를
@@ -200,6 +202,7 @@ interface Handles {
   scan: THREE.Points
   particles: THREE.Points
   plan: Line2
+  recoveryPlan: Line2
   waypoints: THREE.Group
   invalidate: () => void
   resetView: () => void
@@ -213,6 +216,7 @@ export function HospitalMap3D({
   scan,
   particles,
   plan,
+  recoveryPlan,
   onSetPose,
   waypoints = [],
   onSelectWaypoint,
@@ -394,6 +398,23 @@ export function HospitalMap3D({
     planLine.visible = false
     scene.add(planLine)
 
+    const recoveryPlanMat = new LineMaterial({
+      color: LOOK.recoveryPlanColor,
+      linewidth: LOOK.planWidth,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      depthTest: false,
+      dashed: true,
+      dashSize: 5,
+      gapSize: 4,
+    })
+    const recoveryPlanLine = new Line2(new LineGeometry(), recoveryPlanMat)
+    recoveryPlanLine.frustumCulled = false
+    recoveryPlanLine.renderOrder = 6
+    recoveryPlanLine.visible = false
+    scene.add(recoveryPlanLine)
+
     const wpGroup = new THREE.Group()
     scene.add(wpGroup)
 
@@ -514,6 +535,7 @@ export function HospitalMap3D({
       camera.updateProjectionMatrix()
       // 굵은 선은 화면 크기를 알아야 두께를 계산한다.
       planMat.resolution.set(w, h)
+      recoveryPlanMat.resolution.set(w, h)
       // 글자 크기는 화면 폭을 따라간다.
       labelHost.style.fontSize = `${w * LOOK.signSize}px`
       invalidate()
@@ -645,6 +667,7 @@ export function HospitalMap3D({
       scan: scanPts,
       particles: particlePts,
       plan: planLine,
+      recoveryPlan: recoveryPlanLine,
       waypoints: wpGroup,
       invalidate,
       resetView,
@@ -772,6 +795,26 @@ export function HospitalMap3D({
   }, [plan, visible.plan])
 
   useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const pts: number[] = []
+    if (visible.plan && recoveryPlan) {
+      for (const [x, y] of recoveryPlan) {
+        if (pts.length >= MAX_PLAN * 3) break
+        const m = mapToModel(x, y)
+        // 원래 경로보다 조금 높여 겹쳐도 주황 점선이 구분되게 한다.
+        pts.push(m.u, 0.02, -m.v)
+      }
+    }
+    h.recoveryPlan.visible = pts.length >= 6
+    if (h.recoveryPlan.visible) {
+      h.recoveryPlan.geometry.setPositions(pts)
+      h.recoveryPlan.computeLineDistances()
+    }
+    h.invalidate()
+  }, [recoveryPlan, visible.plan])
+
+  useEffect(() => {
     const h = handles.current as (Handles & { setShowSigns?: (v: boolean) => void }) | null
     h?.setShowSigns?.(visible.signs)
   }, [visible.signs])
@@ -858,6 +901,9 @@ export function HospitalMap3D({
             {LAYER_LABEL[key]}
           </button>
         ))}
+        {recoveryPlan && recoveryPlan.length > 1 && (
+          <span className="robot-map__recovery-key">복구 경로</span>
+        )}
         {onSetPose && (
           <button
             type="button"

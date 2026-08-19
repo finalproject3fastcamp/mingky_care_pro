@@ -308,6 +308,7 @@ export function WaypointDashboard() {
             scan={teleop.scan}
             particles={teleop.particles}
             plan={teleop.plan}
+            recoveryPlan={teleop.recoveryPlan}
             waypoints={markers}
             onSelectWaypoint={setSelectedName}
           />

@@ -57,13 +57,14 @@ export interface WaypointMarker {
 const LAYER_LABEL = {
   scan: '라이다',
   particles: '파티클',
-  plan: '경로',
+  plan: '원래 경로',
 } as const
 
 type LayerKey = keyof typeof LAYER_LABEL
 
 export function RobotMap({
-  pose, live, scan, particles, plan, onSetPose, waypoints = [], onSelectWaypoint,
+  pose, live, scan, particles, plan, recoveryPlan, onSetPose,
+  waypoints = [], onSelectWaypoint,
 }: Props) {
   // 위치 지정 모드. 실수로 지도를 눌러 로봇 위치가 바뀌면 안 되므로,
   // 버튼으로 한 번 켜야 찍을 수 있게 한다.
@@ -130,6 +131,23 @@ export function RobotMap({
       ctx.stroke()
     }
 
+    // 실제로 선택되어 이동 중인 복구 경로만 별도 표시한다. 후보 검증용
+    // ComputePathToPose 결과는 로봇에서 걸러져 여기까지 오지 않는다.
+    if (visible.plan && recoveryPlan && recoveryPlan.length > 1) {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(249, 115, 22, 0.95)'
+      ctx.lineWidth = 2.5
+      ctx.setLineDash([7, 5])
+      ctx.beginPath()
+      recoveryPlan.forEach(([x, y], i) => {
+        const [px, py] = toPx(x, y)
+        if (i === 0) ctx.moveTo(px, py)
+        else ctx.lineTo(px, py)
+      })
+      ctx.stroke()
+      ctx.restore()
+    }
+
     // 파티클 — 퍼짐이 한눈에 보여야 하므로 작고 흐리게 많이.
     if (visible.particles && particles) {
       ctx.fillStyle = 'rgba(16, 185, 129, 0.55)'
@@ -192,7 +210,7 @@ export function RobotMap({
     ctx.strokeStyle = '#fff'
     ctx.lineWidth = 1.5
     ctx.stroke()
-  }, [meta, pose, scan, particles, plan, visible, tick, waypoints])
+  }, [meta, pose, scan, particles, plan, recoveryPlan, visible, tick, waypoints])
 
   if (failed) {
     return (
@@ -234,6 +252,9 @@ export function RobotMap({
             {LAYER_LABEL[key]}
           </button>
         ))}
+        {recoveryPlan && recoveryPlan.length > 1 && (
+          <span className="robot-map__recovery-key">복구 경로</span>
+        )}
         {onSetPose && (
           <button
             type="button"

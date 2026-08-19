@@ -14,6 +14,7 @@ from mingky_navigation_manager.navigation_manager_node import (
     NavigationManager,
     SAFETY_ERROR,
 )
+from nav_msgs.msg import Path
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
@@ -302,6 +303,27 @@ def test_adaptive_mode_uses_motion_free_behavior_tree(adaptive_manager):
     assert len(node.nav.sent) == 1
     assert node.nav.sent[0].behavior_tree.endswith(
         'navigate_no_recovery_navfn.xml')
+
+
+def test_plan_layers_hide_validation_and_split_active_recovery(adaptive_manager):
+    node, _ = adaptive_manager
+    route_plans = []
+    recovery_plans = []
+    node.route_plan_pub.publish = route_plans.append
+    node.recovery_plan_pub.publish = recovery_plans.append
+    message = Path()
+    message.poses = [PoseStamped(), PoseStamped()]
+
+    node._active = True
+    node._plan_phase = 'original'
+    node._on_nav_plan(message)
+    node._plan_phase = 'validation'
+    node._on_nav_plan(message)
+    node._plan_phase = 'recovery'
+    node._on_nav_plan(message)
+
+    assert route_plans == [message]
+    assert recovery_plans == [message]
 
 
 def test_aborted_goal_recovers_then_resends_original(adaptive_manager):

@@ -286,6 +286,7 @@ export function MedicalDashboard() {
                 scan={teleop.scan}
                 particles={teleop.particles}
                 plan={teleop.plan}
+                recoveryPlan={teleop.recoveryPlan}
                 onSetPose={teleop.setPose}
                 estop={teleop.appliedMode === 'estop'}
                 selected

@@ -32,6 +32,8 @@ export interface DiagLayers {
   particles: number[][] | null
   /** 전역 경로. 로봇이 어디로 가려는지. */
   plan: number[][] | null
+  /** Adaptive Recovery가 실제로 이동 중인 임시 경로. */
+  recoveryPlan: number[][] | null
 }
 
 interface TeleopState extends DiagLayers {
@@ -78,6 +80,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
     scan: null,
     particles: null,
     plan: null,
+    recoveryPlan: null,
   })
   const socketRef = useRef<WebSocket | null>(null)
   const modeStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -92,6 +95,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
       scan: null,
       particles: null,
       plan: null,
+      recoveryPlan: null,
     })
     if (!robotId) return
 
@@ -146,10 +150,12 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
         } else if (
           message.type === 'scan' ||
           message.type === 'particles' ||
-          message.type === 'plan'
+          message.type === 'plan' ||
+          message.type === 'recovery_plan'
         ) {
           const key = message.type === 'scan' ? 'scan'
-            : message.type === 'particles' ? 'particles' : 'plan'
+            : message.type === 'particles' ? 'particles'
+              : message.type === 'recovery_plan' ? 'recoveryPlan' : 'plan'
           setState((s) => ({ ...s, [key]: message.points as number[][] }))
         }
       }
@@ -163,7 +169,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
           ...s, connected: false, robotConnected: false,
           appliedMode: null,
           modeStatusRevision: s.modeStatusRevision + 1,
-          scan: null, particles: null, plan: null,
+          scan: null, particles: null, plan: null, recoveryPlan: null,
         }))
         // 회선이 흔들리는 환경이라 끊기는 것을 정상으로 보고 다시 건다.
         if (!closed) retry = setTimeout(open, 3000)

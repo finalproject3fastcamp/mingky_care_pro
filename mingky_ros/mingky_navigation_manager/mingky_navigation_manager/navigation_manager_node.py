@@ -23,11 +23,13 @@ from mingky_guide_manager.low_obstacle_driver import SidestepActionDriver
 from mingky_interfaces.msg import GuideState
 from mingky_smart_recovery.selector import (
     EscapeCandidate,
+    SelectorConfig,
     candidate_to_map,
     select_diverse_candidates,
     select_escape_candidates,
 )
 from nav2_msgs.action import ComputePathToPose, DriveOnHeading, NavigateToPose, Spin
+from nav_msgs.msg import Path as NavPath
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient
@@ -71,6 +73,7 @@ class NavigationManager(Node):
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
         self.declare_parameter('recovery_retry_delay_sec', 0.3)
+        self.declare_parameter('recovery_reverse_after_attempt', 6)
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -130,6 +133,8 @@ class NavigationManager(Node):
         ))
         self.recovery_retry_delay_sec = max(
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
+        self.recovery_reverse_after_attempt = max(
+            0, int(self.get_parameter('recovery_reverse_after_attempt').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -190,6 +195,10 @@ class NavigationManager(Node):
         self._test_context: dict | None = None
         self._pending_low_obstacle_context: dict | None = None
         self._low_obstacle_confirmed_count = 0
+        # Nav2의 /plan은 원래 경로, 복구 후보 검증, 실제 복구 경로가 같은
+        # 토픽을 공유한다. 관제에서 세 종류가 섞이지 않도록 현재 목적을
+        # 구분해 별도 토픽으로 다시 발행한다.
+        self._plan_phase = 'idle'
 
         state_qos = QoSProfile(
             depth=1,
@@ -198,6 +207,10 @@ class NavigationManager(Node):
         )
         self.result_pub = self.create_publisher(String, '~/result', 10)
         self.active_pub = self.create_publisher(Bool, '~/active', state_qos)
+        self.route_plan_pub = self.create_publisher(
+            NavPath, '~/route_plan', state_qos)
+        self.recovery_plan_pub = self.create_publisher(
+            NavPath, '~/recovery_plan', state_qos)
         self.obstacle_stop_pub = self.create_publisher(
             Bool, '/emergency_stop/obstacle', 10)
         self.create_subscription(String, '~/goto', self._on_goto, 10)
@@ -216,6 +229,7 @@ class NavigationManager(Node):
             self._on_scan,
             10,
         )
+        self.create_subscription(NavPath, '/plan', self._on_nav_plan, 10)
         range_qos = QoSProfile(depth=5)
         range_qos.reliability = ReliabilityPolicy.BEST_EFFORT
         self.create_subscription(
@@ -661,6 +675,8 @@ class NavigationManager(Node):
         if not self.nav.wait_for_server(timeout_sec=3.0):
             self._finish('failed', -3, 'Nav2 액션 서버가 없습니다.')
             return
+        self._plan_phase = 'original'
+        self.recovery_plan_pub.publish(NavPath())
         goal = NavigateToPose.Goal()
         goal.pose = self._goal_pose()
         if self.recovery_mode == 'adaptive' or self.planner_mode == 'smac2d':
@@ -770,6 +786,11 @@ class NavigationManager(Node):
                     math.cos(map_goal_angle - robot_yaw),
                 ),
                 failures=failures,
+                config=SelectorConfig(
+                    allow_reverse=(
+                        recovery_attempt >= self.recovery_reverse_after_attempt
+                    ),
+                ),
             ),
             limit=self.recovery_candidate_limit,
             minimum_separation_rad=self.recovery_candidate_separation_rad,
@@ -827,6 +848,7 @@ class NavigationManager(Node):
             return
         candidate = candidates[index]
         recovery['index'] = index + 1
+        self._plan_phase = 'validation'
         goal = ComputePathToPose.Goal()
         goal.goal = self._candidate_pose(recovery, candidate)
         goal.planner_id = (
@@ -888,6 +910,7 @@ class NavigationManager(Node):
 
     def _send_recovery_goal(
             self, recovery: dict, candidate: EscapeCandidate) -> None:
+        self._plan_phase = 'recovery'
         self._generation += 1
         recovery['generation'] = self._generation
         recovery['active_candidate'] = candidate
@@ -1007,6 +1030,7 @@ class NavigationManager(Node):
         self._goal_result_future = None
         self._active = False
         self._test_context = None
+        self._clear_test_plans()
         self._publish_active()
         self._publish_result(status, {
             **context,
@@ -1022,6 +1046,7 @@ class NavigationManager(Node):
         self._goal_result_future = None
         self._active = False
         self._test_context = None
+        self._clear_test_plans()
         self._publish_active()
         self._publish_result(status, {
             **context,
@@ -1031,6 +1056,21 @@ class NavigationManager(Node):
 
     def _publish_active(self) -> None:
         self.active_pub.publish(Bool(data=self._active))
+
+    def _on_nav_plan(self, msg: NavPath) -> None:
+        """후보 검증 경로를 숨기고 원래 경로와 실제 복구 경로만 분리한다."""
+        if self._active and self._plan_phase == 'validation':
+            return
+        if self._active and self._plan_phase == 'recovery':
+            self.recovery_plan_pub.publish(msg)
+            return
+        self.route_plan_pub.publish(msg)
+
+    def _clear_test_plans(self) -> None:
+        self._plan_phase = 'idle'
+        empty = NavPath()
+        self.route_plan_pub.publish(empty)
+        self.recovery_plan_pub.publish(empty)
 
     def _publish_result(self, status: str, payload: dict) -> None:
         self.result_pub.publish(String(data=json.dumps({

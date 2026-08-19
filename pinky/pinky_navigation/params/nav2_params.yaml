@@ -87,7 +87,7 @@ controller_server:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 20
       model_dt: 0.1
-      batch_size: 300
+      batch_size: 200
       iteration_count: 1
       ax_max: 2.5
       ax_min: -2.5
@@ -98,7 +98,9 @@ controller_server:
       vy_std: 0.0
       wz_std: 0.25
       vx_max: 0.20
-      vx_min: -0.08
+      # 안내·Waypoint 주행은 후진하지 않는다. 뒤쪽으로 경로를 바꿔야 해도
+      # 제자리 회전한 다음 전진한다.
+      vx_min: 0.0
       vy_max: 0.0
       wz_max: 1.0
       prune_distance: 1.0
@@ -162,7 +164,7 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.0
+        cost_weight: 8.0
         threshold_to_consider: 0.4
 
     # ==========================================================
@@ -208,9 +210,9 @@ controller_server:
     progress_checker:
       # 소형 로봇이 코너에서 제자리 회전해도 진행으로 인정한다.
       plugin: "nav2_controller::PoseProgressChecker"
-      movement_time_allowance: 10.0              # [s] 이 시간 안에 아래 거리 또는 각도를 진행해야 함
-      required_movement_radius: 0.10             # [m] 현재 맵·로봇 크기에 맞춘 최소 이동 거리
-      required_movement_angle: 0.25              # [rad] 제자리 회전 약 14도도 정상 진행으로 인정
+      movement_time_allowance: 8.0               # [s] 완전히 멈춘 상태는 빠르게 복구로 넘긴다
+      required_movement_radius: 0.03             # [m] 목표 10cm 근처의 미세 접근도 정상 진행으로 인정
+      required_movement_angle: 0.10              # [rad] 제자리 회전 약 6도도 정상 진행으로 인정
 
 
 local_costmap:

@@ -26,6 +26,8 @@
 | 입력 | `/scan` | Adaptive Recovery 탈출 후보 계산 (`sensor_msgs/LaserScan`) |
 | 출력 | `/navigation_manager/active` | 시험 목표 진행 여부 (`std_msgs/Bool`) |
 | 출력 | `/navigation_manager/result` | 시작·성공·실패·취소 JSON (`std_msgs/String`) |
+| 출력 | `/navigation_manager/route_plan` | 원래 목적지까지의 경로 (`nav_msgs/Path`) |
+| 출력 | `/navigation_manager/recovery_plan` | 실제 이동 중인 임시 복구 경로 (`nav_msgs/Path`) |
 
 ## Adaptive Recovery
 
@@ -33,6 +35,12 @@
 시험주행에도 전달합니다. Nav2가 목표를 중단하면 `mingky_smart_recovery`가
 LiDAR로 만든 탈출 후보를 `ComputePathToPose`로 먼저 검증하고, 임시 지점에
 도착한 뒤 원래 Waypoint를 다시 보냅니다.
+
+후보 검증만 한 경로는 관제로 내보내지 않습니다. 원래 경로는 파란색으로
+유지하고, 실제 선택된 복구 경로만 주황색 점선으로 별도 표시할 수 있도록 두
+출력 토픽을 분리합니다. 초기 복구에서는 로봇 뒤쪽 후보를 제외하고, 전방·측방
+후보가 반복해서 실패한 뒤에만 뒤쪽 공간을 검토합니다. 주행 컨트롤러 자체는
+음수 선속도를 허용하지 않아 뒤쪽 목표도 회전 후 전진으로 접근합니다.
 
 단독 실행 기본값은 기존 동작을 보존하는 `default`입니다. 통합 실행의
 Adaptive Recovery는 일시적인 동적 장애물이 사라질 때까지 0.3초 간격으로
