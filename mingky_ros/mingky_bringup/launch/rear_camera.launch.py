@@ -58,7 +58,7 @@ def generate_launch_description() -> LaunchDescription:
                 'camera_info_url': LaunchConfiguration('camera_info_url'),
             },
         ],
-        prefix='nice -n 5',
+        prefix=['nice -n 5'],
     )
 
     return LaunchDescription([

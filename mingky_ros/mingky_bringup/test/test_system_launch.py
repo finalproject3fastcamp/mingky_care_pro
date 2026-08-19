@@ -119,7 +119,7 @@ def test_rear_tracking_uses_rate_limited_compressed_stream() -> None:
     }
 
     assert '/rear_camera/tracking/image_raw/compressed' in camera_text
-    assert "prefix='nice -n 5'" in camera_text
+    assert "prefix=['nice -n 5']" in camera_text
     assert follower_params['image_topic'] == (
         '/rear_camera/tracking/image_raw/compressed')
     assert follower.get('launch-prefix') == 'nice -n 5'

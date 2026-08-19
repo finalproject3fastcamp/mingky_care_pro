@@ -128,7 +128,7 @@ def generate_launch_description() -> LaunchDescription:
                     'arming_fail_disarm_after'),
             },
         ],
-        prefix='nice -n 5',
+        prefix=['nice -n 5'],
     )
 
     return LaunchDescription([

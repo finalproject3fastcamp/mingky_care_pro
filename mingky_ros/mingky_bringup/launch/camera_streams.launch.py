@@ -86,7 +86,7 @@ def _rear_stream_action() -> Node:
             'max_width': LaunchConfiguration('preview_max_width'),
             'jpeg_quality': LaunchConfiguration('preview_jpeg_quality'),
         }],
-        prefix='nice -n 5',
+        prefix=['nice -n 5'],
     )
 
 
