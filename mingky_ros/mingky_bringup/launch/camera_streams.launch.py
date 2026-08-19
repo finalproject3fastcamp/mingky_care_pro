@@ -132,7 +132,7 @@ def generate_launch_description() -> LaunchDescription:
             default_value='15.0',
             description='전방 준비 신호 최대 대기 시간. 초과 시 후방은 계속 시작',
         ),
-        DeclareLaunchArgument('preview_max_fps', default_value='10.0'),
+        DeclareLaunchArgument('preview_max_fps', default_value='5.0'),
         DeclareLaunchArgument('preview_max_width', default_value='640'),
         DeclareLaunchArgument('preview_jpeg_quality', default_value='60'),
         GroupAction(

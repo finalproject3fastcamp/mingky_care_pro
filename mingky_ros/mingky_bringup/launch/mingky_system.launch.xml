@@ -43,7 +43,7 @@
     <arg name="camera_profile" default=""/>
     <arg name="rear_preview_port" default="8092"/>
     <arg name="front_camera_ready_timeout" default="15.0"/>
-    <arg name="camera_preview_max_fps" default="10.0"/>
+    <arg name="camera_preview_max_fps" default="5.0"/>
     <arg name="camera_preview_max_width" default="640"/>
     <arg name="camera_preview_jpeg_quality" default="60"/>
     <!-- 로봇 설치 시 gateway와 teleop bridge는 systemd 상시 서비스다. gateway를

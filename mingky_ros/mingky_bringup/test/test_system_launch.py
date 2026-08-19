@@ -69,7 +69,7 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     assert _argument(root, 'qr_preview_port').get('default') == '8091'
     assert _argument(root, 'rear_preview_port').get('default') == '8092'
     assert _argument(root, 'front_camera_ready_timeout').get('default') == '15.0'
-    assert _argument(root, 'camera_preview_max_fps').get('default') == '10.0'
+    assert _argument(root, 'camera_preview_max_fps').get('default') == '5.0'
     assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
     qr_distance_arg = _argument(root, 'start_rear_qr_distance')
     assert qr_distance_arg.get('default') == 'true'
