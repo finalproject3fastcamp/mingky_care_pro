@@ -30,29 +30,22 @@ amcl:
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0
-    update_min_a: 0.1
-    update_min_d: 0.15
+    # 10cm 도착 허용 범위보다 늦게 보정하면 실제로 도착하고도 AMCL 좌표가
+    # 남아 있거나 한 번에 튈 수 있다. Pi 5 부하를 과도하게 늘리지 않는
+    # 범위에서 작은 로봇의 5cm 이동과 약 3도 회전도 위치 보정에 반영한다.
+    update_min_a: 0.05
+    update_min_d: 0.05
     z_hit: 0.5
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
     scan_topic: scan
-    set_initial_pose: true
-    # amcl 은 initial_pose.x/.y/.z/.yaw 를 개별 파라미터로 선언한다.
-    # [0, 0, 0] 리스트 형식은 선언되지 않은 이름이라 조용히 무시되고,
-    # 로봇은 항상 (0,0,0)에서 시작한다고 확신한 채 켜졌다 (2026-08-11
-    # 로봇에서 ros2 param get 으로 직접 확인). 아래는 충전소 좌표.
-    #
-    # 핑키 1호·2호가 이 파일을 공유하는데, 두 충전소는 위치는 거의 같고
-    # yaw 만 약 176도 다르다 (실측, PINKY_HANDOFF.md). 그래서 이 값은 한쪽
-    # 로봇에겐 정확하고 다른 쪽에겐 약 180도 틀린 채로 시작할 수 있다.
-    # 그 오차를 잡아주는 게 auto_localize_node 의 역할이다 -- 이 값은
-    # "대충 맞는 시작점" 정도면 충분하고, 완벽하지 않아도 된다.
-    initial_pose:
-      x: 1.172951
-      y: 0.176816
-      z: 0.0
-      yaw: -1.125216
+    # 충전소 좌표를 정답으로 가정하지 않는다. auto_localize_node가 현재
+    # LiDAR와 맵을 비교해 유일한 후보를 찾았을 때만 /initialpose를 발행한다.
+    set_initial_pose: false
+    # lifecycle 재시작 때 이전 pose를 조용히 재사용하지 않고 새로 검증된
+    # /initialpose를 기다린다. 잘못된 위치가 재시작으로 되살아나는 것을 막는다.
+    always_reset_initial_pose: true
 
 bt_navigator:
   ros__parameters:
@@ -60,7 +53,9 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: odom
     bt_loop_duration: 10
-    default_server_timeout: 20
+    # Pi 5가 카메라·QR과 동시에 동작할 때 20ms 안에 action goal ACK를
+    # 못 보내 정상 목표가 취소됐다. 계산 결과 제한과 별개인 통신 여유다.
+    default_server_timeout: 500
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
@@ -87,68 +82,132 @@ controller_server:
     /bond_disable_heartbeat_timeout: true    # 라이프사이클 노드 간 상태 체크(하트비트) 타임아웃 무시 여부
 
     # ==========================================================
-    # 1. 주행 컨트롤러 (Regulated Pure Pursuit) 파라미터
+    # 1. 주행 컨트롤러 (MPPI) 파라미터
     # ==========================================================
+    # 안내 주행과 Waypoint 시험주행은 모두 FollowPath를 사용한다. MPPI가
+    # 2초 앞의 여러 속도 궤적을 비교해 새로 들어온 LiDAR 장애물을 정지 후
+    # 복구로 넘기기 전에 우선 우회한다. Pi 5의 지속 부하를 낮추기 위해
+    # 10 Hz에서 20개 시점과 200개 표본만 평가한다.
     FollowPath:
-      plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
-      stateful: true                         # 플러그인이 이전 상태를 기억할지 여부
+      # Smac2D 경로의 진행 방향이 로봇 자세와 크게 다르면 MPPI에 넘기기 전
+      # 제자리에서 정렬한다. XY 목표에 들어오면 최종 yaw도 Shim이 맡아,
+      # 위치 이동과 최종 방향 점수가 충돌해 미세 전진하는 교착을 막는다.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 0.52
+      angular_disengage_threshold: 0.17
+      forward_sampling_distance: 0.15
+      rotate_to_heading_angular_vel: 0.6
+      max_angular_accel: 1.5
+      max_cost_threshold: 254.0
+      simulate_ahead_time: 0.5
+      rotate_to_goal_heading: true
+      # 후진을 막은 상태에서 재계획 경로가 로봇 뒤로 바뀌면 MPPI가 큰 원을
+      # 그리지 않도록, 새 경로마다 진행 방향을 다시 확인하고 필요하면
+      # 제자리 회전한 뒤 전진한다.
+      rotate_to_heading_once: false
+      closed_loop: true
+      use_path_orientations: false
 
-      # 기본 주행 및 속도
-      desired_linear_vel: 0.2                # [m/s] 목표 기본 직진 속도
-      allow_reversing: false                 # 후진 허용 여부 (false: 무조건 전진/제자리 회전으로 해결)
-      max_angular_accel: 3.2                 # [rad/s^2] 최대 각가속도 (회전할 때 얼마나 빨리 가속할지)
-
-      # 경로 추종 (Lookahead, 시선 두기)
-      lookahead_dist: 0.6                    # [m] 기본 전방 주시 거리
-      use_velocity_scaled_lookahead_dist: true # 현재 속도에 비례해 주시 거리를 늘릴지 여부
-      lookahead_time: 1.5                    # [s] 속도 비례 주시 시간 (속도 * 시간 = 주시 거리)
-      min_lookahead_dist: 0.3                # [m] 최소 주시 거리
-      max_lookahead_dist: 0.9                # [m] 최대 주시 거리
-      curvature_lookahead_dist: 0.6          # [m] 경로의 곡률(커브)을 계산하기 위해 내다보는 거리
-      use_fixed_curvature_lookahead: false   # 곡률 계산용 거리를 고정값으로 쓸지 여부 (false면 주시거리와 연동)
-
-      # 제자리 회전 (고개 먼저 돌리기)
-      use_rotate_to_heading: true            # 경로 방향과 로봇 헤딩이 다를 때 제자리 회전 먼저 하기
-      rotate_to_heading_min_angle: 0.35      # [rad] 약 20도 이상 차이나면 제자리 회전 모드 진입
-      rotate_to_heading_angular_vel: 1.0     # [rad/s] 제자리 회전할 때의 회전 속도
-
-      # 커브길 감속 (Regulated)
-      use_regulated_linear_velocity_scaling: false  # 급커브에서 속도 줄이기
-      regulated_linear_scaling_min_radius: 0.5     # [m] 이 반경보다 좁은 커브를 돌 때는 속도를 최소로 낮춤
-      regulated_linear_scaling_min_speed: 0.05     # [m/s] 커브를 돌 때 낼 수 있는 최소 속도 방어선
-
-      # 장애물 접근 시 감속 (Cost Regulated)
-      use_cost_regulated_linear_velocity_scaling: true # 장애물 근처(비용맵 높은 곳)에서 속도 줄이기
-      cost_scaling_dist: 0.6                 # [m] 장애물 중심으로부터 이 거리 안쪽일 때 감속 고려
-      cost_scaling_gain: 1.5                 # 장애물 감속 민감도 (클수록 더 팍 줄임)
-      inflation_cost_scaling_factor: 3.0     # 컨트롤러 내부에서 비용을 계산할 때 쓰는 인플레이션 가중치
-
-      # 목적지 접근 시 감속
-      approach_velocity_scaling_dist: 0.6    # [m] 목표 지점까지 이 거리만큼 남았을 때부터 서서히 감속
-      min_approach_linear_velocity: 0.05     # [m/s] 목표 지점 근처에서 속도를 줄이더라도 이 속도 밑으론 안 내림
-
-      # 안전 및 충돌 방지
-      use_collision_detection: true          # 현재 위치부터 주시점(Lookahead)까지 충돌 여부 미리 검사
-      max_allowed_time_to_collision_up_to_carrot: 1.0 # 주시점(Carrot)까지 가는 도중 충돌까지 허용되는 최대 시간 
-      max_robot_pose_search_dist: 1.4875     # [m] 전역 경로 상에서 로봇과 가장 가까운 점을 찾을 때 최대 탐색 거리
-      transform_tolerance: 0.2               # [s] TF(좌표계 변환) 데이터 최대 허용 지연 시간
-
-      # 취소/종료 시 동작
-      use_cancel_deceleration: false         # 내비게이션 취소 명령이 들어왔을 때 팍 멈추지 않고 부드럽게 감속할지
-      cancel_deceleration: 3.2               # [m/s^2] 취소 시 적용할 감속도
-      interpolate_curvature_after_goal: false # 목표 도달 후 경로 곡률 보간을 계속할지 여부
+      # Rotation Shim이 초기·최종 회전만 담당하고, 실제 경로 추종과 동적
+      # 장애물 회피는 기존 MPPI가 그대로 수행한다. Jazzy Shim은 내부
+      # controller를 같은 FollowPath namespace로 구성하므로 파라미터도 같은
+      # 단계에 둔다.
+      time_steps: 20
+      model_dt: 0.1
+      batch_size: 200
+      iteration_count: 1
+      ax_max: 2.5
+      ax_min: -2.5
+      ay_max: 0.0
+      ay_min: 0.0
+      az_max: 3.2
+      vx_std: 0.10
+      vy_std: 0.0
+      wz_std: 0.25
+      vx_max: 0.20
+      # 안내·Waypoint 주행은 후진하지 않는다. 뒤쪽으로 경로를 바꿔야 해도
+      # 제자리 회전한 다음 전진한다.
+      vx_min: 0.0
+      vy_max: 0.0
+      wz_max: 1.0
+      prune_distance: 1.0
+      transform_tolerance: 0.2
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: false
+      regenerate_noises: false
+      critics: [
+        "ConstraintCritic", "CostCritic", "GoalCritic",
+        "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+        "PathAngleCritic", "PreferForwardCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+        near_collision_cost: 253
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        trajectory_point_step: 2
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.8
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        # 멀리서 최종 yaw를 맞추느라 목표 위치로 가지 못하는 교착을 막는다.
+        # XY 허용 범위 밖에서는 경로 추종을 우선하고, 최종 회전은 Shim이 맡는다.
+        threshold_to_consider: 0.10
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.4
+        offset_from_furthest: 12
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.8
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.4
+        max_angle_to_furthest: 1.0
+        mode: 0
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 8.0
+        threshold_to_consider: 0.4
 
     # ==========================================================
     # 2. 컨트롤러 서버 공통 설정
     # ==========================================================
     controller_plugins: ["FollowPath"]           # 메인 주행 플러그인 (위에서 설정한 이름)
-    controller_frequency: 20.0                   # [Hz] 제어 명령(cmd_vel)을 1초에 20번 내보냄
+    controller_frequency: 10.0                   # [Hz] 제어 명령(cmd_vel)을 1초에 10번 내보내 Pi 5 부하를 제한
     action_server_result_timeout: 10.0           # [s] 액션 서버 결과 대기 최대 시간
     autostart_node: false                        # 노드 켤 때 자동 활성화 여부
     bond_heartbeat_period: 0.1                   # [s] 시스템 상태 체크(하트비트) 주기
     costmap_update_timeout: 0.3                  # [s] 코스트맵 업데이트가 이 시간 지연되면 멈춤
     enable_stamped_cmd_vel: false                # TwistStamped 메시지 대신 일반 Twist 메시지 사용
-    failure_tolerance: 0.3                       # [s] 제어 계산 실패를 허용하는 시간
+    failure_tolerance: 1.0                       # [s] 순간 센서 흔들림은 즉시 ABORTED로 만들지 않는다
     publish_zero_velocity: true                  # 목표 도달/취소 시 확실하게 정지하도록 0 속도 명령 발행
     speed_limit_topic: "speed_limit"             # 속도 제한 구역 적용 시 구독할 토픽 이름
     odom_topic: "odom"                           # 현재 속도를 읽어올 오도메트리 토픽
@@ -179,9 +238,11 @@ controller_server:
     progress_checker_plugins: ["progress_checker"]
 
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
-      movement_time_allowance: 10.0              # [s] 이 시간 동안 아래 거리만큼 못 움직이면 끼인 것으로 판단
-      required_movement_radius: 0.5              # [m] 위 시간 동안 최소 0.5m 반경은 벗어나야 함 (못 벗어나면 Recovery 실행)
+      # 소형 로봇이 코너에서 제자리 회전해도 진행으로 인정한다.
+      plugin: "nav2_controller::PoseProgressChecker"
+      movement_time_allowance: 4.0               # [s] 경로 정렬·코너 회전은 기다리고 실제 정체만 복구로 넘긴다
+      required_movement_radius: 0.01             # [m] 1cm 이상 이동하면 정상 진행으로 인정
+      required_movement_angle: 0.035             # [rad] 거리 이동이 없어도 제자리 회전 약 2도를 진행으로 인정
 
 
 local_costmap:
@@ -189,7 +250,7 @@ local_costmap:
     ros__parameters:
       footprint_padding: 0.01                    # global_costmap 과 맞춘다. 생략하면 Nav2 기본값 0.01 이지만 명시해 둔다
       update_frequency: 5.0
-      publish_frequency: 2.0
+      publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true
@@ -198,20 +259,18 @@ local_costmap:
       resolution: 0.025                          # 맵(yun_map_highres_clean)이 0.025 다. 굵으면 벽이 실제보다 두꺼워진다
       #robot_radius: 0.22
       footprint: '[[0.06, 0.06], [0.06, -0.06], [-0.06, -0.06], [-0.06, 0.06]]'
-      plugins: ["voxel_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.08
-      voxel_layer:
-        plugin: "nav2_costmap_2d::VoxelLayer"
+        # MPPI footprint 대각 반경(약 0.099m)을 간신히 넘기는 최소값이다.
+        # 전역 경로의 0.08m는 유지해 좁은 통로 선택 특성은 바꾸지 않는다.
+        inflation_radius: 0.10
+      # 입력이 2D LaserScan뿐이므로 3D voxel 적재·발행 비용을 사용하지 않는다.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        publish_voxel_map: True
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
         max_obstacle_height: 2.0
-        mark_threshold: 0
         observation_sources: scan
         scan:
           topic: /scan
@@ -223,9 +282,6 @@ local_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
       always_send_full_costmap: True
 
 global_costmap:
@@ -280,17 +336,20 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    # 전용 BT의 1Hz 재계획보다 충분히 빠르면서 Pi 5에 불필요한 20Hz
+    # 성능 경고를 만들지 않는 기준이다.
+    expected_planner_frequency: 5.0
     planner_plugins: ["GridBased", "Smac2D"]
     costmap_update_timeout: 1.0
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
+      # 요청 지점에 도달할 수 없으면 가까운 지점을 성공으로 돌려주지 않는다.
+      tolerance: 0.0
       use_astar: false
       allow_unknown: true
     Smac2D:
       plugin: "nav2_smac_planner::SmacPlanner2D"
-      tolerance: 0.5
+      tolerance: 0.0
       allow_unknown: true
       max_planning_time: 2.0
       cost_travel_multiplier: 2.0

@@ -43,7 +43,60 @@ export interface ActiveSession {
 }
 
 /**
- * GET /robots 응답. schemas.py 의 RobotOut 와 1:1.
+ * 로봇 종류와 무관하게 성립하는 것. schemas.py 의 RobotBase 와 1:1.
+ *
+ * §4.3 의 공통 축이다 — 생존·형상·리소스. 배터리도 세션도 여기 없다.
+ */
+interface RobotCommon {
+  robot_id: string
+  display_name: string
+  domain_id: number | null
+  is_active: boolean
+  last_seen_at: string | null
+  link_state: 'online' | 'offline' | 'unknown'
+  runtime_reported_at: string | null
+  /**
+   * 로봇이 heartbeat 로 보고한 자원·큐 상태. 전부 백엔드 인메모리다.
+   *
+   * 구버전 게이트웨이는 안 보내므로 null 이 정상이다. **null 과 0 을
+   * 구분해서 그려야 한다** — "보고 안 함" 과 "0건" 은 다른 사실이다.
+   */
+  cpu_total_pct: number | null
+  queue_pending: number | null
+  max_node_cpu_pct: number | null
+  max_node_cpu_name: string | null
+  inventory_hash: string | null
+}
+
+/**
+ * 토픽 하나의 나이와 판정. schemas.py 의 TopicAgeOut 과 1:1 (§7.2).
+ *
+ * **state 를 프론트가 다시 계산하지 않는다.** 임계는 서버의
+ * config/topic_watch.yaml 에 있고, 화면이 자기 숫자로 색을 칠하면 설정을
+ * 고쳐도 화면 색이 안 바뀐다.
+ */
+export interface TopicAge {
+  topic: string
+  /** 마지막 수신으로부터 경과. 한 번도 못 받았으면 감시 시작부터 잰 값이다. */
+  age_sec: number | null
+  /** 측정 주기. 표본이 하나뿐이면 null 이다 — 0 과 구분해야 한다. */
+  hz: number | null
+  expected_hz: number | null
+  /**
+   * fresh 정상 · slow 늦음 · stale 사실상 끊김 ·
+   * idle 상시 발행이 아닌 토픽이 쉬는 중(정상) ·
+   * missing 로봇이 나이를 못 냄 · unwatched 감시 노드가 안 보고 있음 ·
+   * unrated 정본에 임계가 없어 판정하지 않음
+   */
+  state: 'fresh' | 'slow' | 'stale' | 'idle' | 'missing' | 'unwatched' | 'unrated'
+  /** 끊기면 이벤트를 발행하는 상시 토픽인가. */
+  always_on: boolean
+  /** 이 토픽이 끊기면 무엇이 안 되는가. 문구도 서버가 준다. */
+  why: string
+}
+
+/**
+ * 주행 로봇(핑키). schemas.py 의 MobileRobotOut 과 1:1.
  *
  * 배터리는 2분 주기 로그의 최신값이지 실시간이 아니다.
  * battery_recorded_at 을 함께 보여줘야 사용자가 stale 인지 알 수 있다.
@@ -51,12 +104,8 @@ export interface ActiveSession {
  * armed_at 은 DB 컬럼이 아니라 백엔드 인메모리 (app/arming.py) 다.
  * 세션 시작 전 의료진이 "이 로봇 쓰겠다" 를 표시한 시각.
  */
-export interface Robot {
-  robot_id: string
-  robot_type: string
-  display_name: string
-  domain_id: number | null
-  is_active: boolean
+export interface MobileRobot extends RobotCommon {
+  robot_type: 'mobile'
   battery_voltage: number | null
   battery_percent: number | null
   battery_recorded_at: string | null
@@ -65,11 +114,227 @@ export interface Robot {
   last_session_ended_at: string | null
   last_session_end_reason: string | null
   armed_at: string | null
-  last_seen_at: string | null
-  link_state: 'online' | 'offline' | 'unknown'
   system_state: 'active' | 'activating' | 'deactivating' | 'inactive' | 'failed' | 'unknown'
   localization_active: boolean
-  runtime_reported_at: string | null
+  fire_alarm_active: boolean | null
+  returning_to_dock: boolean
+  navigation_speed_mps: number | null
+  low_obstacle_mode: 'disabled' | 'sidestep' | null
+  guide_robot_state:
+    | 'idle' | 'moving' | 'waiting' | 'charging' | 'battery_low'
+    | 'comm_lost' | 'paused' | 'returning_to_dock' | null
+  /**
+   * 토픽 주기 감시 (§7.2). ROS 개념이라 팔에는 없다.
+   *
+   * 빈 배열은 "이 게이트웨이가 토픽을 감시하지 않는다" 는 뜻이지 토픽이
+   * 죽었다는 뜻이 아니다. 화면이 그 둘을 구분해서 그려야 한다.
+   * 나쁜 것부터 정렬돼 온다 — 다시 정렬하지 않는다.
+   */
+  topics: TopicAge[]
+}
+
+/** Dynamixel 이 직접 보고한 하드웨어 에러 (§4.4). */
+export interface ServoFault {
+  joint: string
+  fault_bits: number | null
+  temp_c: number | null
+  /** 해소를 알리는 이벤트가 없다. 나이를 보여주지 않으면 3일 전 결함이 방금
+   *  일어난 것처럼 보인다. */
+  occurred_at: string
+}
+
+/**
+ * 조인트 하나의 최신값과 추세. schemas.py 의 ServoReadingOut 과 1:1 (§4.4).
+ *
+ * **지금 뜨거운 것과 오르는 중인 것은 다른 사실이다.** 40℃ 인데 회차마다
+ * 오르는 조인트가, 55℃ 에서 평평한 조인트보다 나쁜 신호다. 그래서 state 와
+ * rising 이 따로 온다.
+ */
+export interface ServoReading {
+  joint: string
+  recorded_at: string
+  temp_c: number | null
+  current_ma: number | null
+  voltage_v: number | null
+  /** 0 은 '정상이라고 읽었다', null 은 '못 읽었다'. 다른 사실이다. */
+  hardware_error: number | null
+  state: 'fault' | 'hot' | 'warm' | 'ok' | 'unknown'
+  warn_temp_c: number | null
+  hot_temp_c: number | null
+  /** 신뢰할 만할 때만 온다. 틀린 추세는 없는 추세보다 나쁘다. */
+  slope_c_per_hour: number | null
+  rising: boolean
+  sample_count: number
+}
+
+/** GET /robots/{id}/servos. 나쁜 것부터 정렬돼 온다. */
+export interface ServoHealth {
+  robot_id: string
+  window_min: number
+  servos: ServoReading[]
+}
+
+/** 팔 전용 지표. schemas.py 의 ManipulatorDetail 과 1:1 (§7.2 · §7.3). */
+export interface ManipulatorDetail {
+  policy_checkpoint_id: string | null
+  policy_dataset_revision: string | null
+  policy_loaded_at: string | null
+  /** 시작만 하고 아직 끝나지 않은 사이클. null 이면 유휴다. */
+  active_dispense_id: string | null
+  active_started_at: string | null
+  /** 사람이 홈 복귀를 지시해야 다음 사이클이 시작된다 (§4.4). */
+  homing_required: boolean
+  homing_reason: string | null
+  last_servo_fault: ServoFault | null
+  window: number
+  /** 창을 못 채운 표본. 2건에 1건 실패를 50% 로 그리면 안 된다. */
+  window_cycles: number
+  sample_complete: boolean
+  cycles_completed: number
+  cycles_aborted: number
+  last_cycle_ended_at: string | null
+  pick_succeeded: number
+  pick_failed: number
+  /** 재시도로 성공한 건. 한 번에 집은 것과 구분해야 정책 품질이 보인다. */
+  pick_retried: number
+  /** 표본이 0 이면 null 이다. 0 과 구분해서 그려야 한다. */
+  pick_success_rate: number | null
+  cycle_time_p50_ms: number | null
+  cycle_time_p95_ms: number | null
+}
+
+/**
+ * 조제 로봇(OMX). schemas.py 의 ManipulatorRobotOut 과 1:1.
+ *
+ * arming 도 세션도 배터리도 없다. 없는 필드를 null 로 받지 않는 것이 이
+ * 분리의 전부다 — 팔에 배터리 카드를 그리는 실수가 컴파일 타임에 걸린다.
+ */
+export interface ManipulatorRobot extends RobotCommon {
+  robot_type: 'manipulator'
+  detail: ManipulatorDetail
+}
+
+/**
+ * GET /robots 응답 한 건. robot_type 이 discriminant 다 (§7.3).
+ *
+ * 런타임 `if (robot.robot_type === 'mobile')` 로는 "팔에 배터리 카드를 렌더"
+ * 하는 실수가 안 잡히지만, 유니온으로 두면 컴파일 타임에 잡힌다.
+ */
+export type Robot = MobileRobot | ManipulatorRobot
+
+/**
+ * 타입 가드. `.filter(isMobile)` 로 쓰면 걸러진 배열이 MobileRobot[] 이 된다.
+ *
+ * `.filter((r) => r.robot_type === 'mobile')` 는 TS 가 Robot[] 로 남겨서
+ * 배터리를 읽는 순간 다시 에러가 난다.
+ */
+export function isMobile(robot: Robot): robot is MobileRobot {
+  return robot.robot_type === 'mobile'
+}
+
+export function isManipulator(robot: Robot): robot is ManipulatorRobot {
+  return robot.robot_type === 'manipulator'
+}
+
+/** GET /robots/{id}/inventory 응답. schemas.py 의 RobotInventoryOut 과 1:1. */
+export interface NodeGraphInfo {
+  name: string
+  namespace: string
+  count: number
+}
+
+export interface ProcessInfo {
+  pid: number
+  install_path: string
+  workspace_path: string | null
+  /** cmdline 리매핑에서 **추정한** 이름. 중복 판정에는 쓰지 않는다. */
+  matched_node_names: string[]
+  cpu_pct: number | null
+  /** 누적 CPU 초. 순간 100% 는 정상일 수 있지만 11시간 누적은 아니다. */
+  cpu_seconds_total: number | null
+}
+
+export interface WorkspaceInfo {
+  path: string
+  commit: string | null
+  branch: string | null
+  /** 커밋 안 된 변경이 있으면 커밋 해시만으로 재현이 불가능하다. */
+  dirty: boolean
+  process_count: number
+}
+
+export interface DuplicateNode {
+  name: string
+  namespace: string
+  count: number
+  severity: 'error' | 'warning'
+  reason: string
+}
+
+export interface RobotInventory {
+  robot_id: string
+  inventory_hash: string
+  reported_at: string
+  node_graph: NodeGraphInfo[]
+  processes: ProcessInfo[]
+  workspaces: WorkspaceInfo[]
+  ros_domain_id: number | null
+  /** 심각도 판정은 서버가 한다. 프론트가 다시 하면 두 곳이 어긋난다. */
+  duplicates: DuplicateNode[]
+  mixed_workspaces: boolean
+}
+
+/**
+ * 로봇 한 대가 지금 무엇으로 돌고 있는가. schemas.py 의 RobotConfigOut 과 1:1.
+ *
+ * 타입별로 채워지는 칸이 다르다. mobile 은 코드·맵, manipulator 는 코드가
+ * 아니라 정책 체크포인트와 데이터셋 revision 이 버전이다 (§4.4).
+ */
+export interface RobotConfig {
+  robot_id: string
+  robot_type: string
+  display_name: string
+  /** null 이면 한 번도 형상을 보고하지 않았다. OMX 는 정상적으로 null 이다. */
+  reported_at: string | null
+  commit: string | null
+  branch: string | null
+  /** 커밋 안 된 변경. 해시만으로 재현이 불가능하다는 뜻이다. */
+  dirty: boolean
+  workspace_path: string | null
+  map_name: string | null
+  /** 판정은 이름이 아니라 지문으로 한다. 같은 이름의 다른 맵이 실제로 있다. */
+  map_hash: string | null
+  policy_checkpoint_id: string | null
+  policy_dataset_revision: string | null
+  policy_loaded_at: string | null
+}
+
+/** 무엇이 갈렸는가. schemas.py 의 ConfigMismatchOut 과 1:1 (§9.2). */
+export interface ConfigMismatch {
+  axis: 'commit' | 'map' | 'policy' | 'dataset'
+  robot_type: 'mobile' | 'manipulator'
+  /** 값 → 그 값으로 도는 로봇들. 몇 대 몇인지가 바로 보여야 한다. */
+  values: Record<string, string[]>
+  /** 비교에서 빠진 로봇. 판정이 몇 대를 본 것인지 같이 말해야 한다. */
+  unreported: string[]
+}
+
+export interface FleetConfig {
+  robots: RobotConfig[]
+  /** 비어 있으면 4대가 같은 형상으로 돌고 있다는 뜻이다. */
+  mismatches: ConfigMismatch[]
+}
+
+export interface QrObservation {
+  robot_id: string
+  visible: boolean
+  distance: number | null
+  follow_state: 'inactive' | 'normal' | 'slow' | 'waiting' | null
+  follow_distance: number | null
+  follow_source: 'none' | 'qr' | 'visual' | 'partial_near' | 'acquiring' | 'grace' | 'stale' | 'unknown' | null
+  qr_visible: boolean
+  visual_visible: boolean
+  observed_at: string | null
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error'

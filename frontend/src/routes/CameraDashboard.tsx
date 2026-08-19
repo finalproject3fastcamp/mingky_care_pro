@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { getRobots } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
+import { isMobile } from '../types/monitoring'
 
 type CameraSide = 'front' | 'rear'
 type StreamState = 'idle' | 'connecting' | 'live' | 'error'
@@ -26,9 +27,11 @@ export function CameraDashboard() {
   const [streamKey, setStreamKey] = useState(0)
 
   const robotList = useMemo(
-    () => (robots.data ?? []).filter((robot) => (
-      robot.robot_type === 'mobile' && robot.robot_id.startsWith('pinky-')
-    )),
+    // isMobile 이 타입 가드라 걸러진 배열이 MobileRobot[] 이 된다.
+    // 팔에는 카메라도 웨이포인트도 없다.
+    () => (robots.data ?? [])
+      .filter(isMobile)
+      .filter((robot) => robot.robot_id.startsWith('pinky-')),
     [robots.data],
   )
 

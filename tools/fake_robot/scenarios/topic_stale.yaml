@@ -1,0 +1,59 @@
+# 라이다는 죽었는데 유닛은 active — 로드맵 9 가 잡으려는 장애 모드.
+#
+# systemd 도 heartbeat 도 초록이다. 노드 프로세스는 멀쩡히 살아 있고 CPU 도
+# 정상이다. `/scan` 만 안 나온다. 실기로 이 상태를 만들려면 사람이 로봇 앞에
+# 서서 라이다 USB 를 뽑아야 하고, 그건 CI 에서 못 한다.
+#
+# 확인할 것 (backend/app/topic_watch.py)
+#   1. /scan 나이가 임계를 넘으면 robot.topic_stale 이 한 번만 발행된다
+#   2. /cmd_vel 이 비어 있는 것은 대기 중인 로봇의 정상 상태이므로 조용하다
+#   3. 나이가 멀쩡해도 Hz 가 기대의 절반 아래면 늦은 것으로 잡힌다
+#   4. 복구되면 robot.topic_restored 로 타임라인이 닫힌다
+#
+# 이벤트를 직접 쏘는 시나리오가 아니다. 서버가 heartbeat 만 보고 스스로
+# 판정하는지를 본다 — 그래서 steps 에 event 액션이 하나도 없다.
+
+name: 토픽 두절 (라이다 정지 · 유닛은 정상)
+
+robots:
+  - id: pinky-01
+    type: mobile
+    battery_percent: 88
+    voltage: 11.9
+    # 정상 가동 중인 로봇이 보고하는 값.
+    topics:
+      /scan: { age_sec: 0.1, hz: 10 }
+      /odom: { age_sec: 0.05, hz: 20 }
+      /amcl_pose: { age_sec: 1.5, hz: 2 }
+      # 서 있는 로봇에는 속도 명령이 없다. 이게 빨갛게 그려지면 안 된다.
+      /cmd_vel: { age_sec: 900 }
+
+steps:
+  # 판정 주기(TOPIC_WATCH_INTERVAL_SEC, 기본 5초)가 한 번은 돌아야 한다.
+  - { robot: pinky-01, action: sleep, wait: 6 }
+
+  # --- 라이다 대역이 좁아져 주기가 3Hz 로 떨어진다 ---
+  # 마지막 수신은 0.33초 전이라 어떤 나이 임계에도 안 걸린다. Hz 를 같이
+  # 보내지 않으면 이 구간이 통째로 정상으로 보인다.
+  - robot: pinky-01
+    action: topics
+    set:
+      /scan: { age_sec: 0.33, hz: 3 }
+
+  - { robot: pinky-01, action: sleep, wait: 6 }
+
+  # --- USB 가 죽는다. 유닛은 그대로 active ---
+  - robot: pinky-01
+    action: topics
+    set:
+      /scan: { age_sec: 30 }
+
+  - { robot: pinky-01, action: sleep, wait: 8 }
+
+  # --- 케이블을 다시 꽂았다 ---
+  - robot: pinky-01
+    action: topics
+    set:
+      /scan: { age_sec: 0.1, hz: 10 }
+
+  - { robot: pinky-01, action: sleep, wait: 8 }

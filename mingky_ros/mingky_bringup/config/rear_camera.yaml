@@ -3,8 +3,8 @@
     # /dev/videoN 은 연결 순서에 따라 바뀌므로 카메라의 고정 by-id 경로를 쓴다.
     video_device: /dev/v4l/by-id/usb-Jieli_Technology_USB_Composite_Device-video-index0
     pixel_format: YUYV
-    # 후방 카메라는 ArUco 검출이 주 용도다. mono8은 rgb8보다 메시지가 1/3 크기다.
-    output_encoding: mono8
+    # 환자 YOLO 추론과 관제 미리보기에 색상 정보가 필요하다.
+    output_encoding: bgr8
     image_size: [640, 480]
     camera_frame_id: rear_camera_optical_frame
     # 캘리브레이션 뒤 file:// URL로 교체한다.

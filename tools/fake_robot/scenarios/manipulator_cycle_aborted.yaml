@@ -1,0 +1,56 @@
+# 서보 결함으로 사이클 포기 — 사람을 불러야 하는 경로.
+#
+# 앞 시나리오(manipulator_pick_retry.yaml)와 짝이다. 둘의 차이가 팔의 알림
+# 등급을 가르는 선이다 (monitoring-spec.md §4.4 · §8.4):
+#
+#   pick_failed  warning  확률적 실패. 재시도로 끝나면 아무 일도 없었다
+#   servo_fault  error    하드웨어다. 재시도로 낫지 않는다
+#   cycle_aborted error   조제분이 사라졌다. 사람이 트레이를 확인해야 한다
+#
+# 실기로 만들려면 서보를 과부하시켜야 하는 경로다. 그러자고 U2D2 를 건드릴 수
+# 없으니 여기서 재현한다 — type_mismatch.yaml 과 같은 이유다.
+#
+# 기대 동작:
+#   - error 2건 + warning 2건이 타임라인에 남는다
+#   - homing_required 로 끝난다. 팔의 개입은 teleop 이 아니라 orders 큐의
+#     이산 명령이므로(§4.4), 다음 사이클은 사람이 홈 복귀를 지시해야 시작된다
+
+name: 서보 결함으로 사이클 포기 (omx-02)
+
+robots:
+  - id: omx-02
+    type: manipulator
+
+steps:
+  - robot: omx-02
+    action: event
+    code: manipulator.cycle_started
+    payload: { dispense_id: d-1003, medication_id: med-d }
+
+  - robot: omx-02
+    action: event
+    code: manipulator.pick_failed
+    payload: { medication_id: med-d, attempt: 1, reason: grasp_slip }
+    wait: 0.5
+
+  # 두 번째 실패의 이유가 다르다. 여기서부터는 확률적 실패가 아니다.
+  - robot: omx-02
+    action: event
+    code: manipulator.pick_failed
+    payload: { medication_id: med-d, attempt: 2, reason: joint_overload }
+    wait: 0.5
+
+  - robot: omx-02
+    action: event
+    code: manipulator.servo_fault
+    payload: { joint: shoulder_lift, fault_bits: 5, temp_c: 71.5 }
+
+  - robot: omx-02
+    action: event
+    code: manipulator.cycle_aborted
+    payload: { dispense_id: d-1003, reason: servo_fault }
+
+  - robot: omx-02
+    action: event
+    code: manipulator.homing_required
+    payload: { reason: aborted_mid_cycle }

@@ -26,6 +26,7 @@ class SelectorConfig:
     goal_alignment_weight: float = 0.45
     turn_penalty_weight: float = 0.25
     reverse_penalty: float = 0.45
+    allow_reverse: bool = True
     previous_failure_penalty: float = 0.75
     clearance_quantile: float = 0.10
 
@@ -144,6 +145,8 @@ def select_escape_candidates(
 
     candidates: list[EscapeCandidate] = []
     for name, bearing in _DIRECTIONS:
+        if not cfg.allow_reverse and math.cos(bearing) < -1.0e-9:
+            continue
         clearance = _sector_clearance(
             ranges,
             angle_min=angle_min,

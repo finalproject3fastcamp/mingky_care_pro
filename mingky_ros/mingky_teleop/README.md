@@ -3,13 +3,14 @@
 사람이 로봇을 모는 경로의 안전장치와, 주행 제어권을 정하는 모드 관리입니다.
 
 ```
-/mode/set → mode_manager ─┬→ /mode              현재 모드
+/mode/set → mode_manager ─┬→ /mode              요청 모드 (주기 재발행)
                            ├→ /emergency_stop    안전 게이트를 건다
                            ├→ /emergency_stop/release (서비스) 해제
                            └→ /events            클라우드 타임라인
 
 Foxglove Teleop → cmd_vel_teleop_raw
-                   → teleop_limiter (모드 확인 → 상한) → cmd_vel_teleop
+                   → teleop_limiter (모드 확인 → 상한) ─┬→ cmd_vel_teleop
+                                                        └→ /teleop_limiter/applied_mode
                    → twist_mux (우선순위 100) → cmd_vel → 모터
 ```
 
@@ -24,6 +25,7 @@ Foxglove Teleop → cmd_vel_teleop_raw
 ```bash
 ros2 topic pub --once /mode/set std_msgs/msg/String "{data: 'manual'}"
 ros2 topic echo /mode        # 현재 모드
+ros2 topic echo /teleop_limiter/applied_mode  # limiter 가 실제 적용한 모드
 ```
 
 관제에서는 하향 명령으로 바꿉니다.
@@ -42,7 +44,13 @@ arming(`backend/app/arming.py`)은 백엔드가 소유하고 로봇이 폴링합
 상태의 소실**이 됩니다.
 
 그래서 서버는 요청만 하고(`set_mode`), 판단과 보관은 로봇이 합니다.
-서버는 `robot.mode_changed` 이벤트로 결과를 봅니다.
+서버는 `robot.mode_changed` 이벤트로 요청 모드를 보고, 실시간 조작 연결에서는
+limiter 적용 상태를 따로 확인합니다. 두 값이 일정 시간 다르면
+`robot.mode_mismatch`, 다시 같아지면 `robot.mode_recovered`가 남습니다.
+
+`/mode`와 적용 상태는 모두 반복 발행합니다. 노드가 재시작되거나 DDS 메시지 한
+번을 놓쳐도 다음 주기에 자동으로 복구됩니다. 관제 조작 패드는 최근 limiter
+상태가 `manual`이라고 확인된 경우에만 열립니다.
 
 ### estop 은 안전 게이트에 위임합니다
 

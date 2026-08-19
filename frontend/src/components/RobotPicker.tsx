@@ -1,7 +1,11 @@
 import { useState } from 'react'
 
 import { armRobot } from '../lib/api'
-import type { Robot } from '../types/monitoring'
+import { HEARTBEAT_FRESHNESS } from '../lib/freshness'
+import { rejectionMessage, toRejectionDetail } from '../lib/rejectionMessages'
+import { isMobile, type MobileRobot, type Robot } from '../types/monitoring'
+import { BatteryReading } from './BatteryReading'
+import { Freshness } from './Freshness'
 
 interface Props {
   robots: Robot[]
@@ -11,7 +15,7 @@ interface Props {
    * 아직 armed_at 이 null 인 낡은 상태다. 그 낡은 상태로 판단하면 방금
    * 고른 선택이 무효로 취급돼 선택 화면으로 튕긴다.
    */
-  onArmed?: (robot: Robot) => void
+  onArmed?: (robot: MobileRobot) => void
 }
 
 // 의료진이 로봇을 고를 때 최소로 요구하는 배터리 잔량.
@@ -22,7 +26,7 @@ const MAX_BATTERY_AGE_MS = 5 * 60 * 1000
 const RECENT_CANCELLATION_MS = 10 * 60 * 1000
 
 interface Candidate {
-  robot: Robot
+  robot: MobileRobot
   eligible: boolean
   /** 이미 활성화됐거나 안내 중인 로봇으로 되돌아가는 선택. 새로 arm 하는 게 아니다. */
   resume?: boolean
@@ -32,9 +36,10 @@ interface Candidate {
   reason?: string
 }
 
-function categorize(robot: Robot): Candidate {
+// 팔은 여기 들어오지 않는다. 호출부가 isMobile 로 거르므로 "주행 로봇 아님"
+// 분기가 필요 없다 — 타입이 그 사실을 들고 있다.
+function categorize(robot: MobileRobot): Candidate {
   if (!robot.is_active) return { robot, eligible: false, reason: '비활성' }
-  if (robot.robot_type !== 'mobile') return { robot, eligible: false, reason: '주행 로봇 아님' }
   // 통신이 확인되지 않은 로봇은 기존 세션/arming 표시와 무관하게 선택하지
   // 못하게 한다. 상태 라벨은 카드 상단에서 별도로 항상 보여준다.
   if (robot.link_state === 'offline') {
@@ -57,6 +62,12 @@ function categorize(robot: Robot): Candidate {
         ? '시스템 장애 · 안내 취소 대기'
         : '안내 시스템 중지',
     }
+  }
+  if (robot.returning_to_dock) {
+    return { robot, eligible: false, reason: '충전소 복귀 중' }
+  }
+  if (robot.active_session_id == null && robot.guide_robot_state === 'paused') {
+    return { robot, eligible: false, reason: '안전 확인 필요' }
   }
   // 이미 활성화됐거나 안내 중인 로봇도 고를 수 있어야 한다. 막아두면 한 번
   // 나온 뒤에는 되돌아갈 방법이 없어 취소조차 못 한다. 이 화면은 "새로 켜는
@@ -92,7 +103,7 @@ function linkLabel(robot: Robot) {
   return '연결 이력 없음'
 }
 
-function cancellationLabel(robot: Robot) {
+function cancellationLabel(robot: MobileRobot) {
   if (robot.active_session_id != null || robot.armed_at != null) return null
   if (
     robot.last_session_ended_at == null ||
@@ -114,11 +125,10 @@ export function RobotPicker({ robots, onArmed }: Props) {
   const [error, setError] = useState<string | null>(null)
 
   // 주행 로봇만 후보에 올린다. 조제 스테이션(omx-*)은 목록에서 아예 뺀다.
-  const candidates = robots
-    .filter((r) => r.robot_type === 'mobile')
-    .map(categorize)
+  // isMobile 은 타입 가드라 아래 map 이 MobileRobot 을 받는다.
+  const candidates = robots.filter(isMobile).map(categorize)
 
-  async function handlePick(robot: Robot) {
+  async function handlePick(robot: MobileRobot) {
     // 안내 중인 로봇은 arm 을 다시 부르면 안 된다 — 백엔드가 409 busy 로
     // 막는다(정당한 방어다). 이 경우는 이미 켜져 있는 걸 열어보는 것뿐이라
     // API 없이 선택만 넘긴다.
@@ -132,8 +142,15 @@ export function RobotPicker({ robots, onArmed }: Props) {
       const armed = await armRobot(robot.robot_id)
       onArmed?.(armed)
     } catch (err) {
-      const message = err instanceof Error ? err.message : '활성화 실패'
-      setError(message)
+      // 백엔드 영어 문구를 그대로 띄우지 않는다. 코드로 분기해 이 화면의
+      // 어휘로 다시 쓴다.
+      const detail = toRejectionDetail(err)
+      if (detail && detail.code !== 'legacy') {
+        const { text, action } = rejectionMessage(detail)
+        setError(`${text} — ${action}`)
+      } else {
+        setError(detail?.message ?? '활성화에 실패했습니다')
+      }
     } finally {
       setPending(null)
     }
@@ -172,15 +189,20 @@ export function RobotPicker({ robots, onArmed }: Props) {
                     <div className="robot-card-name">{robot.display_name}</div>
                     <div className={`robot-card-link robot-card-link--${robot.link_state}`}>
                       {linkLabel(robot)}
+                      {/* heartbeat 는 5초 주기라 15초면 이미 두절 판정이다. */}
+                      {robot.link_state !== 'unknown' && (
+                        <Freshness at={robot.last_seen_at} {...HEARTBEAT_FRESHNESS} />
+                      )}
                     </div>
                   </div>
                   <div className="robot-card-id mono">{robot.robot_id}</div>
                   <div className="robot-card-battery">
-                    <span className="robot-card-battery-value">
-                      {robot.battery_percent != null
-                        ? `${robot.battery_percent}%`
-                        : '—'}
-                    </span>
+                    <BatteryReading
+                      voltage={robot.battery_voltage}
+                      percent={robot.battery_percent}
+                      recordedAt={robot.battery_recorded_at}
+                      audience="staff"
+                    />
                     <span className="robot-card-battery-label">배터리</span>
                   </div>
                   {(reason || status) && (

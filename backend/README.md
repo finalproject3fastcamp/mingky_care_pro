@@ -25,6 +25,22 @@ uvicorn app.main:app --reload
 
 기본 접속: <http://localhost:8000>
 
+> **인스턴스는 1개다.** `heartbeat` · `arming` · `orders` 가 인메모리라 둘 이상
+> 뜨면 판정이 갈린다 — `comm_lost` 가 멀쩡한 로봇에 찍히고 arming 이 간헐적으로
+> 안 보인다.
+>
+> 기동 시 PostgreSQL advisory lock 으로 강제한다(`_claim_single_instance`).
+> 워커 수를 세지 않으므로 `--workers 2` `--workers=2` `WEB_CONCURRENCY=2` 가 전부
+> 걸리고, 컨테이너 레플리카나 다른 호스트의 두 번째 배포도 같이 걸린다.
+> 못 잡으면 종료 코드 3.
+>
+> 락이 DB 세션에 붙어 있어서 DB 재시작이나 네트워크 블립으로 세션이 끊기면 락만
+> 사라진다. `_hold_single_instance()` 가 10초마다 보유를 확인하고 다시 잡는다.
+> 그 사이 다른 인스턴스가 들어왔으면 이쪽이 SIGTERM 으로 물러난다.
+>
+> **같은 DB 를 보는 백엔드를 둘 띄울 수는 없다.** 개발용을 따로 돌리려면 DB 를
+> 나눠라.
+
 - `GET /health` — 헬스체크. 로드된 이벤트 코드 수도 함께 반환
 - `POST /qr/scan` — QR 스캔 → 안내 세션 시작 + 오늘 진료 일정 조회
 - `POST /events` — 로봇 이벤트 배치 적재
@@ -36,6 +52,73 @@ uvicorn app.main:app --reload
 - `POST /robots/{id}/battery` — 전압/퍼센트 표본 저장 (204)
 - `GET /patients/{patient_id}/photo` — 환자 프로필 사진 (`image/*`, private 캐시)
 - `GET /docs` — OpenAPI 문서
+
+## 테스트
+
+```bash
+pip install -r backend/requirements-dev.txt   # pytest 는 여기 있다
+cd backend
+pytest
+```
+
+**DB 가 없어도 돈다.** `app.config` 가 import 시점이 아니라 `connect()` 시점에
+환경 변수를 읽기 때문이다. `database/.env` 없이 클론한 사람도, CI 러너도 바로
+실행할 수 있다. 이 계약이 깨지면 `tests/test_config_env.py` 가 먼저 깨진다.
+
+### 통합 테스트 (`-m e2e`)
+
+나머지 테스트는 전부 가짜 커넥션이다. 빠르지만 그래서 **한 번도 통과시켜본 적
+없는 경로**가 있다 — heartbeat 로 `link_state` 를 세우고, 배터리 표본으로 arming
+전제조건을 채우고, arm 을 받고, QR 로 세션을 만들고, 이벤트가 `session_steps` 를
+실제로 갱신하는 순서다. 그 순서가 깨지면 단위 테스트는 전부 초록인데 로봇이
+아무것도 못 한다.
+
+여기서는 진짜 uvicorn 과 진짜 PostgreSQL 을 쓴다. 로봇만
+[가짜](../tools/fake_robot/)다.
+
+```bash
+# DB 를 하나 띄우고 스키마·시드를 넣는다
+docker run -d --name mingky-test -p 5433:5432 \
+  -e POSTGRES_USER=mingky -e POSTGRES_PASSWORD=test -e POSTGRES_DB=mingky postgres:16
+
+PGHOST=127.0.0.1 PGPORT=5433 PGPASSWORD=test \
+POSTGRES_USER=mingky POSTGRES_DB=mingky \
+MINGKY_MIGRATIONS_DIR=database/migrations MINGKY_SEEDS_DIR=database/seeds \
+  sh deploy/init-db.sh
+
+# 백엔드는 테스트가 알아서 띄운다
+cd backend
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5433 POSTGRES_USER=mingky \
+POSTGRES_PASSWORD=test POSTGRES_DB=mingky pytest -m e2e
+```
+
+`migrate` 와 달리 **시드까지** 넣어야 한다. 세션 완주 시나리오는 환자 `p001` 과
+로봇 `pinky-01` 이 있어야 성립한다.
+
+기본 `pytest` 는 `-m e2e` 를 제외한다(`pytest.ini` 의 `addopts`). DB 없이 도는
+것이 나머지 테스트의 계약이라 섞으면 안 된다.
+
+> 이미 같은 DB 에 백엔드가 붙어 있으면 테스트가 띄우는 백엔드가 단일 인스턴스
+> 가드에 걸려 종료 코드 3 으로 죽는다. 그때는 uvicorn 로그를 그대로 출력하니
+> 원인이 바로 보인다.
+
+### CI
+
+`.github/workflows/backend-tests.yml` 에 잡이 둘이다.
+
+| 잡 | 도는 것 | 빨간색이 뜻하는 것 |
+| --- | --- | --- |
+| `unit` | DB 없이 `pytest` | 원인이 코드에 있다 |
+| `e2e` | postgres 서비스 + `pytest -m e2e` | 원인이 배관 어딘가에 있다 — 스키마, 시드, 기동 순서, 정본 |
+
+섞으면 첫 실패에서 "코드가 틀렸나 DB 가 안 떴나" 를 가릴 수 없다. `unit` 이
+초록인데 `e2e` 만 빨간 것 자체가 진단 정보다.
+
+`e2e` 는 `needs: unit` 이라 `unit` 이 깨지면 아예 안 돈다. 원인이 이미 나왔는데
+로그만 두 배로 늘릴 이유가 없다.
+
+스키마 적용에 CI 전용 SQL 을 쓰지 않고 배포와 같은 `deploy/init-db.sh` 를
+부른다. 따로 두면 배포 경로가 깨져도 CI 는 초록이다.
 
 ## 로봇 생존 감시
 
@@ -144,7 +227,7 @@ app/
 
 ```json
 { "received": 1, "inserted": 1, "duplicates": 0, "state_updates": 1,
-  "unknown_codes": [], "rejected_updates": [] }
+  "unknown_codes": [], "type_mismatches": [], "rejected_updates": [] }
 ```
 
 ### 적재 규칙
@@ -168,6 +251,19 @@ app/
    그대로 적재한 뒤 `system.unknown_event_code` 를 추가로 남기고, 응답의
    `unknown_codes` 로 알립니다. HTTP 는 200 입니다 — 거부하면 게이트웨이가
    같은 배치를 무한히 재전송하게 됩니다.
+
+5. **로봇 타입에 맞지 않는 코드는 상태를 갱신하지 않습니다.**
+   `config/event_codes.yaml` 의 `robot_types` 와 `robots.robot_type` 을
+   대조합니다. 어긋나면 이벤트는 그대로 적재하되(4번과 같은 원칙)
+   `system.robot_type_mismatch` 를 남기고 응답의 `type_mismatches` 로
+   알립니다.
+
+   기록만 남기고 **판정은 거부합니다.** `nav.goal_succeeded` 는
+   `session_steps.arrived_at` 을 찍으므로, 조제 스테이션에서 온 것을 그대로
+   적용하면 팔 하나가 환자의 안내 단계를 진행시킵니다.
+
+   `robots` 에 없는 로봇은 타입을 모르므로 판정하지 않습니다. 그건 오배선이
+   아니라 등록 누락입니다.
 
 `nav.goal_succeeded` 는 `payload.visit_name` 으로 단계를 찾지 않습니다.
 한 세션에서 같은 장소를 두 번 방문할 수 있어(진료실 초진·판독) 이름만으로는

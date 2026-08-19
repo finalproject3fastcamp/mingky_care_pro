@@ -6,9 +6,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pinky
+# CPU가 포화되면 주행·모터·안전 콜백을 관제 수집보다 먼저 실행한다.
+CPUWeight=900
+WorkingDirectory=/home/pinky
 EnvironmentFile=-/etc/environment
 EnvironmentFile=/etc/mingky/robot.env
-ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=${MINGKY_ROBOT_ID} backend_url:=${MINGKY_BACKEND_URL}'
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=${MINGKY_ROBOT_ID} backend_url:=${MINGKY_BACKEND_URL} low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled} start_fire_evac:=${MINGKY_FIRE_EVAC_ENABLED:-false} fire_infer_server_url:=${MINGKY_FIRE_INFER_SERVER_URL:-} start_patient_follow:=${MINGKY_PATIENT_FOLLOW_ENABLED:-true} ${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:+patient_follow_infer_server_url:=${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL}} patient_follow_slow_distance:=${MINGKY_PATIENT_FOLLOW_SLOW_DISTANCE_M:-0.15} patient_follow_stop_distance:=${MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M:-0.30} patient_follow_slow_speed_percent:=${MINGKY_PATIENT_FOLLOW_SLOW_SPEED_PERCENT:-35.0} patient_follow_tracking_grace:=${MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC:-2.0} patient_follow_initial_acquire_grace:=${MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_GRACE_SEC:-4.0} patient_follow_initial_acquire_distance:=${MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_DISTANCE_M:-0.30} patient_follow_target_height:=${MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M:-0.13} patient_follow_partial_bbox_max_distance:=${MINGKY_PATIENT_FOLLOW_PARTIAL_BBOX_MAX_DISTANCE_M:-0.35} patient_follow_partial_bbox_conf_threshold:=${MINGKY_PATIENT_FOLLOW_PARTIAL_BBOX_CONF_THRESHOLD:-0.50}'
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30

@@ -20,6 +20,8 @@ Pinky 카메라에서 환자 카드 QR을 인식해 백엔드(`POST /qr/scan`)�
 | `fps` | `10.0` | 프레임 처리 주기 |
 | `debounce_seconds` | `5.0` | 같은 값 연속 스캔 무시 구간 |
 | `http_timeout_seconds` | `3.0` | 백엔드 요청 타임아웃 |
+| `session_retry_seconds` | `1.0` | 최초 세션 전달 확인 전 재전송 주기 |
+| `session_retry_limit` | `10` | 최초 세션 전달 최대 발행 횟수 |
 
 ## 스캔 활성화 규칙
 
@@ -31,6 +33,12 @@ Pinky 카메라에서 환자 카드 QR을 인식해 백엔드(`POST /qr/scan`)�
 
 완료 QR은 우연한 스캔을 막기 위해 활성 세션의 대기 상태에서만
 허용합니다. 처음 QR에 사용한 arming은 재사용하지 않습니다.
+
+최초 QR로 세션이 만들어지면 `GuideState`에 같은 `session_id`가 확인될
+때까지 `SessionStart`를 제한적으로 재전송합니다. 검사 완료 QR은 이미 같은
+세션 상태가 존재해 이를 수신 확인으로 사용할 수 없으므로 재전송하지 않습니다.
+QR Reader와 Guide Manager가 함께 재기동한 경우에는 백엔드 활성 세션을 한 번
+조회해 안전한 확인 상태로 복원합니다.
 
 ## 샘플 QR / 인쇄용 카드
 

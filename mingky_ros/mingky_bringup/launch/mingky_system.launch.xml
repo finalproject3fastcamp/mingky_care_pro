@@ -9,21 +9,41 @@
     <arg name="nav2_params" default="$(find-pkg-share pinky_navigation)/params/nav2_params.yaml"/>
     <arg name="charging_waypoint" default=""/>
     <arg name="recovery_mode" default="adaptive"/>
-    <arg name="planner_mode" default="navfn"/>
+    <arg name="planner_mode" default="smac2d"/>
+    <!-- 장애물이 사라진 뒤 거의 즉시 최신 LiDAR로 다시 판단한다. -->
+    <arg name="recovery_retry_delay_sec" default="0.3"/>
+    <!-- 실로봇 검증 전까지 기존 주행을 유지한다. 지원값: disabled, sidestep -->
+    <arg name="low_obstacle_mode" default="disabled"/>
     <arg name="backend_url" default="http://192.168.0.10:8000"/>
 
     <arg name="start_robot_base" default="true"/>
     <arg name="start_qr_reader" default="true"/>
+    <arg name="start_fire_evac" default="false"/>
+    <arg name="fire_infer_server_url" default=""/>
     <arg name="qr_source" default="csi"/>
     <!-- 전방은 QR Reader가 카메라를 단독 소유하면서 관제 미리보기도 제공한다. -->
     <arg name="qr_preview_port" default="8091"/>
     <arg name="start_rear_camera_stream" default="true"/>
-    <arg name="start_rear_aruco_detector" default="true"/>
+    <arg name="start_rear_qr_distance" default="true"/>
+    <arg name="rear_qr_size" default="0.028"/>
+    <!-- 환자 QR 거리 기반 감속·대기 시험을 기본으로 실행한다. -->
+    <arg name="start_patient_follow" default="true"/>
+    <arg name="patient_follow_infer_server_url" default=""/>
+    <arg name="patient_follow_slow_distance" default="0.15"/>
+    <arg name="patient_follow_stop_distance" default="0.30"/>
+    <arg name="patient_follow_slow_speed_percent" default="35.0"/>
+    <arg name="patient_follow_tracking_grace" default="2.0"/>
+    <arg name="patient_follow_initial_acquire_grace" default="4.0"/>
+    <arg name="patient_follow_initial_acquire_distance" default="0.30"/>
+    <arg name="patient_follow_target_height" default="0.13"/>
+    <arg name="patient_follow_partial_bbox_max_distance" default="0.35"/>
+    <arg name="patient_follow_partial_bbox_conf_threshold" default="0.50"/>
+    <arg name="patient_follow_timeout" default="2.0"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
     <arg name="camera_profile" default=""/>
     <arg name="rear_preview_port" default="8092"/>
     <arg name="front_camera_ready_timeout" default="15.0"/>
-    <arg name="camera_preview_max_fps" default="10.0"/>
+    <arg name="camera_preview_max_fps" default="5.0"/>
     <arg name="camera_preview_max_width" default="640"/>
     <arg name="camera_preview_jpeg_quality" default="60"/>
     <!-- 로봇 설치 시 gateway와 teleop bridge는 systemd 상시 서비스다. gateway를
@@ -78,7 +98,8 @@
              if="$(var start_rear_camera_stream)">
         <arg name="robot_id" value="$(var robot_id)"/>
         <arg name="camera_profile" value="$(var camera_profile)"/>
-        <arg name="start_aruco_detector" value="$(var start_rear_aruco_detector)"/>
+        <arg name="start_qr_distance" value="$(var start_rear_qr_distance)"/>
+        <arg name="qr_size" value="$(var rear_qr_size)"/>
         <arg name="rear_preview_port" value="$(var rear_preview_port)"/>
         <!-- QR Reader가 Picamera2 초기화를 마쳤다는 신호를 받은 뒤 후방 카메라를
              시작해 Pi 5 카메라 드라이버의 동시 초기화를 피한다. -->
@@ -110,14 +131,56 @@
         <param name="charging_waypoint" value="$(var charging_waypoint)" type="str"/>
         <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
+        <param name="recovery_retry_delay_sec"
+               value="$(var recovery_retry_delay_sec)"/>
+        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="patient_follow_enabled"
+               value="$(var start_patient_follow)" type="bool"/>
+        <param name="patient_follow_timeout_sec"
+               value="$(var patient_follow_timeout)"/>
         <param name="arrival_notice_sec" value="$(var arrival_notice_sec)"/>
         <param name="use_arrival_chime" value="$(var use_buzzer)"/>
+    </node>
+
+    <!-- YOLO 환자 클래스·박스로 거리를 연속 추정하고 QR로 보정한다. -->
+    <node pkg="mingky_person_follow" exec="person_follow_node"
+          name="person_follow_node" output="screen"
+          if="$(var start_patient_follow)" launch-prefix="nice -n 5">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="image_topic"
+               value="/rear_camera/tracking/image_raw/compressed"/>
+        <param name="infer_server_url"
+               value="$(var patient_follow_infer_server_url)"/>
+        <param name="slow_distance_m"
+               value="$(var patient_follow_slow_distance)"/>
+        <param name="stop_distance_m"
+               value="$(var patient_follow_stop_distance)"/>
+        <param name="slow_speed_percent"
+               value="$(var patient_follow_slow_speed_percent)"/>
+        <param name="tracking_grace_sec"
+               value="$(var patient_follow_tracking_grace)"/>
+        <param name="initial_acquire_grace_sec"
+               value="$(var patient_follow_initial_acquire_grace)"/>
+        <param name="initial_acquire_max_distance_m"
+               value="$(var patient_follow_initial_acquire_distance)"/>
+        <param name="target_height_m"
+               value="$(var patient_follow_target_height)"/>
+        <param name="partial_bbox_max_distance_m"
+               value="$(var patient_follow_partial_bbox_max_distance)"/>
+        <param name="partial_bbox_conf_threshold"
+               value="$(var patient_follow_partial_bbox_conf_threshold)"/>
     </node>
 
     <node pkg="mingky_navigation_manager" exec="navigation_manager"
           name="navigation_manager" output="screen">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="map_name" value="$(var map_name)"/>
+        <!-- Waypoint 시험주행도 환자 안내와 같은 복구 정책·플래너를 사용한다. -->
+        <param name="recovery_mode" value="$(var recovery_mode)" type="str"/>
+        <param name="planner_mode" value="$(var planner_mode)" type="str"/>
+        <param name="recovery_retry_delay_sec"
+               value="$(var recovery_retry_delay_sec)"/>
+        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
     </node>
 
     <node pkg="mingky_lcd_status" exec="lcd_status"
@@ -125,14 +188,31 @@
         <param name="robot_id" value="$(var robot_id)"/>
     </node>
 
+    <!-- 화재 감지는 전방 카메라 프레임을 로컬 구독하고 GPU 추론만 HTTP로
+         위임한다. 운영 로봇은 robot.env에서 기능과 서버 주소를 명시한다. -->
+    <node pkg="mingky_fire_evac" exec="fire_evac_node"
+          name="fire_evac_node" output="screen" if="$(var start_fire_evac)"
+          launch-prefix="nice -n 5">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="infer_server_url" value="$(var fire_infer_server_url)"/>
+    </node>
+
     <node pkg="mingky_event_gateway" exec="event_gateway"
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="backend_url" value="$(var backend_url)"/>
+        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <!-- 형상 패널이 읽는 이름. 지문은 /map 에서 직접 뜬다. -->
+        <param name="map_name" value="$(var map_name)"/>
     </node>
 
-    <!-- AMCL 이 active 되면 자동으로 위치를 잡는다. RViz 손조작 대체.
-         cmd_vel_localize_probe 는 twist_mux 의 별도 채널을 거친다. -->
+    <!-- 고주기 센서 토픽을 Python Gateway가 직접 역직렬화하지 않도록 C++에서
+         수신 주기만 집계해 1Hz 진단으로 전달한다. -->
+    <node pkg="mingky_bringup" exec="topic_health_monitor"
+          name="topic_health_monitor" output="screen"/>
+
+    <!-- 기존 맵과 LiDAR를 비교해 유일한 후보일 때만 AMCL /initialpose를
+         발행한다. cmd_vel_localize_probe는 5cm 확인 이동에만 사용한다. -->
     <node pkg="mingky_localize" exec="auto_localize_node"
           name="auto_localize_node" output="screen">
         <param name="robot_id" value="$(var robot_id)"/>

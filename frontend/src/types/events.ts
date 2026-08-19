@@ -70,6 +70,22 @@ export interface EventPage {
 }
 
 /**
+ * GET /events/unknown-codes 응답의 한 건. schemas.py 의 UnknownCodeOut 과 1:1.
+ *
+ * config/event_codes.yaml 에 없는 코드가 얼마나 들어왔는지를 센다. 적재
+ * 자체는 되므로 데이터가 사라진 건 아니지만, 등록되지 않은 코드는 상태
+ * 갱신을 타지 않아 화면 판정에서 통째로 빠진다.
+ */
+export interface UnknownCode {
+  event_code: string
+  /** events.robot_id 가 nullable 이라 여기도 null 이 올 수 있다. */
+  robot_id: string | null
+  count: number
+  first_seen: string
+  last_seen: string
+}
+
+/**
  * GET /events 의 쿼리 파라미터. 전부 optional 이다.
  * 제약은 routers/events.py 의 Query(...) 선언을 따른다.
  */

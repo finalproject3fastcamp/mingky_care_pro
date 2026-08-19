@@ -1,0 +1,103 @@
+# 잡 두 개를 나눠 둔 것이 핵심이다.
+#
+#   unit  DB 없이 돈다. 빠르고, 실패하면 원인이 코드에 있다.
+#   e2e   진짜 postgres · 진짜 uvicorn · 가짜 로봇. 느리고, 실패하면 원인이
+#         배관 어디에나 있을 수 있다.
+#
+# 섞으면 첫 실패에서 "코드가 틀렸나 DB 가 안 떴나" 를 가릴 수 없다. unit 이
+# 초록인데 e2e 만 빨간 것 자체가 진단 정보다.
+#
+# unit 에 DB 환경 변수를 주지 않는 것도 의도다. app.config 가 import 시점이
+# 아니라 connect 시점에 환경 변수를 읽으므로 DB 없이도 수집과 실행이 되어야
+# 한다. 그 계약이 깨지면 tests/test_config_env.py 가 먼저 깨진다.
+
+name: backend tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: 단위 테스트
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # backend/Dockerfile 의 python:3.12-slim 과 맞춘다.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 의존성 설치
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: pytest
+        working-directory: backend
+        run: python -m pytest
+
+  e2e:
+    name: 통합 테스트 (가짜 로봇)
+    runs-on: ubuntu-latest
+    # unit 이 빨간데 e2e 까지 돌리면 로그만 두 배가 된다. 원인은 이미 나왔다.
+    needs: unit
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mingky
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: mingky
+        ports:
+          - 5432:5432
+        # 준비되기 전에 마이그레이션을 돌리면 connection refused 로 죽는다.
+        options: >-
+          --health-cmd "pg_isready -U mingky -d mingky"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: mingky
+      POSTGRES_PASSWORD: ci
+      POSTGRES_DB: mingky
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 의존성 설치
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: 스키마·시드 적용
+        # 배포와 같은 러너를 쓴다. CI 전용 SQL 을 따로 두면 배포 경로가
+        # 깨져도 CI 는 초록이다. 러너에는 postgres 컨테이너에 저장소가 없으므로
+        # 경로만 저장소 상대로 덮어쓴다.
+        #
+        # migrate 와 달리 시드까지 돌린다. 세션 완주 시나리오는 환자 p001 과
+        # 로봇 pinky-01 이 있어야 성립한다.
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGPASSWORD: ci
+          MINGKY_MIGRATIONS_DIR: database/migrations
+          MINGKY_SEEDS_DIR: database/seeds
+        run: sh deploy/init-db.sh
+
+      - name: pytest -m e2e
+        working-directory: backend
+        # 테스트가 스스로 uvicorn 을 띄운다. 기동 절차를 여기 흩어 놓으면
+        # 로컬에서 재현이 안 되고, 재현 안 되는 CI 실패는 몇 배로 비싸다.
+        run: python -m pytest -m e2e

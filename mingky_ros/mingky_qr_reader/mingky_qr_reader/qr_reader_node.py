@@ -11,7 +11,8 @@ import requests
 from pyzbar import pyzbar
 from pyzbar.pyzbar import ZBarSymbol
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool
 
 from mingky_interfaces.msg import GuideState, SessionStart
@@ -55,6 +56,8 @@ class QrReaderNode(Node):
         self.declare_parameter("preview_max_width", 640)
         self.declare_parameter("preview_jpeg_quality", 60)
         self.declare_parameter("preview_max_fps", 10.0)
+        # 화재 감지 등 공유 소비자에는 QR 디코드 주기와 별도로 낮은 FPS만 보낸다.
+        self.declare_parameter("image_publish_max_fps", 3.0)
         # arming 폴링 주기. 백엔드에 GET /robots/<id>/arming 을 주기로 던져
         # 의료진이 이 로봇을 활성화했는지 확인한다. armed 가 아니면 QR 을
         # 디코드/전송하지 않는다.
@@ -63,6 +66,11 @@ class QrReaderNode(Node):
         # 백엔드 두절 상태에서 오래된 arming 이 유효한 것처럼 남아 있으면
         # 통신 회복 순간 스캔이 튀는 위험이 있다.
         self.declare_parameter("arming_fail_disarm_after", 5)
+        # 최초 세션 전달은 관제 출발을 여는 핵심 신호다. DDS reliable 이어도
+        # publisher/subscriber discovery 경계에서 한 번만 발행하면 유실될 수
+        # 있으므로 GuideState 에 같은 session_id 가 보일 때까지 짧게 재전송한다.
+        self.declare_parameter("session_retry_seconds", 1.0)
+        self.declare_parameter("session_retry_limit", 10)
 
         self.source = self.get_parameter("source").value
         self.backend_url = self.get_parameter("backend_url").value.rstrip("/")
@@ -71,10 +79,16 @@ class QrReaderNode(Node):
         self.debounce_seconds = float(self.get_parameter("debounce_seconds").value)
         self.http_timeout = float(self.get_parameter("http_timeout_seconds").value)
         fps = float(self.get_parameter("fps").value)
+        image_publish_max_fps = max(
+            0.1, float(self.get_parameter("image_publish_max_fps").value))
+        self._image_publish_min_interval = 1.0 / image_publish_max_fps
+        self._last_image_publish_at = 0.0
         self.arming_poll_seconds = float(
             self.get_parameter("arming_poll_seconds").value)
         self.arming_fail_disarm_after = int(
             self.get_parameter("arming_fail_disarm_after").value)
+        self.session_retry_limit = max(
+            1, int(self.get_parameter("session_retry_limit").value))
 
         if not self.robot_id:
             raise RuntimeError("robot_id 파라미터가 필요합니다 (백엔드가 필수로 받음)")
@@ -91,6 +105,15 @@ class QrReaderNode(Node):
         )
         self._camera_ready_pub = self.create_publisher(
             Bool, '/front_camera/ready', state_qos)
+        # 후방 카메라(/rear_camera/image_raw)와 같은 패턴 -- 원본 프레임을
+        # ROS2 토픽으로 공식 발행해서, 이 노드 내부(QR 디코드) 말고 다른
+        # 노드도 정식으로 구독할 수 있게 한다. 첫 사용처는 mingky_fire_evac
+        # (화재 감지, AI PC에서 구독). Raw 대신 CompressedImage 인 이유는
+        # 와이파이로 매 프레임 수 MB 씩 나가면 안 되기 때문 (관제 미리보기와
+        # 같은 이유).
+        self._image_pub = self.create_publisher(
+            CompressedImage, '/front_camera/image_raw/compressed',
+            qos_profile_sensor_data)
         try:
             self._setup_source()
         except Exception:  # noqa: BLE001
@@ -120,6 +143,13 @@ class QrReaderNode(Node):
         self._armed = False
         self._completion_scan_enabled = False
         self._arming_fails = 0
+        self._pending_session: SessionStart | None = None
+        self._session_publish_attempts = 0
+        self._guide_state_seen = False
+        self._guide_session_id = 0
+        # Guide Manager가 재기동해 SESSION_NONE 으로 돌아오면 백엔드 정본에서
+        # 활성 세션을 한 번 복원한다. 평상시에는 계속 폴링하지 않는다.
+        self._session_recovery_requested = True
 
         self.create_subscription(
             GuideState, '/guide_manager/state', self._on_guide_state, state_qos)
@@ -128,6 +158,11 @@ class QrReaderNode(Node):
         self._timer = self.create_timer(period, self._tick)
         self._arming_timer = self.create_timer(
             self.arming_poll_seconds, self._poll_arming)
+        self._session_retry_timer = self.create_timer(
+            max(0.2, float(self.get_parameter("session_retry_seconds").value)),
+            self._retry_session_start)
+        self._session_recovery_timer = self.create_timer(
+            max(2.0, self.arming_poll_seconds), self._recover_active_session)
         self.get_logger().info(
             f"qr_reader_node started (source={self.source}, backend={self.backend_url})"
         )
@@ -199,15 +234,22 @@ class QrReaderNode(Node):
 
     def _tick(self) -> None:
         # QR 디코드는 arming/waiting 동안만 한다. 관제 카메라 화면을 실제로 연
-        # 사람이 있으면 스캔 상태와 무관하게 프레임만 저FPS로 공유한다.
+        # 사람이 있거나, /front_camera/image_raw/compressed 구독자(예: 화재
+        # 감지 노드)가 있으면 스캔 상태와 무관하게 프레임을 계속 공유한다.
+        # 이 셋 중 아무것도 아니면(대기 중 + 아무도 안 봄) 카메라를 안 읽어서
+        # CPU 를 아낀다 -- 원래도 그랬던 최적화라 조건만 하나 더 붙였다.
         scan_enabled = self._armed or self._completion_scan_enabled
         preview_enabled = self._preview is not None and self._preview.has_viewers
-        if not (scan_enabled or preview_enabled):
+        image_topic_enabled = self._image_pub.get_subscription_count() > 0
+        if not (scan_enabled or preview_enabled or image_topic_enabled):
             return
 
         frame = self._read_frame()
         if frame is None:
             return
+
+        if image_topic_enabled:
+            self._publish_compressed(frame)
 
         # 관제 미리보기만 보는 동안에는 QR 디코드를 돌리지 않는다.
         codes = (pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
@@ -227,6 +269,20 @@ class QrReaderNode(Node):
             self._last = LastScan(value=value, ts=time.monotonic())
             self._post_scan(value)
             return
+
+    def _publish_compressed(self, frame) -> None:
+        now = time.monotonic()
+        if now - self._last_image_publish_at < self._image_publish_min_interval:
+            return
+        self._last_image_publish_at = now
+        ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = 'jpeg'
+        msg.data = encoded.tobytes()
+        self._image_pub.publish(msg)
 
     @staticmethod
     def _annotate_preview(frame, codes):
@@ -290,6 +346,27 @@ class QrReaderNode(Node):
                 self._disarm()
 
     def _on_guide_state(self, msg: GuideState) -> None:
+        previous_session_id = self._guide_session_id
+        self._guide_state_seen = True
+        self._guide_session_id = int(msg.session_id)
+        if msg.returning_to_dock:
+            # guide_manager 상태는 같은 기체 안에서 즉시 도착한다. 백엔드의
+            # 다음 heartbeat를 기다리지 않고 카메라와 전달 재시도를 닫아
+            # 복귀 중 새 세션이 생기는 짧은 경합도 막는다.
+            self._pending_session = None
+            self._session_publish_attempts = 0
+            self._disarm()
+        if (self._pending_session is not None
+                and self._guide_session_id == int(self._pending_session.session_id)
+                and msg.session_state != GuideState.SESSION_NONE):
+            self.get_logger().info(
+                f'session_start 수신 확인: session_id={self._guide_session_id} '
+                f'attempts={self._session_publish_attempts}')
+            self._pending_session = None
+            self._session_publish_attempts = 0
+        if previous_session_id > 0 and self._guide_session_id == 0:
+            self._session_recovery_requested = True
+
         enabled = completion_scan_enabled(msg, self.robot_id)
         if enabled == self._completion_scan_enabled:
             return
@@ -321,6 +398,9 @@ class QrReaderNode(Node):
         return (time.monotonic() - self._last.ts) < self.debounce_seconds
 
     def _post_scan(self, patient_id: str) -> None:
+        # completion QR은 이미 같은 session_id의 GuideState가 있으므로 그 값을
+        # ACK로 사용할 수 없다. 이번 재전송은 최초 세션 전달에만 적용한다.
+        initial_scan = self._armed and not self._completion_scan_enabled
         url = f"{self.backend_url}/qr/scan"
         body = {"patient_id": patient_id, "robot_id": self.robot_id}
         if self.marker_id >= 0:
@@ -337,7 +417,7 @@ class QrReaderNode(Node):
 
         if response.status_code == 200:
             self.get_logger().info(f"QR 확인 성공: {patient_id}")
-            self._publish_session_start(response)
+            self._publish_session_start(response, require_ack=initial_scan)
         elif response.status_code == 404:
             self.get_logger().warn(f"QR 인식 실패 (환자 없음): {patient_id}")
         else:
@@ -345,7 +425,12 @@ class QrReaderNode(Node):
                 f"백엔드 응답 이상: {response.status_code} {response.text[:200]}"
             )
 
-    def _publish_session_start(self, response: requests.Response) -> None:
+    def _publish_session_start(
+        self,
+        response: requests.Response,
+        *,
+        require_ack: bool = False,
+    ) -> None:
         """POST /qr/scan 응답을 파싱해 SessionStart 로 흘린다.
 
         응답 스키마는 backend/app/schemas.py 의 TodaySchedule 와 1:1 이다.
@@ -353,27 +438,91 @@ class QrReaderNode(Node):
         예외로 죽으면 카메라 리소스까지 재초기화해야 해서 손해가 크다.
         """
         try:
-            body = response.json()
-            steps = body.get("steps") or []
-            msg = SessionStart()
-            msg.session_id = int(body.get("session_id") or 0)
-            msg.patient_id = str(body.get("patient", {}).get("patient_id") or "")
-            msg.current_step_order = int(body.get("current_step_order") or 0)
-            # 백엔드는 이미 step_order 오름차순으로 보내지만, 명시적으로 정렬한다.
-            msg.visit_names = [
-                str(s.get("visit_name") or "")
-                for s in sorted(steps, key=lambda s: s.get("step_order", 0))
-            ]
+            msg = self._session_message(response.json())
         except (ValueError, TypeError, AttributeError) as exc:
             self.get_logger().error(f"세션 응답 파싱 실패: {exc}")
             return
 
         self._session_pub.publish(msg)
+        if require_ack:
+            self._pending_session = msg
+            self._session_publish_attempts = 1
         self.get_logger().info(
             f"session_start 발행: session_id={msg.session_id} "
             f"patient={msg.patient_id} step={msg.current_step_order}/"
             f"{len(msg.visit_names)} visits={msg.visit_names}"
         )
+
+    @staticmethod
+    def _session_message(body: dict) -> SessionStart:
+        steps = body.get("steps") or []
+        msg = SessionStart()
+        msg.session_id = int(body.get("session_id") or 0)
+        msg.patient_id = str(body.get("patient", {}).get("patient_id") or "")
+        msg.current_step_order = int(body.get("current_step_order") or 0)
+        # 백엔드는 이미 step_order 오름차순으로 보내지만 복구 응답도 같은
+        # 규칙으로 다루도록 여기서 명시적으로 정렬한다.
+        msg.visit_names = [
+            str(step.get("visit_name") or "")
+            for step in sorted(steps, key=lambda step: step.get("step_order", 0))
+        ]
+        return msg
+
+    def _retry_session_start(self) -> None:
+        msg = self._pending_session
+        if msg is None:
+            return
+        if self._session_publish_attempts >= self.session_retry_limit:
+            self.get_logger().error(
+                f'session_start 수신 확인 실패: session_id={msg.session_id} '
+                f'attempts={self._session_publish_attempts}')
+            self._pending_session = None
+            self._session_publish_attempts = 0
+            return
+        self._session_pub.publish(msg)
+        self._session_publish_attempts += 1
+        self.get_logger().warn(
+            f'session_start 재전송: session_id={msg.session_id} '
+            f'attempt={self._session_publish_attempts}/{self.session_retry_limit}')
+
+    def _recover_active_session(self) -> None:
+        """Guide Manager 재기동 시 백엔드의 활성 세션을 한 번 복원한다."""
+        if not self._session_recovery_requested or not self._guide_state_seen:
+            return
+        if self._guide_session_id > 0 or self._armed:
+            self._session_recovery_requested = False
+            return
+        try:
+            response = requests.get(
+                f'{self.backend_url}/sessions/active', timeout=self.http_timeout)
+            response.raise_for_status()
+            sessions = response.json()
+            active = next(
+                (item for item in sessions
+                 if str(item.get('robot_id') or '') == self.robot_id),
+                None,
+            )
+        except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+            self.get_logger().warn(f'활성 세션 복구 조회 실패: {exc}')
+            return
+
+        self._session_recovery_requested = False
+        if active is None:
+            return
+        try:
+            msg = self._session_message(active)
+        except (ValueError, TypeError, AttributeError) as exc:
+            self.get_logger().error(f'활성 세션 복구 응답 파싱 실패: {exc}')
+            return
+        if msg.session_id <= 0 or not msg.patient_id:
+            self.get_logger().error('활성 세션 복구 응답에 세션 정보가 없습니다.')
+            return
+        self._session_pub.publish(msg)
+        self._pending_session = msg
+        self._session_publish_attempts = 1
+        self.get_logger().warn(
+            f'백엔드 활성 세션 복구 발행: session_id={msg.session_id} '
+            f'patient={msg.patient_id}')
 
     def destroy_node(self) -> bool:
         if self._capture is not None:

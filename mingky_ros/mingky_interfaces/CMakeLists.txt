@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ArucoDetectionArray.msg"
   "msg/Event.msg"
   "msg/GuideState.msg"
+  "msg/QrObservation.msg"
   "msg/SessionStart.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs
 )

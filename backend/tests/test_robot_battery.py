@@ -128,4 +128,7 @@ def test_arm_rejects_stale_battery_reading(monkeypatch):
         asyncio.run(robots.arm_robot("pinky-01"))
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "battery reading is stale"
+    # detail 은 코드·파라미터·기존 문구로 나뉜다. 상세 계약은
+    # test_arm_rejection_codes.py 가 검증한다.
+    assert exc_info.value.detail["code"] == "battery_stale"
+    assert exc_info.value.detail["message"] == "battery reading is stale"

@@ -1,17 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { animate, createScope } from 'animejs'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
+import { GuidanceCancelCard } from '../components/GuidanceCancelCard'
 import { GuidanceStartCard } from '../components/GuidanceStartCard'
+import { GuidanceRearCamera } from '../components/GuidanceRearCamera'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotPicker } from '../components/RobotPicker'
-import { RobotMap } from '../components/RobotMap'
+import { LazyHospitalMap3D } from '../components/LazyHospitalMap3D'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
-import { getActiveSessions, getRobots, sendOrder } from '../lib/api'
+import { getActiveSessions, getBatteryForecast, getRobots, sendOrder } from '../lib/api'
+import type { BatteryForecast } from '../lib/api'
 import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
@@ -19,9 +23,10 @@ import { useRobotMode } from '../lib/useRobotMode'
 import { usePolling } from '../lib/usePolling'
 import { useTeleopSocket } from '../lib/useTeleopSocket'
 import type { EventOut } from '../types/events'
-import type { ActiveSession, Robot } from '../types/monitoring'
+import { isMobile, type ActiveSession, type MobileRobot } from '../types/monitoring'
 
 const POLL_MS = 3000
+const FORECAST_POLL_MS = 120000
 // QR 이 인식된 순간 확인 화면을 띄우고 있는 시간. 스캔 대기에서 안내 화면으로
 // 그냥 바뀌면 환자·의료진 모두 "인식이 된 건가?" 를 판단할 근거가 없다.
 // 너무 길면 안내 시작이 늦어지므로 읽고 넘어갈 만큼만 잡는다.
@@ -37,12 +42,27 @@ export function MedicalDashboard() {
   // armed_at 이 아직 null 이다. 그 낡은 값을 그대로 믿으면 아래 orphan 판정이
   // 방금 한 선택을 무효로 보고 선택 화면으로 튕긴다. 폴링이 따라잡을 때까지
   // 이 응답으로 덮어쓴다.
-  const [justArmed, setJustArmed] = useState<Robot | null>(null)
+  const [justArmed, setJustArmed] = useState<MobileRobot | null>(null)
   const [locationBusy, setLocationBusy] = useState(false)
   const [locationNotice, setLocationNotice] = useState<string | null>(null)
+  const controlDeckRef = useRef<HTMLDivElement>(null)
 
   const sessions = usePolling((signal) => getActiveSessions({ signal }), POLL_MS)
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
+  // 배터리 로그가 2분 주기라 그보다 자주 추정해도 같은 답이 나온다.
+  // 주기가 긴 만큼 key 가 없으면 로봇을 바꾼 뒤 2분 동안 이전 로봇의
+  // 충전 예상이 남는다 — 의료진이 그 숫자로 일정을 잡는다.
+  const forecast = usePolling(
+    (signal) => (selectedRobotId
+      ? getBatteryForecast(selectedRobotId, { signal })
+      : Promise.resolve(null)),
+    FORECAST_POLL_MS,
+    selectedRobotId,
+  )
+
+  // 로봇을 바꾸면 이벤트도 즉시 갈아끼운다. 안 그러면 다음 tick 까지 이전
+  // 로봇의 이벤트로 상태를 파생해(deriveRobotState) 엉뚱한 로봇의 '통신
+  // 두절' 이 표시된다.
   const events = usePolling(
     async (signal) => (
       await listEvents(
@@ -51,6 +71,7 @@ export function MedicalDashboard() {
       )
     ).items,
     POLL_MS,
+    selectedRobotId,
   )
 
   // 조작과 위치는 폴링이 아니라 소켓이다. 방향키를 누른 뒤 3초 뒤에 움직이면
@@ -65,7 +86,12 @@ export function MedicalDashboard() {
   // 선택한 로봇이 실제 목록에 있고 armed 이거나 세션이 있는 동안만 유효 선택이다.
   // 세션이 끝나거나 다른 경로로 disarmed 되면 선택을 자동으로 해제해서
   // 다음 tick 에 RobotPicker 로 돌아간다.
-  const robotList = robots.data ?? []
+  // 이 화면은 환자 안내 전용이다. 팔은 QR 도 arming 도 세션도 없으므로
+  // 목록 단계에서 거른다 — 그래야 아래 전부가 MobileRobot 으로 좁혀진다.
+  // useMemo 인 이유는 아래 effect 의 의존성이라서다. 매 렌더 새 배열을 만들면
+  // 그 effect 가 매 렌더 돈다.
+  const robotList = useMemo(
+    () => (robots.data ?? []).filter(isMobile), [robots.data])
   const polledRobot = selectedRobotId
     ? robotList.find((r) => r.robot_id === selectedRobotId) ?? null
     : null
@@ -131,13 +157,39 @@ export function MedicalDashboard() {
   // 판단하므로 다른 경로로 해제되면 정상적으로 선택 화면으로 돌아간다.
   useEffect(() => {
     if (justArmed == null) return
-    const polled = robots.data?.find((r) => r.robot_id === justArmed.robot_id)
+    const polled = robotList.find((r) => r.robot_id === justArmed.robot_id)
     if (polled && (polled.armed_at != null || polled.active_session_id != null)) {
       setJustArmed(null)
     }
-  }, [robots.data, justArmed])
+  }, [robotList, justArmed])
 
-  function handleSelect(robot: Robot) {
+  useEffect(() => {
+    if (!selectedRobotId || !controlDeckRef.current) return
+    const scope = createScope({
+      root: controlDeckRef,
+      mediaQueries: {
+        reduceMotion: '(prefers-reduced-motion: reduce)',
+      },
+    }).add((self) => {
+      if (self?.matches.reduceMotion) return
+      animate('.control-deck__map-shell', {
+        opacity: { from: 0 },
+        scale: { from: 0.985 },
+        duration: 480,
+        ease: 'out(3)',
+      })
+      animate('.control-deck__rail', {
+        opacity: { from: 0 },
+        x: { from: 20 },
+        delay: 90,
+        duration: 420,
+        ease: 'out(4)',
+      })
+    })
+    return () => scope.revert()
+  }, [selectedRobotId])
+
+  function handleSelect(robot: MobileRobot) {
     setJustArmed(robot)
     navigate(`/medical/${robot.robot_id}`)
   }
@@ -202,7 +254,7 @@ export function MedicalDashboard() {
   }
 
   return (
-    <div className="dashboard">
+    <div className="dashboard dashboard--medical">
       {stale && <ErrorBanner />}
       {/* 활성화·안내를 유지한 채 선택 화면으로. 다른 로봇을 추가로 켜는 통로다. */}
       <button
@@ -216,7 +268,7 @@ export function MedicalDashboard() {
       {/* 안내 중이든 대기 중이든 항상 보여야 한다. 급할 때 찾는 것이
           화면 상태에 따라 사라지면 안 된다. */}
       {selectedRobotId && (
-          <div className="control-deck">
+          <div className="control-deck" ref={controlDeckRef}>
             {/* 끊김은 조작·정지가 안 닿는다는 뜻이라 화면 위쪽에 크게 알린다.
                 패널마다 흩어 놓으면 어느 것이 진짜 상태인지 알기 어렵다. */}
             {!teleop.robotConnected && (
@@ -227,30 +279,56 @@ export function MedicalDashboard() {
                   : ' 관제 서버와의 연결도 끊겨 있습니다.'}
               </p>
             )}
-            <RobotModeControl
-              robotId={selectedRobotId}
-              mode={mode}
-              robotConnected={teleop.robotConnected}
-            />
-            <RobotMap
-              pose={teleop.pose}
-              live={teleop.robotConnected}
-              scan={teleop.scan}
-              particles={teleop.particles}
-              plan={teleop.plan}
-              onSetPose={teleop.setPose}
-            />
-            <TeleopPad
-              drive={teleop.drive}
-              enabled={mode === 'manual' && teleop.robotConnected}
-              disabledReason={
-                !teleop.robotConnected
-                  ? '로봇이 관제에 연결되어 있지 않습니다.'
-                  : mode === 'estop'
-                    ? '비상정지가 걸려 있습니다. 해제해야 움직입니다.'
-                    : '수동 조작 모드로 전환해야 움직입니다.'
-              }
-            />
+            <div className="control-deck__map-shell">
+              <LazyHospitalMap3D
+                pose={teleop.pose}
+                live={teleop.robotConnected}
+                scan={teleop.scan}
+                particles={teleop.particles}
+                plan={teleop.plan}
+                recoveryPlan={teleop.recoveryPlan}
+                onSetPose={teleop.setPose}
+                estop={teleop.appliedMode === 'estop'}
+                selected
+              />
+            </div>
+            <aside className="control-deck__rail" aria-label="로봇 주행 제어">
+              <header className="control-deck__rail-header">
+                <div>
+                  <span className="control-deck__eyebrow">CONTROL CENTER</span>
+                  <strong>로봇 주행 제어</strong>
+                </div>
+                <span className={`control-deck__connection${
+                  teleop.robotConnected ? ' is-online' : ' is-offline'
+                }`}>
+                  <i aria-hidden="true" />
+                  {teleop.robotConnected ? '연결됨' : '연결 끊김'}
+                </span>
+              </header>
+              <RobotModeControl
+                robotId={selectedRobotId}
+                mode={mode}
+                appliedMode={teleop.appliedMode}
+                modeStatusRevision={teleop.modeStatusRevision}
+                robotConnected={teleop.robotConnected}
+              />
+              <TeleopPad
+                drive={teleop.drive}
+                enabled={mode === 'manual' && teleop.appliedMode === 'manual'
+                  && teleop.robotConnected}
+                disabledReason={
+                  !teleop.robotConnected
+                    ? '로봇이 관제에 연결되어 있지 않습니다.'
+                    : teleop.appliedMode === null
+                      ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
+                      : mode !== teleop.appliedMode
+                      ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
+                      : teleop.appliedMode === 'estop'
+                      ? '비상정지가 걸려 있습니다. 해제해야 움직입니다.'
+                      : '수동 조작 모드로 전환해야 움직입니다.'
+                }
+              />
+            </aside>
           </div>
       )}
       {selectedRobotId && (
@@ -292,6 +370,7 @@ export function MedicalDashboard() {
           events={sessionEvents}
           mode={mode}
           robotConnected={teleop.robotConnected}
+          forecast={forecast.data ?? null}
         />
       ) : (
         // 스캔 대기 순간엔 카메라가 카드 안에 들어가 있어야 "여기에 QR 을
@@ -308,10 +387,12 @@ export function MedicalDashboard() {
 
 interface SessionViewProps {
   session: ActiveSession
-  robot: Robot
+  robot: MobileRobot
   events: EventOut[]
   mode: 'auto' | 'manual' | 'estop' | null
   robotConnected: boolean
+  /** 충전/방전 예상. 시간이 없는 경우가 정상적으로 흔하다. */
+  forecast: BatteryForecast | null
 }
 
 function SessionView({
@@ -320,6 +401,7 @@ function SessionView({
   events,
   mode,
   robotConnected,
+  forecast,
 }: SessionViewProps) {
   const derivedState = deriveRobotState(events, {
     session_id: session.session_id,
@@ -342,8 +424,10 @@ function SessionView({
         <RobotStatusBadge
           state={derivedState}
           batteryPercent={robot.battery_percent ?? null}
+          batteryVoltage={robot.battery_voltage ?? null}
           batteryRecordedAt={robot.battery_recorded_at ?? null}
           currentDestination={derivedDestination}
+          forecast={forecast}
         />
       </div>
       <GuidanceStartCard
@@ -352,6 +436,13 @@ function SessionView({
         mode={mode}
         robotConnected={robotConnected}
       />
+      <GuidanceCancelCard
+        session={session}
+        robotConnected={robotConnected}
+      />
+      {derivedState === '안내중' && (
+        <GuidanceRearCamera robotId={session.robot_id} />
+      )}
       <ProgressStepper
         steps={session.steps}
         currentStepOrder={session.current_step_order}
