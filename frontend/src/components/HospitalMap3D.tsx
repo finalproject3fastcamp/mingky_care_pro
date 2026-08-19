@@ -82,7 +82,12 @@ export interface HospitalMap3DProps extends DiagLayers {
   > | null
   /**
    * 충전소로 돌아가는 중인지.
+   *
    * `follow_state` 에 없는 상태라(inactive/normal/slow/waiting 뿐) 따로 받는다.
+   *
+   * **환자를 놓쳤다고 저절로 복귀하지는 않는다.** 로봇이 복귀를 시작하는 경우는
+   * 배터리 부족 · 의료진이 안내를 취소 · 안내 완료, 이 셋뿐이다. 환자를 놓치면
+   * 그 자리에서 **무기한 기다린다.**
    */
   returning?: boolean
   /**
@@ -1098,7 +1103,11 @@ export function HospitalMap3D({
           : mapState === 'waiting'
             ? '경로이탈 — 그 자리에서 대기'
             : mapState === 'returning'
-              ? '대기 시간 초과 — 충전소로 복귀'
+              // 사유는 화면까지 오지 않는다. 로봇 쪽 복귀 사유는 battery /
+              // guidance_canceled / session_completed 셋인데 밖으로는
+              // returning_to_dock 참·거짓만 나온다. 짐작해 적으면 틀린 말이
+              // 화면에 남으므로 사실만 적는다.
+              ? '충전소로 복귀 시작'
               : mapState === 'estop'
                 ? '비상정지'
                 : from === 'returning'
