@@ -92,6 +92,7 @@ Desktop.ini
 # Claude Code local settings
 .claude/settings.local.json
 .claude/settings.local.json.tmp.*
+.claude/scheduled_tasks.lock
 
 # Local handoff notes for the next coding session
 /CONTEXT.md
