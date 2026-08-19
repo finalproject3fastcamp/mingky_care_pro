@@ -418,7 +418,7 @@ export function HospitalMap3D({
      * 발밑 접지 그림자.
      *
      * 해 그림자는 2048 짜리 그림자 지도를 건물 전체(5.2m)에 펼쳐 쓰기 때문에
-     * **11.6cm 짜리 로봇에서는 거의 안 나온다.** 그런데 사람 눈은 물체가
+     * **14cm 남짓한 로봇에서는 거의 안 나온다.** 그런데 사람 눈은 물체가
      * 바닥에 닿았는지를 발밑 그림자로 판단해서, 없으면 공중에 떠 보인다.
      * 실제로 최저점은 y=0(바퀴 밑)인데도 떠 보인다는 지적을 받았다.
      *
@@ -820,7 +820,11 @@ export function HospitalMap3D({
       if (auto && performance.now() - lastTouch < AUTO_FOCUS_HOLD_MS) return
       const at = robot.position.clone()
       at.y = 0.1
-      // 모형의 앞은 로컬 +x 다. rotation.y 만큼 돌리면 지금 바라보는 쪽이 된다.
+      // 로봇이 바라보는 쪽. `robot.rotation.y` 는 지도 각도에 FACING 을 더한
+      // 값이므로, 여기서 나오는 방향은 **화면에 그려진 로봇이 향한 쪽과 항상
+      // 같다.** 둘 다 같은 값에서 나오기 때문이다. 다만 그것이 **실제 로봇의
+      // 앞**과 같은지는 FACING 이 맞아야 성립하고, FACING 은 아직 실물로
+      // 확인하지 않았다.
       const forward = new THREE.Vector3(1, 0, 0).applyAxisAngle(
         new THREE.Vector3(0, 1, 0),
         robot.rotation.y,
