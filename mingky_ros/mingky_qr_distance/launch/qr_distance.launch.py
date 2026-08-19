@@ -25,6 +25,6 @@ def generate_launch_description() -> LaunchDescription:
                 'process_every_n': LaunchConfiguration('process_every_n'),
                 'max_process_fps': LaunchConfiguration('max_process_fps'),
             }],
-            prefix=['nice', '-n', '5'],
+            prefix='nice -n 5',
         ),
     ])
