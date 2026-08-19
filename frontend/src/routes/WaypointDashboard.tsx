@@ -297,6 +297,7 @@ export function WaypointDashboard() {
             waypoints={markers}
             onSelectWaypoint={setSelectedName}
             robotId={selectedRobotId}
+            returning={selectedRobot?.returning_to_dock ?? false}
           />
         </section>
 
