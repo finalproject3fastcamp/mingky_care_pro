@@ -296,6 +296,7 @@ export function WaypointDashboard() {
             plan={teleop.plan}
             waypoints={markers}
             onSelectWaypoint={setSelectedName}
+            robotId={selectedRobotId}
           />
         </section>
 

@@ -289,6 +289,7 @@ export function MedicalDashboard() {
                 onSetPose={teleop.setPose}
                 estop={teleop.appliedMode === 'estop'}
                 selected
+                robotId={selectedRobotId}
               />
             </div>
             <aside className="control-deck__rail" aria-label="로봇 주행 제어">
