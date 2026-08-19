@@ -154,6 +154,21 @@ def _set_fresh_recovery_inputs(node: NavigationManager) -> None:
     node._latest_nav_pose_received_ns = node.get_clock().now().nanoseconds
 
 
+def _path_to(goal: PoseStamped, *, end_at_goal: bool = True) -> Path:
+    path = Path()
+    start = PoseStamped()
+    start.pose.orientation.w = 1.0
+    end = PoseStamped()
+    end.pose.orientation.w = 1.0
+    if end_at_goal:
+        end.pose.position.x = goal.pose.position.x
+        end.pose.position.y = goal.pose.position.y
+    else:
+        end.pose.position.x = 0.02
+    path.poses = [start, end]
+    return path
+
+
 def test_test_metadata_does_not_replace_ros_context(manager):
     node, _ = manager
 
@@ -341,11 +356,12 @@ def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
     assert node.path_planner.sent[0].use_start is False
     path_handle = FakeActionHandle()
     node.path_planner.futures[0].callback(ImmediateFuture(path_handle))
+    planned_goal = node.path_planner.sent[0].goal
     path_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
         status=GoalStatus.STATUS_SUCCEEDED,
         result=SimpleNamespace(
             error_code=0,
-            path=SimpleNamespace(poses=[object(), object()]),
+            path=_path_to(planned_goal),
         ),
     )))
 
@@ -362,6 +378,30 @@ def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
     assert node.nav.sent[2].pose.pose.position.x == pytest.approx(1.25)
     assert node.nav.sent[2].pose.pose.position.y == pytest.approx(-0.5)
     assert node._test_context['recovery_attempt'] == 1
+
+
+def test_nearby_fallback_recovery_path_is_rejected(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('adaptive_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+    path_handle = FakeActionHandle()
+    node.path_planner.futures[0].callback(ImmediateFuture(path_handle))
+    planned_goal = node.path_planner.sent[0].goal
+    path_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(
+            error_code=0,
+            path=_path_to(planned_goal, end_at_goal=False),
+        ),
+    )))
+
+    assert len(node.nav.sent) == 1
+    assert len(node.path_planner.sent) == 2
 
 
 def test_recovery_has_no_attempt_limit(adaptive_manager):

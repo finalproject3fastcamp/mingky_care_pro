@@ -315,12 +315,13 @@ planner_server:
     costmap_update_timeout: 1.0
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
+      # 요청 지점에 도달할 수 없으면 가까운 지점을 성공으로 돌려주지 않는다.
+      tolerance: 0.0
       use_astar: false
       allow_unknown: true
     Smac2D:
       plugin: "nav2_smac_planner::SmacPlanner2D"
-      tolerance: 0.5
+      tolerance: 0.0
       allow_unknown: true
       max_planning_time: 2.0
       cost_travel_multiplier: 2.0

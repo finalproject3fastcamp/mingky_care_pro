@@ -28,6 +28,7 @@ from mingky_smart_recovery.selector import (
     select_diverse_candidates,
     select_escape_candidates,
 )
+from mingky_smart_recovery.path_validation import validate_recovery_path
 from nav2_msgs.action import ComputePathToPose, DriveOnHeading, NavigateToPose, Spin
 from nav_msgs.msg import Path as NavPath
 import rclpy
@@ -882,19 +883,37 @@ class NavigationManager(Node):
             self, future, recovery: dict, candidate: EscapeCandidate) -> None:
         if recovery['generation'] != self._generation:
             return
+        validation = None
         try:
             wrapped = future.result()
             path_result = wrapped.result
+            goal_pose = self._candidate_pose(recovery, candidate).pose.position
+            points = [
+                (float(item.pose.position.x), float(item.pose.position.y))
+                for item in path_result.path.poses
+            ]
+            validation = validate_recovery_path(
+                points,
+                expected_start=(recovery['robot_x'], recovery['robot_y']),
+                expected_goal=(float(goal_pose.x), float(goal_pose.y)),
+                requested_distance_m=candidate.distance_m,
+            )
             valid = (
                 wrapped.status == GoalStatus.STATUS_SUCCEEDED
                 and path_result.error_code == ComputePathToPose.Result.NONE
-                and len(path_result.path.poses) >= 2
+                and validation.valid
             )
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(
                 f'탈출 경로 결과 실패({candidate.name}): {exc}')
             valid = False
         if not valid:
+            if validation is not None and not validation.valid:
+                self.get_logger().warn(
+                    f'탈출 경로 거부({candidate.name}): '
+                    f'시작오차={validation.start_error_m:.2f}m, '
+                    f'끝점오차={validation.endpoint_error_m:.2f}m, '
+                    f'실이동={validation.displacement_m:.2f}m')
             self._reject_recovery_candidate(recovery, candidate)
             return
         self.get_logger().info(
