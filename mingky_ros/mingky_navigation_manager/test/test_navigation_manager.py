@@ -14,6 +14,7 @@ from mingky_navigation_manager.navigation_manager_node import (
     NavigationManager,
     SAFETY_ERROR,
 )
+from mingky_smart_recovery.selector import EscapeCandidate
 from nav_msgs.msg import Path
 import pytest
 import rclpy
@@ -124,6 +125,8 @@ def adaptive_manager():
     ])
     node.nav = FakeNav()
     node.path_planner = FakePathPlanner()
+    node.recovery_spin = FakeNav()
+    node.recovery_drive = FakeNav()
     published = []
     node.result_pub.publish = lambda msg: published.append(json.loads(msg.data))
     yield node, published
@@ -402,6 +405,74 @@ def test_nearby_fallback_recovery_path_is_rejected(adaptive_manager):
 
     assert len(node.nav.sent) == 1
     assert len(node.path_planner.sent) == 2
+
+
+def test_direct_escape_moves_briefly_then_resends_original(adaptive_manager):
+    node, _ = adaptive_manager
+    node._on_goto_pose(_pose('occupied_start'))
+    candidate = EscapeCandidate(
+        name='forward',
+        bearing_rad=0.0,
+        distance_m=0.35,
+        x_m=0.35,
+        y_m=0.0,
+        clearance_m=1.0,
+        score=1.0,
+    )
+    recovery = {
+        'recovery_attempt': 0,
+        'failures': {},
+        'candidates': [candidate],
+        'generation': node._generation,
+    }
+
+    node._start_direct_recovery_escape(recovery)
+
+    assert node.recovery_spin.sent == []
+    assert len(node.recovery_drive.sent) == 1
+    assert node.recovery_drive.sent[0].target.x == pytest.approx(0.12)
+    drive_handle = FakeActionHandle()
+    node.recovery_drive.futures[0].callback(ImmediateFuture(drive_handle))
+    drive_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(error_code=0),
+    )))
+
+    assert len(node.nav.sent) == 2
+    assert node.nav.sent[1].pose.pose.position.x == pytest.approx(1.25)
+    assert node._test_context['recovery_attempt'] == 1
+
+
+def test_direct_escape_rotates_before_moving(adaptive_manager):
+    node, _ = adaptive_manager
+    node._on_goto_pose(_pose('occupied_start'))
+    candidate = EscapeCandidate(
+        name='left_045',
+        bearing_rad=math.radians(45.0),
+        distance_m=0.20,
+        x_m=0.14,
+        y_m=0.14,
+        clearance_m=0.8,
+        score=0.8,
+    )
+    recovery = {
+        'recovery_attempt': 0,
+        'failures': {},
+        'candidates': [candidate],
+        'generation': node._generation,
+    }
+
+    node._start_direct_recovery_escape(recovery)
+
+    assert len(node.recovery_spin.sent) == 1
+    assert node.recovery_drive.sent == []
+    spin_handle = FakeActionHandle()
+    node.recovery_spin.futures[0].callback(ImmediateFuture(spin_handle))
+    spin_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(error_code=0),
+    )))
+    assert len(node.recovery_drive.sent) == 1
 
 
 def test_near_goal_abort_retries_original_without_sidestep(adaptive_manager):

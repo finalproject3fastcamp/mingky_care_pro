@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Mapping
 
 from action_msgs.msg import GoalStatus
+from builtin_interfaces.msg import Duration
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from geometry_msgs.msg import PoseStamped
 from mingky_guide_manager.low_obstacle import (
@@ -77,6 +78,8 @@ class NavigationManager(Node):
         self.declare_parameter('recovery_reverse_after_attempt', 6)
         self.declare_parameter('recovery_near_goal_distance_m', 0.20)
         self.declare_parameter('recovery_cooldown_sec', 3.0)
+        self.declare_parameter('recovery_direct_escape_distance_m', 0.12)
+        self.declare_parameter('recovery_direct_escape_speed_mps', 0.10)
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -143,6 +146,12 @@ class NavigationManager(Node):
                 'recovery_near_goal_distance_m').value))
         self.recovery_cooldown_sec = max(
             0.0, float(self.get_parameter('recovery_cooldown_sec').value))
+        self.recovery_direct_escape_distance_m = max(
+            0.05, float(self.get_parameter(
+                'recovery_direct_escape_distance_m').value))
+        self.recovery_direct_escape_speed_mps = max(
+            0.03, float(self.get_parameter(
+                'recovery_direct_escape_speed_mps').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -254,6 +263,11 @@ class NavigationManager(Node):
         self.low_obstacle_spin = ActionClient(self, Spin, 'spin')
         self.low_obstacle_drive = ActionClient(
             self, DriveOnHeading, 'drive_on_heading')
+        # 전역 planner가 현재 셀을 occupied로 판단하면 어떤 탈출 후보도
+        # ComputePathToPose를 통과할 수 없다. 이때도 Nav2 behavior server의
+        # 충돌 검사를 유지한 채 짧게 회전/전진할 수 있도록 같은 액션을 쓴다.
+        self.recovery_spin = self.low_obstacle_spin
+        self.recovery_drive = self.low_obstacle_drive
         self.low_obstacle_driver = SidestepActionDriver(
             self,
             self.low_obstacle_spin,
@@ -864,11 +878,7 @@ class NavigationManager(Node):
         index = int(recovery['index'])
         candidates = recovery['candidates']
         if index >= len(candidates):
-            self._schedule_recovery_retry(
-                int(recovery['recovery_attempt']) + 1,
-                recovery['failures'],
-                '검증 가능한 탈출 경로가 없습니다.',
-            )
+            self._start_direct_recovery_escape(recovery)
             return
         candidate = candidates[index]
         recovery['index'] = index + 1
@@ -968,6 +978,148 @@ class NavigationManager(Node):
         future.add_done_callback(
             lambda done: self._on_recovery_goal_response(done, recovery))
 
+    def _start_direct_recovery_escape(self, recovery: dict) -> None:
+        """Planner 시작 셀이 막혀도 LiDAR 방향으로 짧게 탈출한다.
+
+        전역 경로 검증이 전부 실패한 경우에만 사용한다. 무검증 cmd_vel을
+        발행하지 않고 Nav2 Spin/DriveOnHeading을 사용하므로 local costmap의
+        footprint 충돌 검사는 그대로 적용된다.
+        """
+        candidates = recovery.get('candidates') or []
+        if not candidates:
+            self._schedule_recovery_retry(
+                int(recovery['recovery_attempt']) + 1,
+                recovery['failures'],
+                'LiDAR 탈출 후보도 없습니다.',
+            )
+            return
+        candidate = min(
+            candidates,
+            key=lambda item: (
+                recovery['failures'].get(item.name, 0),
+                abs(item.bearing_rad),
+                -item.score,
+            ),
+        )
+        distance = min(
+            candidate.distance_m, self.recovery_direct_escape_distance_m)
+        direct_candidate = EscapeCandidate(
+            name=candidate.name,
+            bearing_rad=candidate.bearing_rad,
+            distance_m=distance,
+            x_m=distance * math.cos(candidate.bearing_rad),
+            y_m=distance * math.sin(candidate.bearing_rad),
+            clearance_m=candidate.clearance_m,
+            score=candidate.score,
+        )
+        recovery['active_candidate'] = direct_candidate
+        self._plan_phase = 'recovery'
+        self._generation += 1
+        recovery['generation'] = self._generation
+        self.get_logger().warn(
+            f'Planner 시작 셀이 막혀 {direct_candidate.name} 방향으로 '
+            f'{distance:.2f}m 즉시 탈출을 시도합니다.')
+
+        if abs(direct_candidate.bearing_rad) < math.radians(8.0):
+            self._send_direct_recovery_drive(recovery)
+            return
+        if not self.recovery_spin.wait_for_server(timeout_sec=0.2):
+            self._recovery_motion_failed(recovery)
+            return
+        goal = Spin.Goal()
+        goal.target_yaw = float(direct_candidate.bearing_rad)
+        goal.time_allowance = Duration(sec=3)
+        future = self.recovery_spin.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_direct_recovery_spin_response(
+                done, recovery))
+
+    def _on_direct_recovery_spin_response(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 회전 전송 실패: {exc}')
+            self._recovery_motion_failed(recovery)
+            return
+        if not handle.accepted:
+            self._recovery_motion_failed(recovery)
+            return
+        self._goal_handle = handle
+        handle.get_result_async().add_done_callback(
+            lambda done: self._on_direct_recovery_spin_result(
+                done, recovery))
+
+    def _on_direct_recovery_spin_result(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        self._goal_handle = None
+        try:
+            wrapped = future.result()
+            succeeded = (
+                int(wrapped.status) == GoalStatus.STATUS_SUCCEEDED
+                and int(getattr(wrapped.result, 'error_code', 0)) == 0
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 회전 결과 실패: {exc}')
+            succeeded = False
+        if not succeeded:
+            self._recovery_motion_failed(recovery)
+            return
+        self._send_direct_recovery_drive(recovery)
+
+    def _send_direct_recovery_drive(self, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        if not self.recovery_drive.wait_for_server(timeout_sec=0.2):
+            self._recovery_motion_failed(recovery)
+            return
+        candidate = recovery['active_candidate']
+        goal = DriveOnHeading.Goal()
+        goal.target.x = float(candidate.distance_m)
+        goal.speed = float(self.recovery_direct_escape_speed_mps)
+        goal.time_allowance = Duration(sec=3)
+        future = self.recovery_drive.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_direct_recovery_drive_response(
+                done, recovery))
+
+    def _on_direct_recovery_drive_response(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 이동 전송 실패: {exc}')
+            self._recovery_motion_failed(recovery)
+            return
+        if not handle.accepted:
+            self._recovery_motion_failed(recovery)
+            return
+        self._goal_handle = handle
+        handle.get_result_async().add_done_callback(
+            lambda done: self._on_direct_recovery_drive_result(
+                done, recovery))
+
+    def _on_direct_recovery_drive_result(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        self._goal_handle = None
+        try:
+            wrapped = future.result()
+            succeeded = (
+                int(wrapped.status) == GoalStatus.STATUS_SUCCEEDED
+                and int(getattr(wrapped.result, 'error_code', 0)) == 0
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 이동 결과 실패: {exc}')
+            succeeded = False
+        if not succeeded:
+            self._recovery_motion_failed(recovery)
+            return
+        self._complete_recovery_motion(recovery)
+
     def _on_recovery_goal_response(self, future, recovery: dict) -> None:
         if recovery['generation'] != self._generation:
             return
@@ -998,6 +1150,9 @@ class NavigationManager(Node):
         if status != GoalStatus.STATUS_SUCCEEDED:
             self._recovery_motion_failed(recovery)
             return
+        self._complete_recovery_motion(recovery)
+
+    def _complete_recovery_motion(self, recovery: dict) -> None:
         if self._test_context is None:
             return
         attempt = int(recovery['recovery_attempt']) + 1
