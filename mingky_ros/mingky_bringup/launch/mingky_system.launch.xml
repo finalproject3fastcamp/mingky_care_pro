@@ -203,8 +203,8 @@
         <param name="map_name" value="$(var map_name)"/>
     </node>
 
-    <!-- AMCL 이 active 되면 자동으로 위치를 잡는다. RViz 손조작 대체.
-         cmd_vel_localize_probe 는 twist_mux 의 별도 채널을 거친다. -->
+    <!-- 기존 맵과 LiDAR를 비교해 유일한 후보일 때만 AMCL /initialpose를
+         발행한다. cmd_vel_localize_probe는 5cm 확인 이동에만 사용한다. -->
     <node pkg="mingky_localize" exec="auto_localize_node"
           name="auto_localize_node" output="screen">
         <param name="robot_id" value="$(var robot_id)"/>

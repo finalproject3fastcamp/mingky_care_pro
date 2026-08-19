@@ -1,27 +1,26 @@
 """AMCL 초기 위치를 자동으로 잡는다. RViz 의 2D Pose Estimate 손조작을 없앤다.
 
-    /mode 확인 (auto 아니면 중단) → 주행 목표 활성 중이면 거부
-      → amcl/bt_navigator active 대기
-      → /reinitialize_global_localization 호출 (응답 없으면 바로 실패)
-      → /particle_cloud 로 수렴 관찰 (mingky_localize.convergence)
-      → 수렴 안 되면: /scan 으로 안전 방향 탐색 (mingky_smart_recovery 재사용)
-        → 이동 직전 Nav2 목표 강제 취소 → 제자리 회전 → 직진(이동 중에도
-          라이다 신선도·거리 계속 감시) → 후진 → 회전 복귀
-      → 정해진 횟수/시간 넘으면 포기하고 이벤트만 남긴다 (억지로 계속 안 함)
+    /mode·비상정지·주행 상태 확인
+      → 현재 OccupancyGrid에서 만든 distance field로 전역 Top-K 검색
+      → 끝점 일치도와 free-space 모순, Top1/Top2 점수 차이 확인
+      → 애매하면 회전 없이 안전한 앞/뒤로 5cm 이동
+      → odom 상대 이동과 새 scan으로 후보를 계속 제거 (최대 15cm)
+      → 같은 후보가 연속 확인된 경우에만 /initialpose 발행
+      → AMCL particle이 seed 주변에서 안정화되는지 최종 확인
+      → 끝까지 애매하면 위치를 찍지 않고 실패 이유를 이벤트로 남김
 
 기본은 자동 실행 없이 대기만 한다(``auto_run_on_start`` 기본값 false) --
-전역 재탐색은 기존 위치 추정을 지우고 로봇을 움직이기까지 하므로, 관제
+전역 재탐색은 로봇을 짧게 움직일 수 있으므로, 관제
 화면에서 운영자가 ``auto_localize/trigger`` 서비스로 필요할 때 명시적으로
 실행하는 편이 안전하다 (관제 팀 리뷰, 2026-08-12). 부팅 시 자동 실행이
 필요한 로봇/환경에서만 launch 인자로 켠다.
 
-## 왜 이동 거리를 고정하지 않는가
+## 왜 5cm씩만 움직이는가
 
-map_ambiguity.py 가 찾은 "전진 0.4m + 후진 0.4m" 는 계측된 최소값이 아니라
-근사치다. 로봇이 설 수 있는 공간이 2.12㎡ 뿐이라 모든 위치에서 40cm 왕복이
-보장되지도 않는다. 그래서 이동 전 라이다로 실측 여유를 재고(mingky_smart_recovery
-의 clearance 로직 그대로 재사용), 여유가 없으면 그 방향을 포기하고 다른
-방향을 시도한다.
+30cm 통로에서 기존 40cm 왕복은 크고, 한 번의 수렴 여부만 확인해 이동 중
+얻은 scan 정보를 버렸다. 이제 5cm마다 멈춰 새 scan으로 후보를 재평가하고
+최대 15cm 안에서 구분되지 않으면 실패한다. 회전은 좁은 통로에서 footprint
+위험을 키우므로 1차 구현에서는 앞/뒤 직선 이동만 허용한다.
 
 ## 왜 좌표를 Nav2 에게 안 넘기는가 (2026-08-11, 실제 로봇에서 두 번째 교훈)
 
@@ -48,7 +47,7 @@ twist_mux 에 별도 입력(cmd_vel_localize_probe)이 필요하다 — manual l
 
 twist_mux 채널 우선순위(probe=20 > nav=10)만 믿으면, 우리가 명령을 쏘는
 그 순간에는 우리가 이기지만 "Nav2 가 환자를 안내하러 가는 도중에 로봇이
-갑자기 제자리에서 돌기 시작"하는 그림 자체는 막지 못한다. 그래서
+갑자기 이동하기 시작"하는 그림 자체는 막지 못한다. 그래서
 guide_manager/navigation_manager 가 서로에게 쓰는 것과 같은 상태 토픽
 (``/guide_manager/state`` 의 ``ROBOT_MOVING``, ``/navigation_manager/active``)
 을 구독한다. 환자 안내는 실제 이동 순간뿐 아니라 환자 확인부터 검사실 QR
@@ -59,41 +58,46 @@ guide_manager/navigation_manager 가 서로에게 쓰는 것과 같은 상태 �
 직전에 Nav2의 현재 목표를 ``CancelGoal``로 한 번 더 강제로 취소한다.
 """
 
+import json
 import math
 import threading
 import time
 import uuid
 
-import rclpy
 from action_msgs.srv import CancelGoal
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
+from mingky_interfaces.msg import Event, GuideState
 from nav2_msgs.msg import ParticleCloud
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry
+import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
-from std_srvs.srv import Empty, Trigger
+from std_srvs.srv import Trigger
 
-from mingky_interfaces.msg import Event, GuideState
-from mingky_smart_recovery.selector import (
-    SelectorConfig,
-    select_diverse_candidates,
-    select_escape_candidates,
-)
 
 from .convergence import evaluate_convergence
+from .global_matcher import (
+    GlobalScanMatcher,
+    LaserObservation,
+    MatcherConfig,
+    OccupancyMap,
+    PoseHypothesis,
+)
 
 MODE_TOPIC = "/mode"
 PARTICLE_TOPIC = "/particle_cloud"
 SCAN_TOPIC = "/scan"
+MAP_TOPIC = "/map"
 ODOM_TOPIC = "/odom"
+INITIAL_POSE_TOPIC = "/initialpose"
+EMERGENCY_STATE_TOPIC = "/emergency_stop/state"
 NAV_MANAGER_ACTIVE_TOPIC = "/navigation_manager/active"
 GUIDE_STATE_TOPIC = "/guide_manager/state"
 ACTIVE_TOPIC = "/auto_localize/active"
 PROBE_CMD_TOPIC = "cmd_vel_localize_probe"
-RESET_SERVICE = "/reinitialize_global_localization"
 CANCEL_NAV_SERVICE = "/navigate_to_pose/_action/cancel_goal"
 TRIGGER_SERVICE = "auto_localize/trigger"
 EVENT_TOPIC = "/events"
@@ -130,6 +134,15 @@ def _wrap_angle(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
+def _circular_mean(angles) -> float:
+    if not angles:
+        return 0.0
+    return math.atan2(
+        sum(math.sin(angle) for angle in angles),
+        sum(math.cos(angle) for angle in angles),
+    )
+
+
 class AutoLocalizeNode(Node):
 
     def __init__(self):
@@ -142,13 +155,8 @@ class AutoLocalizeNode(Node):
         # 서비스로 명시적으로 실행하게 한다. 부팅 시 자동 실행이 필요한
         # 로봇/환경에서만 launch 인자로 켠다.
         self.declare_parameter("auto_run_on_start", False)
-        self.declare_parameter("convergence_threshold_m", 0.3)
-        self.declare_parameter("yaw_threshold_deg", 15.0)
-        self.declare_parameter("observe_seconds", 5.0)
-        self.declare_parameter("probe_distance_m", 0.4)
-        self.declare_parameter("probe_min_distance_m", 0.15)
+        self.declare_parameter("probe_distance_m", 0.05)
         self.declare_parameter("probe_linear_speed", 0.18)
-        self.declare_parameter("probe_angular_speed", 0.6)
         self.declare_parameter("max_probe_attempts", 3)
         self.declare_parameter("overall_timeout_sec", 60.0)
         # 이동 중 정면(또는 후진이면 후면) 라이다 최소거리가 이보다 가까워지면
@@ -173,17 +181,29 @@ class AutoLocalizeNode(Node):
         # (관제 팀 리뷰: 이동 중 라이다가 끊기면 즉시 멈춰야 한다). 이
         # 시간보다 오래된 스캔은 "안 보인다 = 막혀있다"로 취급한다.
         self.declare_parameter("scan_max_age_sec", 1.0)
+        # 전역 검색은 거친 격자에서 시작하고 상위 후보만 원본 맵 해상도로
+        # 정밀화한다. 작은 맵에서도 모든 자세를 2.5cm로 훑으면 Pi 5 부하가
+        # 커지므로 이 상한을 파라미터로 고정한다.
+        self.declare_parameter("matcher_coarse_xy_m", 0.10)
+        self.declare_parameter("matcher_coarse_yaw_deg", 15.0)
+        self.declare_parameter("matcher_fine_xy_m", 0.025)
+        self.declare_parameter("matcher_fine_yaw_deg", 3.0)
+        self.declare_parameter("matcher_max_beams", 60)
+        self.declare_parameter("matcher_top_k", 5)
+        self.declare_parameter("matcher_min_score", 0.52)
+        self.declare_parameter("matcher_min_margin", 0.08)
+        self.declare_parameter("matcher_confirmations", 2)
+        self.declare_parameter("matcher_seed_timeout_sec", 6.0)
+        self.declare_parameter("matcher_seed_spread_m", 0.10)
+        self.declare_parameter("matcher_seed_yaw_spread_deg", 10.0)
+        self.declare_parameter("matcher_seed_pose_tolerance_m", 0.15)
+        self.declare_parameter("matcher_seed_yaw_tolerance_deg", 15.0)
 
         get = self.get_parameter
         self.robot_id = str(get("robot_id").value)
         self.auto_run_on_start = bool(get("auto_run_on_start").value)
-        self.convergence_threshold_m = float(get("convergence_threshold_m").value)
-        self.yaw_threshold_rad = math.radians(float(get("yaw_threshold_deg").value))
-        self.observe_seconds = float(get("observe_seconds").value)
         self.probe_distance_m = float(get("probe_distance_m").value)
-        self.probe_min_distance_m = float(get("probe_min_distance_m").value)
         self.probe_linear_speed = float(get("probe_linear_speed").value)
-        self.probe_angular_speed = float(get("probe_angular_speed").value)
         self.max_probe_attempts = int(get("max_probe_attempts").value)
         self.overall_timeout_sec = float(get("overall_timeout_sec").value)
         self.obstacle_stop_distance_m = float(get("obstacle_stop_distance_m").value)
@@ -191,15 +211,41 @@ class AutoLocalizeNode(Node):
             float(get("obstacle_check_half_width_deg").value))
         self.scan_yaw_offset_rad = math.radians(float(get("scan_yaw_offset_deg").value))
         self.scan_max_age_sec = float(get("scan_max_age_sec").value)
+        self.matcher_config = MatcherConfig(
+            coarse_xy_m=float(get("matcher_coarse_xy_m").value),
+            coarse_yaw_rad=math.radians(
+                float(get("matcher_coarse_yaw_deg").value)),
+            fine_xy_m=float(get("matcher_fine_xy_m").value),
+            fine_yaw_rad=math.radians(
+                float(get("matcher_fine_yaw_deg").value)),
+            max_beams=int(get("matcher_max_beams").value),
+            top_k=int(get("matcher_top_k").value),
+            min_score=float(get("matcher_min_score").value),
+            min_margin=float(get("matcher_min_margin").value),
+        )
+        self.matcher_confirmations = max(
+            2, int(get("matcher_confirmations").value))
+        self.matcher_seed_timeout_sec = float(
+            get("matcher_seed_timeout_sec").value)
+        self.matcher_seed_spread_m = float(
+            get("matcher_seed_spread_m").value)
+        self.matcher_seed_yaw_spread_rad = math.radians(
+            float(get("matcher_seed_yaw_spread_deg").value))
+        self.matcher_seed_pose_tolerance_m = float(
+            get("matcher_seed_pose_tolerance_m").value)
+        self.matcher_seed_yaw_tolerance_rad = math.radians(
+            float(get("matcher_seed_yaw_tolerance_deg").value))
 
         self.mode = None
         self._particles = None        # list[(x, y, yaw)] | None
         self._particles_updated_at = None  # time.monotonic() | None
-        self._any_fresh_particles_seen = False
         self._latest_scan = None
         self._latest_scan_at = None    # time.monotonic() | None
         self._latest_odom_xy = None    # (x, y) | None
         self._latest_odom_yaw = None   # radians | None
+        self._matcher = None           # GlobalScanMatcher | None
+        self._map_error = None         # str | None
+        self._emergency_stopped = False
         self._nav_manager_active = False   # navigation_manager 의 Waypoint 시험 주행
         self._guide_session_id = 0
         self._guide_session_state = GuideState.SESSION_NONE
@@ -213,7 +259,11 @@ class AutoLocalizeNode(Node):
         self.create_subscription(
             LaserScan, SCAN_TOPIC, self._on_scan,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.create_subscription(
+            OccupancyGrid, MAP_TOPIC, self._on_map, _latched())
         self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, 10)
+        self.create_subscription(
+            Bool, EMERGENCY_STATE_TOPIC, self._on_emergency_state, _latched())
         # 재탐색 이동은 Nav2 주행(환자 안내든 엔지니어 화면의 Waypoint 시험
         # 주행이든)과 동시에 벌어지면 안 된다 -- 두 쪽 다 로봇을 직접
         # 움직이려 든다. guide_manager/navigation_manager 가 이미 서로에게
@@ -225,14 +275,15 @@ class AutoLocalizeNode(Node):
             GuideState, GUIDE_STATE_TOPIC, self._on_guide_state, _latched())
 
         self.probe_pub = self.create_publisher(Twist, PROBE_CMD_TOPIC, 10)
+        self.initial_pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, INITIAL_POSE_TOPIC, 10)
         self.event_pub = self.create_publisher(Event, EVENT_TOPIC, 10)
         # 관제와 다른 주행 노드가 재탐색의 전체 실행 구간을 알 수 있게 한다.
         # 늦게 뜬 노드도 현재 상태를 즉시 받아야 하므로 latched QoS를 쓴다.
         self.active_pub = self.create_publisher(Bool, ACTIVE_TOPIC, _latched())
-        self.reset_client = self.create_client(Empty, RESET_SERVICE)
         # 우리 쪽 사전 확인과 실제 이동 사이에 새 주행 목표가 끼어들 수
         # 있다. 이동 직전에 한 번 더 이걸로 Nav2 의 현재 목표를 강제로
-        # 취소해 확실히 막는다 (_move_relative 참고).
+        # 취소해 확실히 막는다.
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
         self.create_service(Trigger, TRIGGER_SERVICE, self._on_trigger_request)
         self._publish_active()
@@ -275,10 +326,37 @@ class AutoLocalizeNode(Node):
         self._latest_scan = msg
         self._latest_scan_at = time.monotonic()
 
+    def _on_map(self, msg: OccupancyGrid):
+        """현재 Nav2 맵으로 읽기 전용 distance field를 만든다."""
+        try:
+            origin = msg.info.origin
+            grid = OccupancyMap(
+                width=msg.info.width,
+                height=msg.info.height,
+                resolution=msg.info.resolution,
+                origin_x=origin.position.x,
+                origin_y=origin.position.y,
+                origin_yaw=_quat_to_yaw(
+                    origin.orientation.z, origin.orientation.w),
+                data=msg.data,
+            )
+            self._matcher = GlobalScanMatcher(grid, self.matcher_config)
+            self._map_error = None
+            self.get_logger().info(
+                f'전역 LiDAR 매처 준비: {msg.info.width}x{msg.info.height}, '
+                f'{msg.info.resolution:.3f}m/cell')
+        except (TypeError, ValueError) as exc:
+            self._matcher = None
+            self._map_error = str(exc)
+            self.get_logger().error(f'전역 LiDAR 매처 맵 준비 실패: {exc}')
+
     def _on_odom(self, msg: Odometry):
         self._latest_odom_xy = (msg.pose.pose.position.x, msg.pose.pose.position.y)
         self._latest_odom_yaw = _quat_to_yaw(
             msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+
+    def _on_emergency_state(self, msg: Bool):
+        self._emergency_stopped = bool(msg.data)
 
     def _on_nav_manager_active(self, msg: Bool):
         self._nav_manager_active = bool(msg.data)
@@ -349,6 +427,10 @@ class AutoLocalizeNode(Node):
             response.success = False
             response.message = f"현재 모드가 '{self.mode}' 라 시작할 수 없습니다."
             return response
+        if self._emergency_stopped:
+            response.success = False
+            response.message = "비상정지 상태라 재탐색을 시작할 수 없습니다."
+            return response
         if self._nav_goal_active():
             response.success = False
             response.message = "주행 목표가 진행 중이라 지금은 재탐색을 시작할 수 없습니다."
@@ -379,6 +461,10 @@ class AutoLocalizeNode(Node):
                 msg = "안내 세션 또는 주행 목표가 활성 상태라 자동 로컬라이제이션을 건너뜁니다."
                 self.get_logger().warn(msg)
                 return False, msg
+            if self._emergency_stopped:
+                msg = "비상정지 상태라 자동 로컬라이제이션을 건너뜁니다."
+                self.get_logger().warn(msg)
+                return False, msg
             return self._run_sequence(source)
         finally:
             self._release_run()
@@ -395,73 +481,328 @@ class AutoLocalizeNode(Node):
             self._emit("localize.failed", Event.LEVEL_ERROR, '{"reason": "nav2_not_active"}')
             return False, msg
 
-        if not self.reset_client.wait_for_service(timeout_sec=5.0):
-            msg = f"{RESET_SERVICE} 서비스가 없습니다."
-            self.get_logger().error(msg)
-            self._emit("localize.failed", Event.LEVEL_ERROR, '{"reason": "no_service"}')
-            return False, msg
+        if self._matcher is None:
+            detail = f': {self._map_error}' if self._map_error else ''
+            return self._localization_failure(
+                'no_map', f'위치 재탐색용 맵을 받지 못했습니다{detail}')
+        if self._latest_scan is None:
+            return self._localization_failure(
+                'no_scan', 'LiDAR 데이터를 받지 못했습니다.')
+        if not self._scan_is_fresh():
+            return self._localization_failure(
+                'stale_scan', 'LiDAR 데이터가 지연되어 재탐색을 중단합니다.')
+        if self._latest_odom_xy is None or self._latest_odom_yaw is None:
+            return self._localization_failure(
+                'no_odom', '오도메트리 데이터를 받지 못했습니다.')
 
         deadline = time.monotonic() + self.overall_timeout_sec
-        self._any_fresh_particles_seen = False
-        if not self._call_reset_async():
-            # 응답을 못 받았으면 파티클이 실제로 재분포됐는지 알 수 없다.
-            # 이 상태에서 계속 진행하면, 리셋 이전부터 있던(운 좋게 이미
-            # 뭉쳐있는) 오래된 파티클을 보고 "수렴했다"고 잘못 판단할 수
-            # 있다 (관제 팀 리뷰: 응답 없으면 이전 데이터로 성공 판단 금지).
-            msg = f"{RESET_SERVICE} 응답을 받지 못했습니다."
-            self.get_logger().error(msg)
-            self._emit("localize.failed", Event.LEVEL_ERROR,
-                       '{"reason": "no_reset_response"}')
-            return False, msg
+        matcher = self._matcher
+        observation = self._latest_observation()
+        if observation is None:
+            return self._localization_failure(
+                'no_scan', '위치 비교에 사용할 유효 LiDAR 점이 부족합니다.')
 
-        failures: dict = {}  # 방향 이름 -> 시도했는데도 안 된 횟수
-        for attempt in range(self.max_probe_attempts + 1):
-            if self.mode != AUTO_MODE:
-                msg = "진행 중 모드가 바뀌어 중단합니다."
-                self.get_logger().warn(msg)
-                self._emit("localize.failed", Event.LEVEL_ERROR,
-                           '{"reason": "mode_changed"}')
-                return False, msg
+        result = matcher.global_match(observation)
+        hypotheses = result.hypotheses
+        previous_best = None
+        confirmations = 0
+        static_confirmation_used = False
+        probe_direction = None
+        probe_attempts = 0
+        total_probe_distance = 0.0
+        previous_odom = self._odom_pose()
 
-            result = self._observe_convergence(
-                self.observe_seconds if attempt > 0 else 2.0)
+        while rclpy.ok():
+            safety_reason = self._localization_abort_reason()
+            if safety_reason is not None:
+                return self._localization_failure(*safety_reason)
+            if time.monotonic() >= deadline:
+                self._return_probe_offset(total_probe_distance)
+                return self._localization_failure(
+                    'timeout', '전역 위치 검색 제한 시간을 초과했습니다.')
+            if not hypotheses:
+                self._return_probe_offset(total_probe_distance)
+                return self._localization_failure(
+                    'no_candidates', '현재 LiDAR와 일치하는 위치 후보가 없습니다.')
 
-            if result.converged:
-                self.get_logger().info(
-                    f"수렴 확인 (위치 퍼짐 {result.spread_m:.2f}m, "
-                    f"방향 퍼짐 {math.degrees(result.yaw_spread_rad):.1f}도)")
-                self._emit(
-                    "localize.converged", Event.LEVEL_INFO,
-                    f'{{"spread_m": {result.spread_m:.3f}, '
-                    f'"yaw_spread_deg": {math.degrees(result.yaw_spread_rad):.1f}, '
-                    f'"attempt": {attempt}}}')
-                return True, "수렴 완료"
-
-            if time.monotonic() > deadline or attempt == self.max_probe_attempts:
-                break
-
-            self.get_logger().warn(
-                f"미수렴 (위치 퍼짐 {result.spread_m:.2f}m) — 탐색 이동 {attempt + 1}회차")
-            tried_name = self._probe_once(failures)
-            if tried_name is None:
-                self.get_logger().warn("안전한 탐색 방향이 없어 이동을 건너뜁니다.")
+            best = hypotheses[0]
+            if self._same_hypothesis(previous_best, best):
+                confirmations += 1
             else:
-                # 이번에도 안 됐다는 게 다음 루프 시작에서 드러난다 (여기서는
-                # 아직 관찰 전이라 모른다). 일단 시도했다는 사실 자체를
-                # 기록해두고, 다음 관찰에서도 여전히 미수렴이면 그 시도가
-                # 헛수고였다는 뜻이니 감점을 유지한다.
-                failures[tried_name] = failures.get(tried_name, 0) + 1
+                confirmations = 1
+            previous_best = best
+            self.get_logger().info(
+                f'전역 위치 후보: score={result.best_score:.3f}, '
+                f'margin={result.margin:.3f}, confirmations={confirmations}, '
+                f'pose=({best.x:.2f}, {best.y:.2f}, '
+                f'{math.degrees(best.yaw):.1f}도)')
 
-        msg = (f"{self.max_probe_attempts}회 시도 후에도 수렴하지 않았습니다. "
-               "사람 확인이 필요합니다.")
-        self.get_logger().error(msg)
-        # 파티클이 한 번도 새로 안 들어왔다면 "위치가 애매해서" 가 아니라
-        # AMCL 이 죽었거나 /particle_cloud 가 안 오는 것이다. 원인이
-        # 다르므로 이유를 구분해 남긴다 (관제 팀 리뷰 대응).
-        reason = "not_converged" if self._any_fresh_particles_seen else "no_particle_data"
-        self._emit("localize.failed", Event.LEVEL_ERROR,
-                   f'{{"reason": "{reason}", "attempts": {self.max_probe_attempts}}}')
-        return False, msg
+            if result.confident and confirmations >= self.matcher_confirmations:
+                self._publish_initial_pose(best)
+                accepted = self._wait_for_seed_acceptance(best)
+                if not accepted:
+                    abort_reason = self._localization_abort_reason()
+                    if abort_reason is not None:
+                        return self._localization_failure(*abort_reason)
+                    return self._localization_failure(
+                        'amcl_seed_rejected',
+                        '찾은 위치를 AMCL이 제한 시간 안에 인수하지 못했습니다.',
+                        score=result.best_score, margin=result.margin)
+                payload = json.dumps({
+                    'x': round(best.x, 4),
+                    'y': round(best.y, 4),
+                    'yaw': round(best.yaw, 5),
+                    'score': round(result.best_score, 4),
+                    'margin': round(result.margin, 4),
+                    'scans': best.observations,
+                    'probe_distance_m': round(abs(total_probe_distance), 3),
+                })
+                self._emit('localize.converged', Event.LEVEL_INFO, payload)
+                return True, 'LiDAR 위치 검증 및 AMCL 적용 완료'
+
+            # 첫 scan이 이미 충분히 좋아도 순간 노이즈 한 장만으로 확정하지
+            # 않는다. 제자리에서 새 scan을 한 장 더 받아 같은 후보인지 본다.
+            should_wait_static = result.confident and not static_confirmation_used
+            if should_wait_static:
+                static_confirmation_used = True
+                scan_time = self._latest_scan_at or 0.0
+                if not self._wait_for_new_scan(scan_time, timeout_sec=2.0):
+                    abort_reason = self._localization_abort_reason()
+                    if abort_reason is not None:
+                        return self._localization_failure(*abort_reason)
+                    return self._localization_failure(
+                        'stale_scan', '확인용 LiDAR scan이 갱신되지 않았습니다.')
+                current_odom = self._odom_pose()
+                delta = self._relative_odom(previous_odom, current_odom)
+                observation = self._latest_observation()
+                if observation is None:
+                    return self._localization_failure(
+                        'no_scan', '확인용 LiDAR 점이 부족합니다.')
+                result = matcher.update(
+                    observation, hypotheses,
+                    delta_x=delta[0], delta_y=delta[1], delta_yaw=delta[2])
+                hypotheses = result.hypotheses
+                previous_odom = current_odom
+                continue
+
+            if probe_attempts >= self.max_probe_attempts:
+                self._return_probe_offset(total_probe_distance)
+                reason = (
+                    'ambiguous_candidates'
+                    if result.best_score >= self.matcher_config.min_score
+                    else 'no_candidates'
+                )
+                return self._localization_failure(
+                    reason,
+                    '짧은 이동 후에도 위치 후보를 안전하게 구분하지 못했습니다.',
+                    score=result.best_score, margin=result.margin,
+                    attempts=probe_attempts)
+
+            if probe_direction is None:
+                probe_direction = self._select_probe_direction()
+            if probe_direction is None:
+                self._return_probe_offset(total_probe_distance)
+                return self._localization_failure(
+                    'probe_blocked', '앞뒤 모두 탐색 이동 공간이 부족합니다.')
+
+            scan_time = self._latest_scan_at or 0.0
+            before_odom = self._odom_pose()
+            requested = probe_direction * self.probe_distance_m
+            moved = self._drive_straight(requested)
+            if abs(moved) < self.probe_distance_m * 0.5:
+                self._return_probe_offset(total_probe_distance)
+                return self._localization_failure(
+                    'probe_blocked', '5cm 탐색 이동을 안전하게 완료하지 못했습니다.')
+            total_probe_distance += moved
+            probe_attempts += 1
+            if not self._wait_for_new_scan(scan_time, timeout_sec=2.0):
+                abort_reason = self._localization_abort_reason()
+                if abort_reason is not None:
+                    return self._localization_failure(*abort_reason)
+                self._return_probe_offset(total_probe_distance)
+                return self._localization_failure(
+                    'stale_scan', '탐색 이동 후 LiDAR scan이 갱신되지 않았습니다.')
+
+            current_odom = self._odom_pose()
+            delta = self._relative_odom(before_odom, current_odom)
+            observation = self._latest_observation()
+            if observation is None:
+                self._return_probe_offset(total_probe_distance)
+                return self._localization_failure(
+                    'no_scan', '탐색 이동 후 유효 LiDAR 점이 부족합니다.')
+            result = matcher.update(
+                observation, hypotheses,
+                delta_x=delta[0], delta_y=delta[1], delta_yaw=delta[2])
+            hypotheses = result.hypotheses
+            previous_odom = current_odom
+
+    def _latest_observation(self):
+        scan = self._latest_scan
+        if scan is None or not self._scan_is_fresh():
+            return None
+        observation = LaserObservation.from_ranges(
+            scan.ranges,
+            angle_min=float(scan.angle_min),
+            angle_increment=float(scan.angle_increment),
+            range_min=float(scan.range_min),
+            range_max=float(scan.range_max),
+            yaw_offset_rad=self.scan_yaw_offset_rad,
+            max_beams=self.matcher_config.max_beams,
+        )
+        return observation if observation.size >= 8 else None
+
+    def _odom_pose(self):
+        if self._latest_odom_xy is None or self._latest_odom_yaw is None:
+            return None
+        return (
+            self._latest_odom_xy[0], self._latest_odom_xy[1],
+            self._latest_odom_yaw,
+        )
+
+    @staticmethod
+    def _relative_odom(previous, current):
+        """이전 base 좌표계에서 본 odom 상대 이동량."""
+        if previous is None or current is None:
+            return 0.0, 0.0, 0.0
+        world_dx = current[0] - previous[0]
+        world_dy = current[1] - previous[1]
+        cos_yaw = math.cos(previous[2])
+        sin_yaw = math.sin(previous[2])
+        return (
+            cos_yaw * world_dx + sin_yaw * world_dy,
+            -sin_yaw * world_dx + cos_yaw * world_dy,
+            _wrap_angle(current[2] - previous[2]),
+        )
+
+    def _same_hypothesis(self, previous, current) -> bool:
+        if previous is None or current is None:
+            return False
+        return (
+            math.hypot(previous.x - current.x, previous.y - current.y)
+            <= self.matcher_config.cluster_xy_m
+            and abs(_wrap_angle(previous.yaw - current.yaw))
+            <= self.matcher_config.cluster_yaw_rad
+        )
+
+    def _localization_abort_reason(self):
+        if self.mode != AUTO_MODE:
+            return 'mode_changed', '진행 중 모드가 바뀌어 재탐색을 중단합니다.'
+        if self._emergency_stopped:
+            return 'emergency_stop', '비상정지가 활성화되어 재탐색을 중단합니다.'
+        if self._nav_goal_active():
+            return 'navigation_started', '새 주행이 시작되어 재탐색을 중단합니다.'
+        return None
+
+    def _localization_failure(self, reason: str, message: str, **details):
+        payload = {'reason': reason, **details}
+        self.get_logger().error(message)
+        self._emit(
+            'localize.failed', Event.LEVEL_ERROR,
+            json.dumps(payload, ensure_ascii=False))
+        return False, message
+
+    def _wait_for_new_scan(self, previous_time: float, timeout_sec: float) -> bool:
+        deadline = time.monotonic() + timeout_sec
+        while rclpy.ok() and time.monotonic() < deadline:
+            if self._localization_abort_reason() is not None:
+                return False
+            if (
+                self._latest_scan_at is not None
+                and self._latest_scan_at > previous_time
+                and self._scan_is_fresh()
+            ):
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _select_probe_direction(self):
+        """회전하지 않고 5cm 이동할 수 있는 앞/뒤 중 넓은 쪽을 고른다."""
+        required = (
+            self.obstacle_stop_distance_m + self.probe_distance_m
+            + self.matcher_config.robot_clearance_m
+        )
+        front = self._sector_min_range(0.0)
+        rear = self._sector_min_range(math.pi)
+        choices = []
+        if front >= required:
+            choices.append((front, 1.0))
+        if rear >= required:
+            choices.append((rear, -1.0))
+        if not choices:
+            return None
+        clearance, direction = max(choices, key=lambda item: item[0])
+        self.get_logger().info(
+            f'짧은 탐색 이동: {"전진" if direction > 0 else "후진"} '
+            f'{self.probe_distance_m:.2f}m, 여유={clearance:.2f}m')
+        return direction
+
+    def _return_probe_offset(self, distance_m: float) -> None:
+        """위치 확정 없이 끝났으면 안전할 때만 시작점으로 돌아간다."""
+        if abs(distance_m) < 0.005:
+            return
+        if self._localization_abort_reason() is not None:
+            self._publish_probe(Twist())
+            return
+        self.get_logger().info(
+            f'위치 미확정 — 탐색 이동 {abs(distance_m):.2f}m 복귀')
+        self._drive_straight(-distance_m)
+
+    def _publish_initial_pose(self, hypothesis: PoseHypothesis) -> None:
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.pose.pose.position.x = hypothesis.x
+        msg.pose.pose.position.y = hypothesis.y
+        msg.pose.pose.orientation.z = math.sin(hypothesis.yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(hypothesis.yaw / 2.0)
+        msg.pose.covariance[0] = 0.05 ** 2
+        msg.pose.covariance[7] = 0.05 ** 2
+        msg.pose.covariance[35] = math.radians(5.0) ** 2
+        # Wi-Fi/DDS 재발견 직후 한 메시지를 놓쳐도 AMCL이 받을 수 있게 짧게
+        # 두 번 보낸다. 좌표는 동일하므로 중복 초기화로 위치가 달라지지 않는다.
+        self.initial_pose_pub.publish(msg)
+        time.sleep(0.1)
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.initial_pose_pub.publish(msg)
+
+    def _wait_for_seed_acceptance(self, hypothesis: PoseHypothesis) -> bool:
+        """AMCL particle이 seed 주변에서 두 번 연속 안정적인지 확인한다."""
+        start = time.monotonic()
+        deadline = start + self.matcher_seed_timeout_sec
+        confirmations = 0
+        last_particle_time = None
+        while rclpy.ok() and time.monotonic() < deadline:
+            safety_reason = self._localization_abort_reason()
+            if safety_reason is not None:
+                return False
+            updated_at = self._particles_updated_at
+            if (
+                updated_at is None or updated_at < start
+                or updated_at == last_particle_time
+            ):
+                time.sleep(0.1)
+                continue
+            last_particle_time = updated_at
+            particles = self._particles or []
+            result = evaluate_convergence(
+                particles,
+                threshold_m=self.matcher_seed_spread_m,
+                yaw_threshold_rad=self.matcher_seed_yaw_spread_rad,
+            )
+            mean_yaw = _circular_mean([item[2] for item in particles])
+            pose_close = (
+                math.hypot(
+                    result.centroid[0] - hypothesis.x,
+                    result.centroid[1] - hypothesis.y,
+                ) <= self.matcher_seed_pose_tolerance_m
+                and abs(_wrap_angle(mean_yaw - hypothesis.yaw))
+                <= self.matcher_seed_yaw_tolerance_rad
+            )
+            confirmations = confirmations + 1 if result.converged and pose_close else 0
+            if confirmations >= 2:
+                return True
+            time.sleep(0.1)
+        return False
 
     def _wait_until_active(self, names, timeout_sec: float) -> bool:
         """lifecycle 노드들이 전부 active 가 될 때까지 기다린다.
@@ -489,25 +830,6 @@ class AutoLocalizeNode(Node):
             self.get_logger().warn(f"active 대기 시간 초과: {sorted(pending)}")
         return not pending
 
-    def _call_reset_async(self) -> bool:
-        """reinitialize_global_localization 을 비동기로 부르고 완료까지 기다린다.
-
-        Client.call() 은 내부에서 같은 노드를 재귀적으로 spin 하려 해서
-        안전하지 않다. call_async + time.sleep 대기로 우회한다 (메인
-        스레드가 응답을 처리해준다).
-
-        Returns:
-            응답을 받았으면 True, 타임아웃이면 False.
-        """
-        future = self.reset_client.call_async(Empty.Request())
-        deadline = time.monotonic() + 5.0
-        while not future.done() and rclpy.ok() and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if not future.done():
-            self.get_logger().warn(f"{RESET_SERVICE} 응답을 못 받았습니다 (타임아웃).")
-            return False
-        return True
-
     def _cancel_active_nav_goal(self):
         """Nav2(bt_navigator) 의 지금 목표를 강제로 전부 취소한다.
 
@@ -524,113 +846,6 @@ class AutoLocalizeNode(Node):
         while not future.done() and rclpy.ok() and time.monotonic() < deadline:
             time.sleep(0.05)
 
-    def _probe_once(self, failures: dict) -> "str | None":
-        """방향을 골라 이동한다. 고른 방향 이름을 돌려준다 (없으면 None).
-
-        failures 는 "이 방향 이름을 최근에 몇 번 시도했는데도 안 됐는가"
-        를 담는다. select_escape_candidates 에 그대로 넘기면 반복 실패한
-        방향에 감점을 줘서 다음엔 다른 방향을 우선한다 -- 실제 로봇에서
-        같은 방향(left_015)을 3번 반복하고도 퍼짐이 거의 안 줄어든 걸
-        보고 추가했다 (mingky_smart_recovery 가 원래 갖고 있던 기능인데
-        안 쓰고 있었다).
-        """
-        if not self._scan_is_fresh():
-            # 스캔이 없거나 낡았으면 어느 방향이 열려있는지 알 수 없다.
-            # 모르는 채로 방향을 고르느니 이번 회차는 건너뛴다.
-            return None
-        scan = self._latest_scan
-        config = SelectorConfig(
-            nominal_distance_m=self.probe_distance_m,
-            minimum_distance_m=self.probe_min_distance_m,
-            # 이동 중 감시(_sector_min_range)와 같은 폭을 써야 한다 -- 위
-            # obstacle_check_half_width_deg 파라미터 설명 참고.
-            sector_half_width_rad=self.obstacle_check_half_width_rad,
-        )
-        # scan.angle_min 은 라이다 센서 기준이다. scan_yaw_offset_rad(180도)
-        # 를 더해 로봇 몸체(base_footprint) 기준 각도로 바꾼 뒤 후보를
-        # 고른다 -- 안 하면 정면/후면이 뒤바뀐다.
-        candidates = select_diverse_candidates(
-            select_escape_candidates(
-                scan.ranges,
-                angle_min=float(scan.angle_min) + self.scan_yaw_offset_rad,
-                angle_increment=float(scan.angle_increment),
-                range_min=float(scan.range_min),
-                range_max=float(scan.range_max),
-                goal_bearing_rad=0.0,
-                failures=failures,
-                config=config,
-            ),
-            limit=1,
-        )
-        if not candidates:
-            return None
-        candidate = candidates[0]
-        self.get_logger().info(
-            f"탐색 방향: {candidate.name}, 거리={candidate.distance_m:.2f}m, "
-            f"여유={candidate.clearance_m:.2f}m"
-            + (f" (이전 실패 {failures[candidate.name]}회)"
-               if failures.get(candidate.name) else ""))
-        self._move_relative(candidate.bearing_rad, candidate.distance_m)
-        return candidate.name
-
-    def _move_relative(self, bearing_rad: float, distance_m: float):
-        """지정 방향으로 이동한 뒤 정확히 반대로 돌아온다.
-
-        핑키는 바퀴 2개짜리 차동구동이라 옆으로 못 간다 (linear.y 는
-        무시당한다). 그래서 "왼쪽 30도로 0.4m" 같은 대각선 이동을 한 번에
-        하지 않고, 제자리 회전 → 직진 → 후진 → 반대로 회전해서 원래 방향
-        복귀로 나눈다.
-
-        map 좌표가 아니라 odom(누적 주행거리·각도)으로 잰다. 지금 위치
-        자체가 불확실해서 하는 이동이니, 상대 이동량만 맞추면 원위치로
-        돌아온다 -- Nav2 의 지도좌표 이동과 달리 AMCL 확신도에 의존하지
-        않는다.
-        """
-        if self._latest_odom_xy is None or self._latest_odom_yaw is None:
-            return
-        # 트리거 시점에는 주행 중이 아니었어도, 그 사이 새 목표가 들어왔을
-        # 수 있다. 실제로 로봇을 움직이기 직전에 한 번 더 Nav2 의 현재
-        # 목표를 강제로 취소해 확실히 겹치지 않게 한다.
-        self._cancel_active_nav_goal()
-        need_turn = abs(_wrap_angle(bearing_rad)) > math.radians(3.0)
-
-        if need_turn and not self._rotate_relative(bearing_rad):
-            return
-        # 장애물 때문에 목표 거리에 못 미쳤을 수 있다. 실제로 간 만큼만
-        # 되돌아와야 원위치로 정확히 복귀한다 (계획한 거리로 되돌리면
-        # 못 간 만큼 반대쪽으로 더 밀려난다).
-        traveled = self._drive_straight(distance_m)
-        self._drive_straight(-traveled)
-        if need_turn:
-            self._rotate_relative(-bearing_rad)
-
-    def _rotate_relative(self, delta_rad: float, angular_speed: float = None) -> bool:
-        """odom 각도 기준으로 제자리에서 delta_rad 만큼 돈다."""
-        if angular_speed is None:
-            angular_speed = self.probe_angular_speed
-        if self._latest_odom_yaw is None:
-            return False
-        target_yaw = _wrap_angle(self._latest_odom_yaw + delta_rad)
-        direction = 1.0 if delta_rad >= 0 else -1.0
-        deadline = (time.monotonic()
-                    + (abs(delta_rad) / angular_speed) * 2.0 + 2.0)
-        twist = Twist()
-        twist.angular.z = direction * angular_speed
-        while rclpy.ok() and time.monotonic() < deadline:
-            if self.mode != AUTO_MODE:
-                self.get_logger().warn("모드가 바뀌어 회전을 중단합니다.")
-                self._publish_probe(Twist())
-                return False
-            self._publish_probe(twist)
-            time.sleep(0.05)
-            if self._latest_odom_yaw is None:
-                continue
-            remaining = _wrap_angle(target_yaw - self._latest_odom_yaw)
-            if abs(remaining) < math.radians(3.0):
-                break
-        self._publish_probe(Twist())
-        return True
-
     def _drive_straight(self, distance_m: float) -> float:
         """현재 향하고 있는 방향 그대로 직진(양수)·후진(음수) 한다.
 
@@ -645,6 +860,7 @@ class AutoLocalizeNode(Node):
         start = self._latest_odom_xy
         if start is None:
             return 0.0
+        self._cancel_active_nav_goal()
         target = abs(distance_m)
         forward = distance_m >= 0
         speed = self.probe_linear_speed if forward else -self.probe_linear_speed
@@ -654,8 +870,9 @@ class AutoLocalizeNode(Node):
         twist.linear.x = speed
         traveled = 0.0
         while rclpy.ok() and time.monotonic() < deadline:
-            if self.mode != AUTO_MODE:
-                self.get_logger().warn("모드가 바뀌어 탐색 이동을 중단합니다.")
+            abort_reason = self._localization_abort_reason()
+            if abort_reason is not None:
+                self.get_logger().warn(abort_reason[1])
                 break
             clearance = self._sector_min_range(check_center)
             if clearance < self.obstacle_stop_distance_m:
@@ -678,7 +895,7 @@ class AutoLocalizeNode(Node):
         """지금 이 순간, 로봇 기준 center_rad 방향 좁은 부채꼴의 라이다 최소거리(m).
 
         scan.angle_min 에 scan_yaw_offset_rad 를 더해 로봇 몸체 기준으로
-        바꾼 뒤 잰다 (_probe_once 의 후보 선택과 같은 보정).
+        바꾼 뒤 잰다 (전역 매처의 LiDAR 보정과 같은 기준).
 
         스캔이 없거나 낡았으면(scan_max_age_sec 초과) 0.0 을 돌려준다 --
         "안 보인다" 를 "안전하다"(inf) 가 아니라 "바로 앞이 막혀있다"
@@ -709,47 +926,6 @@ class AutoLocalizeNode(Node):
             self.probe_pub.publish(twist)
         except rclpy._rclpy_pybind11.InvalidHandle:
             self.get_logger().debug("종료 중이라 이동 명령을 건너뜁니다.")
-
-    def _spin_for(self, seconds: float):
-        """별도 스레드에서 결과가 쌓이길 기다린다 (메인 스레드가 계속 처리 중)."""
-        deadline = time.monotonic() + seconds
-        while rclpy.ok() and time.monotonic() < deadline:
-            time.sleep(0.1)
-
-    def _observe_convergence(self, max_seconds: float):
-        """최대 max_seconds 동안 새로 들어오는 파티클로 수렴 여부를 계속 잰다.
-
-        예전엔 max_seconds 를 무조건 다 채운 뒤 딱 한 번 확인했다 -- 2초
-        만에 이미 수렴했어도 5초를 다 기다려야 했다. 이제는 0.3초마다
-        다시 재고, 수렴하면 그 즉시 반환한다.
-
-        _particles_updated_at 로 "신선한" 데이터인지 확인한다 -- 방금 한
-        이동/리셋 이전의 오래된 파티클로 잘못 "수렴했다" 고 판단하는 것을
-        막는다. 이 관찰 구간 동안 신선한 파티클을 한 번도 못 받았으면,
-        낡은 self._particles 로 대신 판단하지 않고 "미수렴" 으로 취급한다
-        (관제 팀 리뷰: 새 파티클 데이터를 못 받으면 이전 데이터로 성공
-        판단 금지).
-        """
-        start = time.monotonic()
-        deadline = start + max_seconds
-        result = None
-        while rclpy.ok() and time.monotonic() < deadline:
-            if self._particles_updated_at is not None and self._particles_updated_at >= start:
-                self._any_fresh_particles_seen = True
-                result = evaluate_convergence(
-                    self._particles or [],
-                    threshold_m=self.convergence_threshold_m,
-                    yaw_threshold_rad=self.yaw_threshold_rad,
-                )
-                if result.converged:
-                    return result
-            time.sleep(0.3)
-        if result is None:
-            result = evaluate_convergence(
-                [], threshold_m=self.convergence_threshold_m,
-                yaw_threshold_rad=self.yaw_threshold_rad,
-            )
-        return result
 
     def _emit(self, code: str, level: int, payload: str):
         event = Event()

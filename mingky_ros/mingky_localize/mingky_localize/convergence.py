@@ -10,14 +10,15 @@ ROS 타입에 의존하지 않는다. (x, y, yaw) 숫자만 받아 계산하므�
 한계: 이 값이 좁게 나온다고 "맞다"는 보장은 아니다. map_ambiguity.py 가 찾은
 것처럼 서로 다른 두 실제 위치가 라이다로 거의 똑같이 보이면, 파티클 전체가
 틀린 쪽으로 확신을 갖고 모일 수도 있다. 이 모듈은 "다들 동의했다"만 재고,
-"그 동의가 맞다"는 별도로 검증해야 한다 (auto_localize_node 의 탐색 이동이
-그 검증 시도다).
+"그 동의가 맞다"는 별도로 검증해야 한다. auto_localize_node는 맵과 LiDAR의
+Top-K 점수·후보 간 차이·여러 scan의 일관성으로 먼저 위치를 결정하고, 이
+모듈은 그 seed를 AMCL이 정상적으로 인수했는지만 최종 확인한다.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
+import math
 from typing import Sequence, Tuple
 
 

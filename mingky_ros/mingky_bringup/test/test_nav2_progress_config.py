@@ -58,3 +58,14 @@ def test_smac2d_is_the_primary_global_planner() -> None:
 
     assert 'Smac2D' in planner['planner_plugins']
     assert planner['Smac2D']['plugin'] == 'nav2_smac_planner::SmacPlanner2D'
+
+
+def test_amcl_waits_for_verified_lidar_initial_pose() -> None:
+    with NAV2_PARAMS.open(encoding='utf-8') as stream:
+        params = yaml.safe_load(stream)
+
+    amcl = params['amcl']['ros__parameters']
+
+    assert amcl['set_initial_pose'] is False
+    assert amcl['always_reset_initial_pose'] is True
+    assert 'initial_pose' not in amcl
