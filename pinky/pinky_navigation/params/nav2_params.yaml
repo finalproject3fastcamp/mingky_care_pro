@@ -30,8 +30,11 @@ amcl:
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0
-    update_min_a: 0.1
-    update_min_d: 0.15
+    # 10cm 도착 허용 범위보다 늦게 보정하면 실제로 도착하고도 AMCL 좌표가
+    # 남아 있거나 한 번에 튈 수 있다. Pi 5 부하를 과도하게 늘리지 않는
+    # 범위에서 작은 로봇의 5cm 이동과 약 3도 회전도 위치 보정에 반영한다.
+    update_min_a: 0.05
+    update_min_d: 0.05
     z_hit: 0.5
     z_max: 0.05
     z_rand: 0.5
@@ -84,9 +87,30 @@ controller_server:
     # 안내 주행과 Waypoint 시험주행은 모두 FollowPath를 사용한다. MPPI가
     # 2초 앞의 여러 속도 궤적을 비교해 새로 들어온 LiDAR 장애물을 정지 후
     # 복구로 넘기기 전에 우선 우회한다. Pi 5의 지속 부하를 낮추기 위해
-    # 10 Hz에서 20개 시점과 300개 표본만 평가한다.
+    # 10 Hz에서 20개 시점과 200개 표본만 평가한다.
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
+      # Smac2D 경로의 진행 방향이 로봇 자세와 크게 다르면 MPPI에 넘기기 전
+      # 제자리에서 정렬한다. XY 목표에 들어오면 최종 yaw도 Shim이 맡아,
+      # 위치 이동과 최종 방향 점수가 충돌해 미세 전진하는 교착을 막는다.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 0.52
+      angular_disengage_threshold: 0.17
+      forward_sampling_distance: 0.15
+      rotate_to_heading_angular_vel: 0.6
+      max_angular_accel: 1.5
+      max_cost_threshold: 254.0
+      simulate_ahead_time: 0.5
+      rotate_to_goal_heading: true
+      # 1Hz 전역 재계획마다 같은 목표를 새 경로로 받아도 반복 정렬하지 않는다.
+      rotate_to_heading_once: true
+      closed_loop: true
+      use_path_orientations: false
+
+      # Rotation Shim이 초기·최종 회전만 담당하고, 실제 경로 추종과 동적
+      # 장애물 회피는 기존 MPPI가 그대로 수행한다. Jazzy Shim은 내부
+      # controller를 같은 FollowPath namespace로 구성하므로 파라미터도 같은
+      # 단계에 둔다.
       time_steps: 20
       model_dt: 0.1
       batch_size: 200
@@ -139,7 +163,9 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 3.0
-        threshold_to_consider: 0.4
+        # 멀리서 최종 yaw를 맞추느라 목표 위치로 가지 못하는 교착을 막는다.
+        # XY 허용 범위 밖에서는 경로 추종을 우선하고, 최종 회전은 Shim이 맡는다.
+        threshold_to_consider: 0.10
       PathAlignCritic:
         enabled: true
         cost_power: 1
