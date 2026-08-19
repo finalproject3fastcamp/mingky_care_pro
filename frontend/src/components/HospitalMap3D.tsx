@@ -1077,10 +1077,6 @@ export function HospitalMap3D({
           : COLOR.selected
     h.setPulse(info.pulseMs, tone)
     h.setRing(info.ring && !!pose)
-    // 박동은 원래 "고른 로봇이거나 비상정지" 일 때만 보였다. 그런데 기다리는
-    // 중은 **고르지 않아도 알려야 하는 상태**다. Waypoint 화면은 selected 를
-    // 넘기지 않아서, 이 줄이 없으면 그 화면에서는 이탈해도 박동이 안 뜬다.
-    if (info.pulseMs !== null) h.pulse.visible = !!pose
     h.invalidate()
   }, [mapState, pose])
 
