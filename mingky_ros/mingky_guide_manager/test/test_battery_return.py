@@ -3,12 +3,15 @@
 import json
 from types import SimpleNamespace
 
+from action_msgs.msg import GoalStatus
 from mingky_guide_manager.guide_manager_node import GuideManager
 from mingky_interfaces.msg import GuideState, SessionStart
+from nav2_msgs.action import ComputePathToPose
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool
 
 
 class PendingFuture:
@@ -93,9 +96,103 @@ def test_long_communication_failure_ends_and_clears_active_session(manager):
     assert node.robot_state == GuideState.ROBOT_PAUSED
 
 
+def test_medical_cancel_stops_navigation_and_returns_to_dock(manager):
+    node, published = manager
+    node.session_id = 45
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    node.patient_id = 'patient-1'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray']
+    cancelled = []
+    node.navigation_cancel_pub = SimpleNamespace(
+        publish=lambda message: cancelled.append(message.data))
+
+    node._on_cancel_session(String(data=json.dumps({
+        'reason': 'aborted',
+        'session_id': 45,
+    })))
+
+    assert cancelled == [True]
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 45),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_RETURNING_TO_DOCK
+    assert node._dock_reason == 'guidance_canceled'
+    assert len(node.nav.sent) == 1
+
+    result = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+    node._on_goal_result(
+        result, node._nav_generation, 'charging_station_1', True, 0)
+
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node._dock_reason is None
+    assert published[-1] == (
+        'dock.return_succeeded', {'station_name': 'charging_station_1'}, 0)
+
+
+def test_medical_cancel_for_an_old_session_does_not_stop_current_session(manager):
+    node, published = manager
+    node.session_id = 46
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    cancelled = []
+    node.navigation_cancel_pub = SimpleNamespace(
+        publish=lambda message: cancelled.append(message.data))
+
+    node._on_cancel_session(String(data=json.dumps({
+        'reason': 'aborted',
+        'session_id': 45,
+    })))
+
+    assert cancelled == []
+    assert published == []
+    assert node.session_id == 46
+    assert node.session_state == GuideState.SESSION_GUIDING
+
+
+def test_fire_evacuation_ends_session_and_invalidates_navigation(manager):
+    node, published = manager
+    node.session_id = 44
+    node.session_state = GuideState.SESSION_GUIDING
+    node.patient_id = 'patient-fire'
+    node.current_step_order = 1
+    node.current_visit = 'X-ray'
+    node.session_visits = ['X-ray', 'CT']
+    generation = node._nav_generation
+    response = SetBool.Response()
+
+    node._on_fire_evacuation(SetBool.Request(data=True), response)
+
+    assert response.success is True
+    assert published == [('session.ended', {'end_reason': 'fire'}, 44)]
+    assert node._nav_generation == generation + 1
+    assert node._fire_evacuating is True
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.session_visits == []
+    assert node.robot_state == GuideState.ROBOT_PAUSED
+
+
+def test_guidance_goal_is_blocked_during_fire_evacuation(manager):
+    node, _ = manager
+    node._fire_evacuating = True
+
+    node.send_goal('xray_room_goal')
+
+    assert node.nav.sent == []
+
+
 def test_dock_success_never_emits_clinical_nav_success(manager):
     node, published = manager
     node._nav_generation = 7
+    node._dock_reason = 'battery'
     result = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
 
     node._on_goal_result(result, 7, 'charging_station_1', True, 0)
@@ -119,6 +216,18 @@ def test_session_created_while_low_is_closed_immediately(manager):
     node._on_session_start(message)
 
     assert published == [('session.ended', {'end_reason': 'battery'}, 51)]
+    assert node.session_id == 0
+
+
+def test_session_created_while_cancel_return_is_closed_immediately(manager):
+    node, published = manager
+    node._dock_reason = 'guidance_canceled'
+    message = SessionStart(session_id=52, patient_id='patient-2')
+
+    node._on_session_start(message)
+
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 52)]
     assert node.session_id == 0
 
 
@@ -153,6 +262,25 @@ def test_confirmed_session_starts_only_with_matching_session_id(manager):
         ('session.ready', {'current_visit': 'X-ray'}, 71),
         ('session.start_rejected', {'reason': 'session_mismatch'}, 71),
         ('nav.goal_sent', {'visit_name': 'X-ray'}, 71)]
+
+
+def test_retried_initial_session_is_idempotent(manager):
+    node, published = manager
+    message = SessionStart(
+        session_id=74,
+        patient_id='patient-retry',
+        current_step_order=1,
+        visit_names=['X-ray'],
+    )
+
+    node._on_session_start(message)
+    node._on_session_start(message)
+
+    assert node.session_id == 74
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert published == [
+        ('session.ready', {'current_visit': 'X-ray'}, 74),
+    ]
 
 
 def test_auto_localization_blocks_confirmed_session_departure(manager):
@@ -437,6 +565,53 @@ def test_rejected_second_waypoint_does_not_clear_active_robot_state(manager):
     }, 0)]
 
 
+def test_waypoint_goal_occupied_is_explained_to_control_ui(manager):
+    node, published = manager
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'failed',
+        'waypoint_name': 'ct_room_waiting',
+        'error_code': ComputePathToPose.Result.GOAL_OCCUPIED,
+        'message': 'costmap 갱신 후에도 목표 위치가 막혀 있습니다.',
+    })))
+
+    assert published == [('waypoint.test_failed', {
+        'waypoint_name': 'ct_room_waiting',
+        'error_code': ComputePathToPose.Result.GOAL_OCCUPIED,
+        'reason': 'goal_occupied',
+        'message': 'costmap 갱신 후에도 목표 위치가 막혀 있습니다.',
+    }, 0)]
+
+
+def test_guidance_goal_occupied_does_not_start_adaptive_recovery(manager):
+    node, published = manager
+    node.session_id = 87
+    node.current_visit = 'CT'
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    node._nav_generation = 4
+
+    wrapped = SimpleNamespace(
+        status=GoalStatus.STATUS_ABORTED,
+        result=SimpleNamespace(
+            error_code=ComputePathToPose.Result.GOAL_OCCUPIED),
+    )
+    node._on_goal_result(
+        SimpleNamespace(result=lambda: wrapped),
+        4, 'ct_room_goal', False, 87,
+    )
+
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert node.nav.sent == []
+    assert published == [('nav.goal_aborted', {
+        'visit_name': 'CT',
+        'error_code': ComputePathToPose.Result.GOAL_OCCUPIED,
+        'reason': 'goal_occupied',
+        'message': '전역 costmap을 갱신한 뒤에도 안내 목표가 장애물 셀로 확인됐습니다.',
+    }, 87)]
+
+
 def test_waiting_qr_completes_step_and_starts_next_visit(manager):
     node, published = manager
     node.session_id = 81
@@ -490,13 +665,56 @@ def test_waiting_qr_completes_final_step_and_session(manager):
     ))
 
     assert node.current_step_order == 0
-    assert node.previous_visit == 'CT'
-    assert node.session_state == GuideState.SESSION_COMPLETED
-    assert node.robot_state == GuideState.ROBOT_IDLE
-    assert node.nav.sent == []
+    assert node.previous_visit == ''
+    assert node.current_visit == 'charging_station_1'
+    assert node.session_id == 0
+    assert node.patient_id == ''
+    assert node.session_visits == []
+    assert node.session_state == GuideState.SESSION_NONE
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert node._dock_reason == 'session_completed'
+    assert len(node.nav.sent) == 1
     assert published == [
         ('session.step_completed', {'step_order': 2, 'source': 'qr'}, 82),
         ('session.ended', {'end_reason': 'completed'}, 82),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
+
+
+def test_completed_session_dock_waits_for_emergency_release(manager):
+    node, published = manager
+    node._emergency_engaged = True
+
+    node._request_dock_return('session_completed')
+
+    assert node._dock_pending is True
+    assert node.nav.sent == []
+
+    node._on_emergency_state(Bool(data=False))
+
+    assert node._dock_pending is False
+    assert node.robot_state == GuideState.ROBOT_MOVING
+    assert len(node.nav.sent) == 1
+    assert published == [
+        ('robot.resumed', {'reason': 'emergency_stop'}, 0),
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
+
+
+def test_session_created_during_dock_is_closed_as_race_fallback(manager):
+    node, published = manager
+    node._dock_reason = 'session_completed'
+
+    node._on_session_start(SessionStart(
+        session_id=86,
+        patient_id='patient-race',
+        current_step_order=1,
+        visit_names=['CT'],
+    ))
+
+    assert node.session_id == 0
+    assert published == [
+        ('session.ended', {'end_reason': 'aborted'}, 86),
     ]
 
 
@@ -568,6 +786,7 @@ def test_emergency_state_is_mirrored_with_recovery_event(manager):
 def test_dock_failure_retries_before_final_event(manager):
     node, published = manager
     node._battery_alarm = True
+    node._dock_reason = 'battery'
     node._dock_attempt = 1
 
     node._dock_failed('charging_station_1', 6, retryable=True)
@@ -581,6 +800,77 @@ def test_dock_failure_retries_before_final_event(manager):
     assert published == [
         ('dock.return_failed', {
             'station_name': 'charging_station_1', 'error_code': 6}, 0)]
+
+
+def test_completed_session_dock_failure_uses_same_retry_policy(manager):
+    node, published = manager
+    node._dock_reason = 'session_completed'
+    node._dock_attempt = 1
+
+    node._dock_failed('charging_station_1', 6, retryable=True)
+
+    assert published == []
+    assert node._dock_retry_timer is not None
+    node._cancel_dock_retry()
+
+    node._dock_attempt = node.dock_max_attempts
+    node._dock_failed('charging_station_1', 6, retryable=True)
+
+    assert node._dock_reason is None
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert published == [
+        ('dock.return_failed', {
+            'station_name': 'charging_station_1', 'error_code': 6}, 0)]
+
+
+@pytest.mark.parametrize(
+    ('reason', 'battery_alarm'),
+    [('battery', True), ('session_completed', False)],
+)
+def test_dock_abort_uses_adaptive_recovery_for_every_reason(
+        manager, reason, battery_alarm):
+    node, published = manager
+    node.recovery_mode = 'adaptive'
+    node._dock_reason = reason
+    node._battery_alarm = battery_alarm
+    node._nav_generation = 4
+    calls = []
+    node._start_adaptive_recovery = (
+        lambda waypoint_name, session_id, recovery_attempt, failures,
+        *, is_dock=False: calls.append((
+            waypoint_name, session_id, recovery_attempt, failures, is_dock)) or True)
+
+    aborted = SimpleNamespace(result=lambda: SimpleNamespace(status=6))
+    node._on_goal_result(
+        aborted, 4, 'charging_station_1', True, 0)
+
+    assert calls == [('charging_station_1', 0, 0, {}, True)]
+    assert node._dock_retry_timer is None
+    assert published == []
+
+
+def test_successful_escape_retries_original_goal_as_dock(manager):
+    node, published = manager
+    node._dock_reason = 'battery'
+    node._battery_alarm = True
+    node._nav_generation = 9
+    context = {
+        'generation': 9,
+        'waypoint_name': 'charging_station_1',
+        'session_id': 0,
+        'is_dock': True,
+        'recovery_attempt': 0,
+        'failures': {'forward': 1},
+    }
+
+    succeeded = SimpleNamespace(result=lambda: SimpleNamespace(status=4))
+    node._on_recovery_goal_result(succeeded, context)
+
+    assert len(node.nav.sent) == 1
+    assert node.robot_state == GuideState.ROBOT_BATTERY_LOW
+    assert published == [
+        ('dock.return_started', {'station_name': 'charging_station_1'}, 0),
+    ]
 
 
 def test_default_navigation_keeps_nav2_default_behavior_tree(manager):

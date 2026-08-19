@@ -5,13 +5,43 @@
 동작한다. 설계 근거는 app/orders.py 주석 참고.
 """
 
-from fastapi import APIRouter, HTTPException, Query, Response
+import uuid
+from decimal import Decimal, InvalidOperation
 
-from .. import orders, robot_runtime
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+
+from .. import control_audit, orders, robot_runtime
+from ..actor import Actor, actor_from_header
 from ..db import get_pool
 from ..schemas import OrderAck, OrderIn, OrderOut
 
 router = APIRouter(prefix="/robots", tags=["orders"])
+
+MIN_NAVIGATION_SPEED = Decimal("0.05")
+MAX_NAVIGATION_SPEED = Decimal("0.25")
+NAVIGATION_SPEED_STEP = Decimal("0.01")
+
+
+def _validate_navigation_speed(argument: str) -> None:
+    try:
+        speed = Decimal(argument)
+        valid_step = speed.is_finite() and speed % NAVIGATION_SPEED_STEP == 0
+    except (InvalidOperation, ValueError):
+        valid_step = False
+        speed = Decimal("0")
+    if not valid_step or not MIN_NAVIGATION_SPEED <= speed <= MAX_NAVIGATION_SPEED:
+        raise HTTPException(
+            status_code=422,
+            detail="navigation speed must be 0.05..0.25 m/s in 0.01 steps",
+        )
+
+
+def _validate_low_obstacle_mode(argument: str) -> None:
+    if argument not in ("disabled", "sidestep"):
+        raise HTTPException(
+            status_code=422,
+            detail="low obstacle mode must be disabled or sidestep",
+        )
 
 
 async def _require_robot(robot_id: str) -> None:
@@ -23,16 +53,18 @@ async def _require_robot(robot_id: str) -> None:
         raise HTTPException(status_code=404, detail="unknown or inactive robot")
 
 
-async def _require_active_session(robot_id: str, argument: str) -> None:
-    """출발 명령이 현재 로봇의 활성 세션을 정확히 가리키는지 확인한다."""
+async def _require_active_session(
+        robot_id: str, argument: str, command: str = "start_guidance") -> None:
+    """세션 명령이 현재 로봇의 활성 세션을 정확히 가리키는지 확인한다."""
     try:
         session_id = int(argument)
     except ValueError as exc:
         raise HTTPException(
-            status_code=422, detail="start_guidance requires a session_id") from exc
+            status_code=422, detail=f"{command} requires a session_id") from exc
     if session_id <= 0:
         raise HTTPException(
-            status_code=422, detail="start_guidance requires a positive session_id")
+            status_code=422,
+            detail=f"{command} requires a positive session_id")
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -53,19 +85,72 @@ async def _require_active_session(robot_id: str, argument: str) -> None:
 
 
 @router.post("/{robot_id}/orders", response_model=OrderOut, status_code=201)
-async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
+async def create_order(
+    robot_id: str,
+    body: OrderIn,
+    actor: Actor = Depends(actor_from_header),
+) -> OrderOut:
     """명령을 건다. 대시보드가 호출한다.
 
     로봇당 대기 명령은 하나다. 아직 안 받아간 것이 있으면 덮어쓴다 —
     안내 로봇에게 유효한 목적지는 최신 하나뿐이고, 밀린 목적지를 순서대로
     소화하는 쪽이 오히려 위험하다.
+
+    `X-Actor` 헤더로 실행자를 남긴다. 없어도 거부하지 않는다 — 감사 누락이
+    제어를 막으면 안 된다(actor.py). 익명으로 기록되고 fleet 탭이 그 비율을
+    드러낸다.
     """
     await _require_robot(robot_id)
-    if body.command == "start_guidance":
-        await _require_active_session(robot_id, body.argument)
+    if body.command in ("start_guidance", "cancel_guidance"):
+        await _require_active_session(robot_id, body.argument, body.command)
     if body.command == "localize" and body.argument != "run":
         raise HTTPException(
             status_code=422, detail="localize requires argument 'run'")
+    if body.command == "fire_alarm_reset" and body.argument != "run":
+        raise HTTPException(
+            status_code=422, detail="fire_alarm_reset requires argument 'run'")
+    if body.command == "fire_alarm_reset":
+        runtime = robot_runtime.snapshot().get(robot_id)
+        if runtime is not None and runtime.fire_alarm_active is False:
+            raise HTTPException(
+                status_code=409, detail="fire alarm is not active")
+    if body.command in ("cancel_navigation", "cancel_fire_evacuation"):
+        if body.argument != "run":
+            raise HTTPException(
+                status_code=422,
+                detail=f"{body.command} requires argument 'run'",
+            )
+    if body.command in ("set_navigation_speed", "set_low_obstacle_mode"):
+        if body.command == "set_navigation_speed":
+            _validate_navigation_speed(body.argument)
+        else:
+            _validate_low_obstacle_mode(body.argument)
+        runtime = robot_runtime.snapshot().get(robot_id)
+        if runtime is not None:
+            if runtime.system_state != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"robot system is {runtime.system_state}",
+                )
+            if runtime.localization_active or runtime.fire_alarm_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="robot safety operation is active",
+                )
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            active_session = await conn.fetchval(
+                """
+                SELECT session_id FROM guidance_sessions
+                WHERE robot_id = $1 AND ended_at IS NULL
+                """,
+                robot_id,
+            )
+        if active_session is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"robot busy with session {active_session}",
+            )
     if body.command.startswith("system_"):
         if body.argument != "run":
             raise HTTPException(
@@ -94,14 +179,33 @@ async def create_order(robot_id: str, body: OrderIn) -> OrderOut:
             # 재시작 직후 Nav2가 준비되기 전에 예전 목표가 전달되거나, 중지
             # 뒤 다시 켰을 때 낡은 목표가 갑자기 실행되는 일을 막는다.
             orders.clear_motion(robot_id)
-    if body.command in ("goto", "goto_pose", "start_guidance", "localize"):
+    if body.command in (
+            "goto", "goto_pose", "start_guidance", "cancel_guidance",
+            "cancel_navigation", "localize", "fire_alarm_reset",
+            "cancel_fire_evacuation"):
         runtime = robot_runtime.snapshot().get(robot_id)
         if runtime is not None and runtime.system_state != "active":
             raise HTTPException(
                 status_code=409,
                 detail=f"robot system is {runtime.system_state}",
             )
-    return orders.put(robot_id, body.command, body.argument)
+    if body.command in ("cancel_guidance", "cancel_navigation"):
+        # 취소보다 먼저 적재됐지만 아직 로봇이 받지 않은 출발·목적지 명령이
+        # 취소 직후 실행되는 것을 막는다.
+        orders.clear_motion(robot_id)
+
+    # 검증을 통과한 뒤, 명령이 걸리기 전에 남긴다. 순서 근거는
+    # control_audit 모듈 주석 — 요약하면 SLO 는 실제보다 좋아 보이는 쪽으로
+    # 틀리면 안 된다. 거부된 명령(위의 422·409)은 개입이 아니므로 여기 못 온다.
+    #
+    # 식별자를 여기서 만드는 이유는 감사 행이 명령을 가리켜야 하기 때문이다.
+    # put() 이 만들면 기록 시점에는 아직 그 값이 없다.
+    order_id = uuid.uuid4()
+    await control_audit.record(
+        robot_id, body.command, actor,
+        argument=body.argument, order_id=order_id)
+
+    return orders.put(robot_id, body.command, body.argument, order_id=order_id)
 
 
 @router.get("/{robot_id}/orders/next", response_model=OrderOut | None)

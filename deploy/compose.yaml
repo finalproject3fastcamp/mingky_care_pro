@@ -35,6 +35,9 @@ services:
       SESSION_FAILURE_CANCEL_AFTER_SEC: ${SESSION_FAILURE_CANCEL_AFTER_SEC:-30}
       EVENT_CODES_FILE: /srv/mingky/config/event_codes.yaml
       WAYPOINTS_FILE: /srv/mingky/waypoints/yun_map_highres_clean_waypoints.yaml
+      # 심각한 사건을 메신저로 내보낸다 (§8.4). 비어 있으면 꺼진 채로 돈다 —
+      # 기본이 '안 보냄' 이라야 설정을 안 한 환경이 실수로 쏘지 않는다.
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     depends_on:
       postgres:
         condition: service_healthy

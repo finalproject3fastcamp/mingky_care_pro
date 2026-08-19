@@ -91,6 +91,8 @@ Desktop.ini
 
 # Claude Code local settings
 .claude/settings.local.json
+.claude/settings.local.json.tmp.*
+.claude/scheduled_tasks.lock
 
 # Local handoff notes for the next coding session
 /CONTEXT.md
@@ -104,3 +106,8 @@ database/*.backup
 # Local deployment secrets
 /deploy/.env
 tools/yolo_patient_detection/.env
+
+# OMX 모방학습 — 장비마다 다른 로컬 설정과 산출물
+# 카메라 by-id 경로는 노트북마다 다르므로 03_check_cameras.py 로 각자 만든다.
+# 데이터셋(~/.cache/huggingface/lerobot)과 체크포인트(~/train)는 홈에 남는다.
+omx/il/cams.env

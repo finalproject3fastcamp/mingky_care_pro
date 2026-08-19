@@ -1,0 +1,47 @@
+# pick 실패 후 재시도로 완주 — 이것은 성공이다.
+#
+# 모방학습 pick 성공률은 원래 90% 근처다. 개별 실패는 정상 동작 범위이고,
+# 재시도로 사이클이 끝났으면 사람이 손댈 일이 아니다 (monitoring-spec.md §4.4).
+#
+# 이 시나리오가 잠그는 것:
+#   - manipulator.pick_failed 의 level 이 warning 이다. error 로 드리프트하면
+#     하네스 정본 대조(test_fake_robot_scenarios.py)가 먼저 깨진다.
+#     팔의 알림 등급은 여기서 갈린다 — §8.4 의 "즉시 사람 호출" 에 확률적
+#     실패를 넣으면 알림 전체가 무시된다
+#   - attempt 가 1 → 2 로 올라간다. 재시도로 성공한 건과 한 번에 성공한 건을
+#     구분하지 못하면 pick 성공률(§7.2)이 정책 품질을 반영하지 못한다
+
+name: pick 재시도 후 완주 (omx-01)
+
+robots:
+  - id: omx-01
+    type: manipulator
+
+steps:
+  - robot: omx-01
+    action: event
+    code: manipulator.cycle_started
+    payload: { dispense_id: d-1002, medication_id: med-c }
+
+  - robot: omx-01
+    action: event
+    code: manipulator.pick_failed
+    payload: { medication_id: med-c, attempt: 1, reason: grasp_slip }
+    wait: 0.5
+
+  - robot: omx-01
+    action: event
+    code: manipulator.pick_succeeded
+    payload: { medication_id: med-c, attempt: 2, duration_ms: 5600 }
+    wait: 0.5
+
+  - robot: omx-01
+    action: event
+    code: manipulator.place_succeeded
+    payload: { tray_slot: 3 }
+
+  # 사이클은 완주했다. 재시도가 끼었다고 실패로 세지 않는다.
+  - robot: omx-01
+    action: event
+    code: manipulator.cycle_completed
+    payload: { dispense_id: d-1002, duration_ms: 14300 }

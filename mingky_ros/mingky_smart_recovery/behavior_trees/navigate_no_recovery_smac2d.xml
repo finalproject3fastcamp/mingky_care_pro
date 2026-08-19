@@ -9,6 +9,7 @@
           <Sequence>
             <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="1.1"/>
           </Sequence>
         </RecoveryNode>
       </RateController>

@@ -49,14 +49,17 @@
 # === QR · 환자 인식 ==========================================================
 
 qr.scan_ok:
+  robot_types: [mobile]
   level: info
   payload: { patient_id: string }
 
 qr.scan_failed:
+  robot_types: [mobile]
   level: warning
   payload: { reason: string }
 
 patient.lost:
+  robot_types: [mobile]
   level: warning
   payload: { marker_id: int, last_seen_sec: float }
   # 안내 중(이동)일 때만 발행한다.
@@ -65,48 +68,127 @@ patient.lost:
   # 검출 노드가 아니라 상태를 소유한 노드가 판정한다.
 
 patient.regained:
+  robot_types: [mobile]
   level: info
   payload: { marker_id: int }
 
 
 # === 주행 ===================================================================
 
+fire.detected:
+  robot_types: [mobile]
+  level: error
+  payload: { detections: int, window_size: int, source: [camera, manual_test] }
+
+fire.evacuation_started:
+  robot_types: [mobile]
+  level: error
+  payload: { shelter_x: float, shelter_y: float }
+
+fire.evacuation_succeeded:
+  robot_types: [mobile]
+  level: info
+  payload: {}
+
+fire.evacuation_failed:
+  robot_types: [mobile]
+  level: error
+  payload: { reason: string, status: int }
+
+fire.evacuation_canceled:
+  robot_types: [mobile]
+  level: warning
+  payload: { reason: string }
+
+fire.inference_unavailable:
+  robot_types: [mobile]
+  level: error
+  payload: { reason: string }
+
+fire.inference_restored:
+  robot_types: [mobile]
+  level: info
+  payload: {}
+
+fire.alarm_reset:
+  robot_types: [mobile]
+  level: info
+  payload: {}
+
 nav.goal_sent:
+  robot_types: [mobile]
   level: info
   payload: { visit_name: string }
 
 nav.goal_succeeded:
+  robot_types: [mobile]
   level: info
   payload: { visit_name: string }
   applies_to: session_steps.arrived_at
 
 nav.goal_aborted:
+  robot_types: [mobile]
   level: error
   payload: { visit_name: string, error_code: int }
   # error_code 는 Nav2 NavigateToPose 결과 코드를 그대로 넣는다.
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 nav.waiting_spot_failed:
+  robot_types: [mobile]
   level: warning
   payload: { visit_name: string, waypoint_name: string, error_code: int }
   # 검사실 도착 기록은 유지하지만 로봇을 paused 로 전환한다. 설정 누락이나
   # 주행 실패를 정상 대기로 숨기지 않으며, 운영자 확인 전에는 QR 진행을 막는다.
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 nav.stuck:
+  robot_types: [mobile]
   level: warning
   payload: { x: float, y: float }
   # progress checker 발동.
 
+# 환자 거리 대기는 장애·수동정지가 아닌 정상 안내 흐름이다.
+# robot.paused를 쓰면 안내 완주율 SLO의 수동 정지로 오판되어 별도로 둔다.
+patient.follow_wait_started:
+  robot_types: [mobile]
+  level: info
+  payload: { reason: string, source: string }
+
+patient.follow_wait_ended:
+  robot_types: [mobile]
+  level: info
+  payload: { source: string }
+
+person_follow.state_changed:
+  robot_types: [mobile]
+  level: info
+  payload: { state: string, distance: float, source: string }
+
+person_follow.inference_unavailable:
+  robot_types: [mobile]
+  level: warning
+  payload: { reason: string }
+
+person_follow.inference_restored:
+  robot_types: [mobile]
+  level: info
+  payload: {}
+
 waypoint.test_started:
+  robot_types: [mobile]
   level: info
   payload: { waypoint_name: string, x: float, y: float, yaw: float }
 
 waypoint.test_succeeded:
+  robot_types: [mobile]
   level: info
   payload: { waypoint_name: string }
 
 waypoint.test_failed:
+  robot_types: [mobile]
   level: error
   payload: { waypoint_name: string, error_code: int }
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 
 # === 자동 로컬라이제이션 ====================================================
@@ -115,15 +197,18 @@ waypoint.test_failed:
 # RViz 2D Pose Estimate 손조작을 대신한다.
 
 localize.started:
+  robot_types: [mobile]
   level: info
   payload: { source: string }
   # source 는 startup(부팅 시 자동) 또는 manual(대시보드 재요청).
 
 localize.converged:
+  robot_types: [mobile]
   level: info
   payload: { spread_m: float, yaw_spread_deg: float, attempt: int }
 
 localize.failed:
+  robot_types: [mobile]
   level: error
   payload: { reason: string, attempts: int }
   # reason: not_converged | no_service | mode_changed | nav2_not_active
@@ -146,37 +231,45 @@ localize.failed:
 # 충전소 도착이 다음 진료실 도착으로 잘못 처리될 수 있다.
 
 dock.return_started:
+  robot_types: [mobile]
   level: warning
   payload: { station_name: string }
 
 dock.return_succeeded:
+  robot_types: [mobile]
   level: info
   payload: { station_name: string }
 
 dock.return_failed:
+  robot_types: [mobile]
   level: error
   payload: { station_name: string, error_code: int }
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 
 # === 세션 ===================================================================
 
 session.ready:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { current_visit: string }
   # QR 응답이 로봇의 guide_manager까지 전달되어 첫 출발 명령을 받을 준비가 됨.
 
 session.start_rejected:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { reason: string }
   # 관제에서 보낸 출발 요청을 로봇 상태머신이 거부한 이유.
 
 session.started:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { patient_id: string, marker_id: int }
   applies_to: guidance_sessions
   # 세션 행 생성 + examination_steps 를 session_steps 로 스냅샷 복사.
 
 session.step_completed:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { step_order: int, source: [qr, manual] }
   applies_to: session_steps.completed_at
@@ -187,8 +280,9 @@ session.step_completed:
   # 003 의 completed_source CHECK 도 함께 넓혀야 한다.
 
 session.ended:
+  robot_types: [mobile, manipulator]
   level: info
-  payload: { end_reason: [completed, aborted, battery, patient_lost, robot_offline, system_failure] }
+  payload: { end_reason: [completed, aborted, battery, patient_lost, robot_offline, system_failure, fire] }
   applies_to: guidance_sessions.ended_at
 
 
@@ -199,16 +293,19 @@ session.ended:
 # events 는 감사·타임라인용 히스토리만 남긴다. 화면 판정에 이 이벤트를 쓰지 않는다.
 
 activation.armed:
+  robot_types: [mobile]
   level: info
   payload: {}
   # 의료진이 로봇을 활성화. 발행 주체는 백엔드 (POST /robots/{id}/arm).
 
 activation.canceled:
+  robot_types: [mobile]
   level: info
   payload: { reason: string }
   # armed 해제. reason 은 'staff' (사용자 취소) 또는 'failsafe' (로봇 폴링 두절).
 
 activation.consumed:
+  robot_types: [mobile]
   level: info
   payload: {}
   # QR 스캔이 성공해 arming 이 실제 세션으로 이어짐. session_id 는 필드에 담긴다.
@@ -217,6 +314,7 @@ activation.consumed:
 # === 로봇 상태 ==============================================================
 
 robot.battery_low:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { percent: int }
   # 임계값을 넘은 순간만 남긴다.
@@ -224,11 +322,13 @@ robot.battery_low:
   # 정기 샘플이 이벤트에 섞이면 타임라인 필터가 쓸모없어진다.
 
 robot.battery_recovered:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { percent: int }
   # battery_low 의 짝. 재충전되어 저전압 상태를 벗어난 순간만 남긴다.
 
 robot.comm_lost:
+  robot_types: [mobile, manipulator]
   level: error
   payload: { last_seen_sec: float }
   # 로봇이 아니라 수집 서버가 발행한다. 끊긴 쪽은 자기가 끊겼다고 알릴 수 없다.
@@ -240,6 +340,7 @@ robot.comm_lost:
   # 두절이 언제 시작됐는지는 last_seen_sec 으로 역산한다.
 
 robot.comm_restored:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { offline_sec: float }
   # comm_lost 의 짝. 이것이 없으면 타임라인에 끊긴 기록만 남고 언제
@@ -252,6 +353,7 @@ robot.comm_restored:
   # 이 이벤트가 타임라인에서 그 배치의 경계 표시 역할을 한다.
 
 robot.paused:
+  robot_types: [mobile, manipulator]
   level: warning
   payload: { reason: string }
 
@@ -261,27 +363,170 @@ robot.paused:
 # estop 은 mingky_battery_guard 의 안전 게이트가 실제 주체다. 이 이벤트는
 # 게이트 상태를 모드 어휘로 옮겨 타임라인에 남기는 것이다.
 robot.mode_changed:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { mode: [auto, manual, estop], previous: [auto, manual, estop], source: string }
 
+# mode_manager 의 요청과 teleop_limiter 가 실제 적용한 값이 유예 시간 뒤에도
+# 다를 때만 한 번 남긴다. applied=unknown 은 limiter 상태를 받지 못했다는 뜻이다.
+robot.mode_mismatch:
+  robot_types: [mobile, manipulator]
+  level: error
+  payload: { requested: [auto, manual, estop], applied: [auto, manual, estop, unknown] }
+
+robot.mode_recovered:
+  robot_types: [mobile, manipulator]
+  level: info
+  payload: { requested: [auto, manual, estop], applied: [auto, manual, estop] }
+
+# estop 은 걸어 잠긴다. 스스로 풀리지 않으며 명시적으로 해제해야 한다.
+#
+# 이 두 코드가 없는 동안 비상정지 이력이 통째로 화면에서 빠져 있었다.
+# 적재는 됐지만 미등록 코드라 상태 갱신을 타지 않아, 사고를 조사할 때
+# 아무 흔적이 없었다. 관제 서버에는 손으로 추가돼 있었으나 저장소에는
+# 반영되지 않아 재배포하면 다시 사라지는 상태였다.
+robot.estop_engaged:
+  robot_types: [mobile, manipulator]
+  level: error
+  payload: { source: string }
+
+robot.estop_released:
+  robot_types: [mobile, manipulator]
+  level: warning
+  payload: { source: string }
+
+robot.topic_stale:
+  robot_types: [mobile]
+  level: error
+  payload: { topic: string, age_sec: float, expected_hz: float }
+  # 로봇이 아니라 수집 서버가 발행한다(backend/app/topic_watch.py).
+  # 유닛은 active 인데 /scan 이 안 나오는 상태 — 라이다 USB 가 죽어도 노드는
+  # 살아 있고 systemd 는 초록이다. 지금까지 아무도 못 보던 장애 모드다.
+  #
+  # ROS 개념이라 mobile 전용이다. OMX 는 LeRobot 시리얼 직결이라 토픽이 없다.
+  #
+  # 상시 발행 토픽(config/topic_watch.yaml 의 always_on)만 발행한다.
+  # /cmd_vel 은 서 있는 로봇에서 안 나오는 것이 정상이라 여기 오지 않는다.
+
+robot.topic_restored:
+  robot_types: [mobile]
+  level: info
+  payload: { topic: string, hz: float }
+  # topic_stale 의 짝. 이것이 없으면 타임라인에 끊긴 기록만 남고 언제
+  # 돌아왔는지 알 수 없다 — robot.comm_restored 와 같은 이유다.
+
 robot.resumed:
+  robot_types: [mobile, manipulator]
   level: info
   payload: { reason: string }
   # paused 의 짝. 안전 정지 원인이 해소되고 명시적으로 재개된 뒤 발행한다.
 
 
+# === 조제 (manipulator 전용) ================================================
+#
+# 접두사는 robot_type 값과 같은 manipulator 로 맞춘다. arm.* 은 쓰지 않는다 —
+# arming(의료진 활성화)과 글자가 겹쳐 'arm robot arming' 같은 이름이 나온다
+# (monitoring-spec.md §4.2).
+#
+# session_id 는 채워도 되고 0 이어도 된다. 조제가 특정 환자의 안내에 딸리면
+# 채우고, 독립적으로 돌면 0 이다. events.session_id 는 NULL 허용이고 ingest 가
+# 0 을 NULL 로 바꾼다. SLO 판정(app/slo.py)은 robot.estop_engaged 와
+# robot.paused 두 코드만 보므로 여기 값이 완주율에 섞이지 않는다.
+#
+# 제어 명령의 order_id(UUID) 와 구분하려고 조제 지시는 dispense_id 로 쓴다.
+# 같은 이름을 쓰면 §4.2 와 같은 종류의 충돌이 하나 더 생긴다.
+#
+# 실패 레벨 — pick 실패는 warning 이다. 모방학습 pick 성공률은 원래 90% 근처라
+# 개별 실패가 정상 동작 범위다(§4.4). error 는 사이클 포기와 서보 결함에만 쓴다.
+# 여기를 error 로 올리면 팔의 알림 전체가 무의미해진다.
+
+manipulator.cycle_started:
+  robot_types: [manipulator]
+  level: info
+  payload: { dispense_id: string, medication_id: string }
+
+manipulator.pick_succeeded:
+  robot_types: [manipulator]
+  level: info
+  payload: { medication_id: string, attempt: int, duration_ms: int }
+  # attempt 는 1부터. 재시도로 성공한 건과 한 번에 성공한 건을 구분해야
+  # pick 성공률(§7.2)이 실제 정책 품질을 반영한다.
+
+manipulator.pick_failed:
+  robot_types: [manipulator]
+  level: warning
+  payload: { medication_id: string, attempt: int, reason: string }
+
+manipulator.place_succeeded:
+  robot_types: [manipulator]
+  level: info
+  payload: { tray_slot: int }
+
+manipulator.cycle_completed:
+  robot_types: [manipulator]
+  level: info
+  payload: { dispense_id: string, duration_ms: int }
+  # duration_ms 가 사이클 타임 p50/p95 의 유일한 재료다.
+
+manipulator.cycle_aborted:
+  robot_types: [manipulator]
+  level: error
+  payload: { dispense_id: string, reason: string }
+
+manipulator.servo_fault:
+  robot_types: [manipulator]
+  level: error
+  payload: { joint: string, fault_bits: int, temp_c: float }
+  # Dynamixel 이 직접 보고하는 하드웨어 에러 비트. mobile 에 없는 예지보전
+  # 신호다(§4.4). 온도·전류 추이 수집은 로드맵 11 에서 따로 붙는다.
+
+manipulator.servo_overheat:
+  robot_types: [manipulator]
+  level: warning
+  payload: { joint: string, temp_c: float, limit_c: float }
+  # 로봇이 아니라 수집 서버가 발행한다(backend/app/servo_health.py). 임계는
+  # config/servo_limits.yaml 에 있고 조인트마다 다르다 — 그리퍼는 쥔 채
+  # 버티는 시간이 길어 뜨겁게 도는 것이 정상이다.
+  #
+  # warning 인 이유: XM430 은 80℃ 에서 스스로 토크를 끊는다. 그 아래에서
+  # 미리 알리는 신호이므로 아직 팔은 돌고 있다. error 는 이미 멈춘 상태
+  # (cycle_aborted · servo_fault)에만 쓴다 — §8.4 의 심각도 분리.
+
+manipulator.servo_cooled:
+  robot_types: [manipulator]
+  level: info
+  payload: { joint: string, temp_c: float }
+  # servo_overheat 의 짝. 경고선(warn_temp_c)까지 내려와야 발행한다 —
+  # 임계 바로 아래에서 흔들리는 조인트가 과열/해제를 반복하면 그 알림을
+  # 아무도 안 본다.
+
+manipulator.policy_loaded:
+  robot_types: [manipulator]
+  level: info
+  payload: { checkpoint_id: string, dataset_revision: string }
+  # 팔의 '무엇이 돌고 있나' 는 코드 SHA 만으로 답이 안 된다. 어제 되던 pick 이
+  # 오늘 안 되는 원인은 대개 체크포인트를 바꿔 낀 것이다(§4.4).
+  # 기동 시와 체크포인트 교체 시 발행한다.
+
+manipulator.homing_required:
+  robot_types: [manipulator]
+  level: warning
+  payload: { reason: string }
+  # 사람이 홈 복귀를 지시해야 진행 가능한 상태. 팔의 개입은 teleop 이 아니라
+  # 이산 명령이므로 orders 큐로 받는다(§4.4).
+
+
 # === 시스템 =================================================================
 
 system.unknown_event_code:
+  robot_types: [mobile, manipulator]
   level: error
   payload: { received_code: string }
   # 수집 서버가 미등록 코드를 받았을 때 발행한다.
   # 이 코드 자체는 반드시 등록되어 있어야 한다. 아니면 무한 루프가 난다.
 
 
-# === OMX ====================================================================
-#
-# 조제 연동 방식이 확정되면 omx.* 접두사로 추가한다.
-# 현재 주행 로봇과 로봇팔은 분리되어 있으므로 정의하지 않는다.
-# 추가 시 session_id 를 채울지가 관건이다 —
-# 조제가 특정 환자의 안내에 속하면 채우고, 독립적으로 돌면 0 이다.
+system.robot_type_mismatch:
+  robot_types: [mobile, manipulator]
+  level: warning
+  payload: { received_code: string, actual_type: string, allowed_types: [string] }

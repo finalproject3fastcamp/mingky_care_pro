@@ -1,0 +1,33 @@
+# 오배선 — 조제 스테이션이 주행 이벤트를 보낸다.
+#
+# 실기로는 만들기 곤란한 경로다. OMX 게이트웨이를 잘못 배선하거나 robot_id 를
+# 오타내야 나오는데, 그러자고 실기를 건드릴 수는 없다.
+#
+# 기대 동작 (monitoring-spec.md §6.1):
+#   - 이벤트는 그대로 적재된다 (거부하지 않는다)
+#   - system.robot_type_mismatch 가 추가로 남는다
+#   - 응답의 type_mismatches 에 코드가 담긴다
+#   - **상태는 갱신되지 않는다** — nav.goal_succeeded 는 arrived_at 을 찍으므로,
+#     그대로 적용하면 조제 스테이션 하나가 환자의 안내 단계를 진행시킨다
+#
+# expect_mismatch 는 정본 대조에서 타입 검사만 건너뛰라는 표시다. 코드 존재와
+# level 은 그대로 본다 — 오배선 시나리오라고 아무 코드나 쓸 수 있는 건 아니다.
+
+name: 오배선 (manipulator 가 nav 이벤트 발행)
+
+robots:
+  - id: omx-01
+    type: manipulator
+
+steps:
+  # 공통 코드는 팔에서도 정상이다. 이게 경고로 잡히면 §4.3 분류가 틀린 것이다.
+  - robot: omx-01
+    action: event
+    code: robot.comm_restored
+    payload: {}
+
+  - robot: omx-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: X-ray }
+    expect_mismatch: true

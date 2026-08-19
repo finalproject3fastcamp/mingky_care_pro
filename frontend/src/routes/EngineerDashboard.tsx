@@ -2,10 +2,25 @@ import { useEffect, useState } from 'react'
 
 import { EventFilters } from '../components/EventFilters'
 import { EventTimeline } from '../components/EventTimeline'
-import { api } from '../lib/api'
+import { BatteryForecastLabel } from '../components/BatteryForecastLabel'
+import { BatteryReading } from '../components/BatteryReading'
+import { RobotInventoryCard } from '../components/RobotInventoryCard'
+import { RobotResourceCard } from '../components/RobotResourceCard'
+import { SessionEndingSummary } from '../components/SessionEndingSummary'
+import { UnknownCodePanel } from '../components/UnknownCodePanel'
+import {
+  api,
+  getBatteryForecast,
+  getRobotInventory,
+  getRobots,
+  getSessionEndingContext,
+} from '../lib/api'
 import { EMPTY_FILTERS, toEventQuery } from '../lib/eventFilters'
 import type { EventFilterValues } from '../lib/eventFilters'
+import { listUnknownCodes } from '../lib/eventsApi'
 import { useEventFeed } from '../lib/useEventFeed'
+import { usePolling } from '../lib/usePolling'
+import { isMobile } from '../types/monitoring'
 
 /** GET /robots 응답 중 필터가 쓰는 부분만. 전체 스키마는 schemas.py 의 RobotOut. */
 interface RobotSummary {
@@ -15,6 +30,15 @@ interface RobotSummary {
 
 const PAGE_SIZE = 50
 const POLL_MS = 3000
+const UNKNOWN_CODE_POLL_MS = 60000
+// 자원은 heartbeat(5초)로 갱신되므로 그보다 자주 물어볼 이유가 없다.
+const ROBOT_POLL_MS = 5000
+// 인벤토리는 내용이 바뀔 때만 갱신된다. 몇 시간에 한 번이다.
+const INVENTORY_POLL_MS = 30000
+// 배터리 로그가 2분 주기라 그보다 자주 추정해도 같은 답이 나온다.
+const FORECAST_POLL_MS = 120000
+// 끝난 세션의 종료 창은 더 이상 안 바뀐다. 확인만 이따금 한다.
+const ENDING_POLL_MS = 30000
 
 const UPDATED_FORMAT = new Intl.DateTimeFormat('ko-KR', {
   hour: '2-digit',
@@ -45,6 +69,9 @@ export function EngineerDashboard() {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [filters, setFilters] = useState<EventFilterValues>(EMPTY_FILTERS)
   const [robots, setRobots] = useState<RobotSummary[]>([])
+  // 인벤토리·자원은 로봇 한 대씩 본다. 여러 대를 한 화면에 늘어놓으면
+  // 어느 로봇 이야기인지 헷갈리고, 그게 원인 추적을 늦춘다.
+  const [focused, setFocused] = useState<string | null>(null)
 
   // 로봇 목록은 마스터 테이블이라 세션 중에 바뀌지 않는다. 한 번만 읽는다.
   // 실패해도 화면을 막지 않는다 — 셀렉트가 '전체'만 남을 뿐이다.
@@ -63,6 +90,44 @@ export function EngineerDashboard() {
   const feed = useEventFeed(
     { ...toEventQuery(filters), limit: PAGE_SIZE, offset },
     live ? POLL_MS : null,
+  )
+
+  // 미등록 코드는 몇 시간에 한 번 바뀌는 값이라 이벤트 피드와 같은 주기로
+  // 물어볼 이유가 없다. 집계 쿼리라 비싸기도 하다.
+  const unknownCodes = usePolling(
+    (signal) => listUnknownCodes({ signal }),
+    UNKNOWN_CODE_POLL_MS,
+  )
+
+  // 자원은 GET /robots 에 실려 온다. 별도 엔드포인트를 두지 않은 이유는
+  // 이 값들이 전부 heartbeat 가 남긴 인메모리 상태라서다.
+  const robotState = usePolling((signal) => getRobots({ signal }), ROBOT_POLL_MS)
+
+  const target = focused ?? robots[0]?.robot_id ?? null
+  // key 가 없으면 로봇을 바꿔도 최대 30초간 이전 로봇의 인벤토리가 남는다.
+  // 그 사이에 "이 로봇은 중복 노드 없음" 으로 읽히면 이 화면의 존재 이유가
+  // 사라진다.
+  const inventory = usePolling(
+    (signal) => (target ? getRobotInventory(target, { signal }) : Promise.resolve(null)),
+    INVENTORY_POLL_MS,
+    target,
+  )
+  const forecast = usePolling(
+    (signal) => (target ? getBatteryForecast(target, { signal }) : Promise.resolve(null)),
+    FORECAST_POLL_MS,
+    target,
+  )
+  const focusedRobot = robotState.data?.find((r) => r.robot_id === target) ?? null
+
+  // 세션으로 필터링하면 "왜 그렇게 끝났는지" 를 함께 보여준다. 이벤트
+  // 목록만으로는 종료 직전 창을 눈으로 골라내야 한다.
+  const sessionId = toEventQuery(filters).session_id ?? null
+  const ending = usePolling(
+    (signal) => (sessionId
+      ? getSessionEndingContext(sessionId, { signal })
+      : Promise.resolve(null)),
+    ENDING_POLL_MS,
+    sessionId,
   )
 
   useEffect(() => {
@@ -101,6 +166,13 @@ export function EngineerDashboard() {
 
   return (
     <div className="dashboard">
+      <header className="waypoint-page-header">
+        <div>
+          <span className="waypoint-page-header__eyebrow">OPERATIONS LOG</span>
+          <h1>수집 이벤트</h1>
+          <p>로봇 상태 전이와 제어 이력을 시간순으로 확인합니다.</p>
+        </div>
+      </header>
       <div className="card">
         <div className="card-title">수집 상태</div>
         <div className={`state-badge ok${live ? ' pulsing' : ''}`}>
@@ -130,7 +202,59 @@ export function EngineerDashboard() {
         </div>
       </div>
 
+      {robots.length > 0 && (
+        <div className="card">
+          <div className="card-title">로봇 선택</div>
+          <div className="toolbar">
+            {robots.map((robot) => (
+              <button
+                key={robot.robot_id}
+                type="button"
+                className={`btn${robot.robot_id === target ? ' primary' : ''}`}
+                onClick={() => setFocused(robot.robot_id)}
+              >
+                {robot.display_name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 배터리는 주행 로봇에만 있다. OMX 는 유선 급전이라 카드 자체가
+          성립하지 않는다 — 팔을 고르면 이 카드는 나오지 않는다. */}
+      {focusedRobot && isMobile(focusedRobot) && (
+        <div className="card">
+          <div className="card-title">배터리</div>
+          <BatteryReading
+            voltage={focusedRobot.battery_voltage}
+            percent={focusedRobot.battery_percent}
+            recordedAt={focusedRobot.battery_recorded_at}
+            audience="engineer"
+            charging={forecast.data?.direction === 'charging'}
+          />
+          <BatteryForecastLabel forecast={forecast.data ?? null} audience="engineer" />
+        </div>
+      )}
+
+      {focusedRobot && <RobotResourceCard robot={focusedRobot} />}
+
+      <RobotInventoryCard
+        inventory={inventory.data ?? null}
+        loading={inventory.loading}
+        error={inventory.error}
+      />
+
+      <UnknownCodePanel
+        codes={unknownCodes.data ?? []}
+        loading={unknownCodes.loading}
+        error={unknownCodes.error}
+      />
+
       <EventFilters values={filters} onChange={handleFilterChange} robots={robots} />
+
+      {ending.data && (
+        <SessionEndingSummary context={ending.data} audience="engineer" />
+      )}
 
       <EventTimeline page={feed.page} loading={feed.loading} error={feed.error} />
 

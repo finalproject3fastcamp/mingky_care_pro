@@ -38,7 +38,10 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+
+from .. import control_audit
+from ..actor import Actor, actor_from_query
 
 router = APIRouter(prefix="/robots", tags=["teleop"])
 log = logging.getLogger("mingky")
@@ -84,11 +87,25 @@ async def robot_socket(websocket: WebSocket, robot_id: str):
 
 
 @router.websocket("/{robot_id}/teleop/operator")
-async def operator_socket(websocket: WebSocket, robot_id: str):
-    """대시보드가 붙는 쪽. 조작을 보내고 pose 를 받는다."""
+async def operator_socket(
+    websocket: WebSocket,
+    robot_id: str,
+    actor: Actor = Depends(actor_from_query),
+):
+    """대시보드가 붙는 쪽. 조작을 보내고 pose 를 받는다.
+
+    여기만 헤더가 아니라 `?actor=` 쿼리인 것은 브라우저 `new WebSocket(url)`
+    에 커스텀 헤더를 실을 방법이 없어서다. 정규화는 HTTP 경로와 같은 함수를
+    지난다.
+    """
     await websocket.accept()
     _operators.setdefault(robot_id, set()).add(websocket)
     log.info("teleop: 조작자 연결 %s (총 %d)", robot_id, len(_operators[robot_id]))
+
+    # 점유를 **중계 시작 전에** 남긴다. 여기서 효과는 순간 명령이 아니라 살아
+    # 있는 소켓이라, 기록보다 먼저 첫 조작을 흘려보내면 기록 없는 조작 구간이
+    # 생긴다. 짧아도 그 구간이 정확히 §1.1 이 놓치는 개입이다.
+    await control_audit.record(robot_id, control_audit.TELEOP_ATTACH, actor)
 
     # 로봇이 안 붙어 있으면 눌러도 아무 일이 안 일어난다. 화면이 그 사실을
     # 알아야 "고장" 과 "연결 없음" 을 구분해 보여줄 수 있다.
@@ -113,4 +130,10 @@ async def operator_socket(websocket: WebSocket, robot_id: str):
         pass
     finally:
         _operators.get(robot_id, set()).discard(websocket)
+        # finally 에 두는 것이 요점이다. 정상 종료 경로에만 적으면 회선이
+        # 끊긴 세션은 영원히 점유 중으로 남아, 감사 로그 자체가 거짓말이 된다.
+        # 이 시점에 세션이 이미 끝났으면 session_id 는 NULL 로 들어간다 —
+        # 판정은 attach 로 하므로 문제가 없다.
+        await control_audit.record(
+            robot_id, control_audit.TELEOP_DETACH, actor)
         log.info("teleop: 조작자 연결 끊김 %s", robot_id)

@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pinky
+# 모드 전환과 속도 제한은 주행 안전 경로다.
+CPUWeight=800
 EnvironmentFile=-/etc/environment
 # 로봇별 robot_id 를 여기서 읽는다. 없으면 모드 이벤트가 엉뚱한 로봇으로 기록된다.
 EnvironmentFile=/etc/mingky/robot.env

@@ -12,7 +12,8 @@
  * 섞여 있으면 안 되기 때문이다. 걸어 잠기므로 해제도 명시적으로 눌러야 한다.
  */
 
-import { useEffect, useState } from 'react'
+import { animate, createScope } from 'animejs'
+import { useEffect, useRef, useState } from 'react'
 
 import { sendOrder, type RobotMode } from '../lib/api'
 
@@ -22,25 +23,53 @@ const MODE_LABEL: Record<RobotMode, string> = {
   estop: '비상정지',
 }
 
+const MODE_CONFIRM_TIMEOUT_MS = 8000
+
 interface Props {
   robotId: string
   /** 이벤트에서 파생한 실제 모드. 아직 모르면 null. */
   mode: RobotMode | null
+  /** teleop_limiter 가 최근 상태 메시지로 확인해 준 실제 적용 모드. */
+  appliedMode: RobotMode | null
+  modeStatusRevision: number
   /** 로봇 브리지 연결 여부. 끊겨 있으면 조작·정지가 닿지 않는다. */
   robotConnected?: boolean
 }
 
-export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
+export function RobotModeControl({
+  robotId, mode, appliedMode, modeStatusRevision, robotConnected,
+}: Props) {
+  const rootRef = useRef<HTMLElement>(null)
   // 요청이 실패하면 화면에 남긴다. 특히 비상정지는 실패를 모르면
   // 눌렀으니 섰겠거니 하고 다음 행동을 한다.
   const [error, setError] = useState<string | null>(null)
-  const [requested, setRequested] = useState<RobotMode | null>(null)
+  const [requested, setRequested] = useState<{
+    mode: RobotMode
+    afterRevision: number
+  } | null>(null)
   const [sending, setSending] = useState(false)
 
   // 로봇이 실제로 그 모드가 되면 "요청함" 표시를 지운다.
   useEffect(() => {
-    if (requested !== null && mode === requested) setRequested(null)
-  }, [mode, requested])
+    if (
+      requested !== null
+      && appliedMode === requested.mode
+      && modeStatusRevision > requested.afterRevision
+    ) {
+      setRequested(null)
+    }
+  }, [appliedMode, modeStatusRevision, requested])
+
+  useEffect(() => {
+    if (requested === null) return
+    const timer = setTimeout(() => {
+      setRequested(null)
+      setError(
+        `${MODE_LABEL[requested.mode]} 모드가 로봇 제어기에 적용되지 않았습니다.`,
+      )
+    }, MODE_CONFIRM_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [requested])
 
   // 로봇을 바꾸면 이전 로봇에 건 요청 표시가 남으면 안 된다.
   useEffect(() => {
@@ -53,7 +82,7 @@ export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
     setError(null)
     try {
       await sendOrder(robotId, 'set_mode', next)
-      setRequested(next)
+      setRequested({ mode: next, afterRevision: modeStatusRevision })
     } catch {
       setRequested(null)
       setError(
@@ -66,14 +95,33 @@ export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
     }
   }
 
-  const estopped = mode === 'estop'
+  const estopped = mode === 'estop' || appliedMode === 'estop'
+
+  useEffect(() => {
+    if (!rootRef.current || appliedMode === null) return
+    const scope = createScope({
+      root: rootRef,
+      mediaQueries: {
+        reduceMotion: '(prefers-reduced-motion: reduce)',
+      },
+    }).add((self) => {
+      if (self?.matches.reduceMotion) return
+      animate('.mode-control__value', {
+        opacity: { from: 0.35 },
+        y: { from: -5 },
+        duration: 320,
+        ease: 'out(4)',
+      })
+    })
+    return () => scope.revert()
+  }, [appliedMode])
 
   return (
-    <section className="mode-control">
+    <section className="mode-control" ref={rootRef}>
       <header className="mode-control__header">
         <span className="mode-control__label">주행 모드</span>
-        <strong className={`mode-control__value mode-control__value--${mode ?? 'unknown'}`}>
-          {mode ? MODE_LABEL[mode] : '확인 중'}
+        <strong className={`mode-control__value mode-control__value--${appliedMode ?? 'unknown'}`}>
+          {appliedMode ? MODE_LABEL[appliedMode] : '적용 확인 중'}
         </strong>
       </header>
 
@@ -92,7 +140,20 @@ export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
 
       {requested !== null && (
         <p className="mode-control__pending" role="status">
-          {MODE_LABEL[requested]}(으)로 전환 요청함 — 로봇 응답을 기다리는 중입니다.
+          {MODE_LABEL[requested.mode]}(으)로 전환 요청함 — 실제 적용을 확인하는 중입니다.
+        </p>
+      )}
+
+      {robotConnected && appliedMode === null && (
+        <p className="mode-control__error" role="alert">
+          로봇 제어기의 모드 상태를 확인할 수 없어 조작을 잠갔습니다.
+        </p>
+      )}
+
+      {robotConnected && mode !== null && appliedMode !== null && mode !== appliedMode && (
+        <p className="mode-control__error" role="alert">
+          모드가 일치하지 않아 조작을 잠갔습니다
+          {' '}(요청 {MODE_LABEL[mode]} / 적용 {MODE_LABEL[appliedMode]}).
         </p>
       )}
 
@@ -100,7 +161,7 @@ export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
         <button
           type="button"
           className="btn"
-          disabled={sending || estopped || mode === 'auto'}
+          disabled={sending || estopped || (mode === 'auto' && appliedMode === 'auto')}
           onClick={() => request('auto')}
         >
           자동 주행
@@ -108,7 +169,7 @@ export function RobotModeControl({ robotId, mode, robotConnected }: Props) {
         <button
           type="button"
           className="btn"
-          disabled={sending || estopped || mode === 'manual'}
+          disabled={sending || estopped || (mode === 'manual' && appliedMode === 'manual')}
           onClick={() => request('manual')}
         >
           수동 조작

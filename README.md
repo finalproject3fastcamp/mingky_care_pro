@@ -3,6 +3,8 @@
 Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연동하여
 환자의 병원 이용 전 과정을 지원하는 AI 기반 스마트 병원 서비스 프로젝트입니다.
 
+> **라이브 데모:** [https://mingkycarepro.site/medical](https://mingkycarepro.site/medical) — 의료진 대시보드
+
 ## 1. 프로젝트 개요
 
 대학병원은 진료과와 검사실이 다양하고 건물이 복잡하여 초진 환자나 고령 환자가
@@ -53,7 +55,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 ├── database/      # PostgreSQL 스키마와 초기 데이터
 ├── config/        # 서비스 간 공유 설정 (event_codes.yaml)
 ├── deploy/        # 관제 서버 배포 · 인프라 스크립트
-├── tools/         # 진단 · 캘리브레이션 · 보조 도구
+├── tools/         # 진단 · 캘리브레이션 · 보조 도구 (fake_robot 하네스 포함)
 └── docs/          # 설계 문서와 다이어그램
 ```
 
@@ -75,9 +77,11 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 핵심 운영 문서
 
 - [docs/robot-onboarding.md](docs/robot-onboarding.md) — 로봇을 처음 쓰는 사람이 따라 하는 순서
+- [tools/fake_robot/README.md](tools/fake_robot/README.md) — **로봇 없이 개발하기.** ROS 없이 HTTP 로 로봇을 흉내내는 하네스
 - [config/event_codes.yaml](config/event_codes.yaml) — 이벤트 코드 정본 (발행 가능한 목록과 payload 형태)
 - [docs/system-communication.md](docs/system-communication.md) — 프론트·백엔드·로봇 통신 원칙과 데이터 흐름
 - [docs/monitoring-spec.md](docs/monitoring-spec.md) — 관제 기능 스펙과 기술 스택 결정 배경
+- [docs/omx-imitation-learning.md](docs/omx-imitation-learning.md) — OMX 모방학습을 어떻게 돌렸는지 (데이터·학습·평가와 겪은 문제)
 - [docs/infra-setup.md](docs/infra-setup.md) · [docs/nav2-debugging.md](docs/nav2-debugging.md) — 인프라 · 주행 진단
 
 ## 6. 기술 스택

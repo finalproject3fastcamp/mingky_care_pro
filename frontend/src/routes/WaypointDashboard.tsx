@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { RobotMap, type WaypointMarker } from '../components/RobotMap'
+import { LazyHospitalMap3D, type WaypointMarker } from '../components/LazyHospitalMap3D'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { TeleopPad } from '../components/TeleopPad'
 import { PinkyModel } from '../components/PinkyModelCard'
@@ -13,7 +13,9 @@ import {
   type WaypointSet,
   type WaypointValue,
 } from '../lib/api'
+import { listEvents } from '../lib/eventsApi'
 import { usePolling } from '../lib/usePolling'
+import { isMobile } from '../types/monitoring'
 import { useRobotMode } from '../lib/useRobotMode'
 import { useTeleopSocket } from '../lib/useTeleopSocket'
 
@@ -30,14 +32,18 @@ export function WaypointDashboard() {
   const [newName, setNewName] = useState('')
   const [checkResult, setCheckResult] = useState<WaypointCheckResult | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [testAlert, setTestAlert] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [settled, setSettled] = useState(true)
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handledTestEvent = useRef<string | null>(null)
 
   const robotList = useMemo(
-    () => (robots.data ?? []).filter((robot) => (
-      robot.robot_type === 'mobile' && robot.robot_id.startsWith('pinky-')
-    )),
+    // isMobile 이 타입 가드라 걸러진 배열이 MobileRobot[] 이 된다.
+    // 팔에는 카메라도 웨이포인트도 없다.
+    () => (robots.data ?? [])
+      .filter(isMobile)
+      .filter((robot) => robot.robot_id.startsWith('pinky-')),
     [robots.data],
   )
   useEffect(() => {
@@ -62,6 +68,16 @@ export function WaypointDashboard() {
   const selectedRobot = robotList.find((robot) => robot.robot_id === selectedRobotId) ?? null
   const teleop = useTeleopSocket(selectedRobotId)
   const mode = useRobotMode(selectedRobotId, POLL_MS)
+  const waypointEvents = usePolling(
+    async (signal) => (
+      await listEvents(
+        { robot_id: selectedRobotId ?? undefined, limit: 20 },
+        { signal },
+      )
+    ).items,
+    POLL_MS,
+    selectedRobotId,
+  )
   const selected = drafts[selectedName] ?? EMPTY
   const activeSession = selectedRobot?.active_session_id != null
 
@@ -93,14 +109,60 @@ export function WaypointDashboard() {
     if (settleTimer.current) clearTimeout(settleTimer.current)
   }, [])
 
-  const teleopEnabled = mode === 'manual' && teleop.robotConnected && !activeSession
+  const teleopEnabled = mode === 'manual' && teleop.appliedMode === 'manual'
+    && teleop.robotConnected && !activeSession
   const captureEnabled = teleopEnabled && settled && teleop.pose !== null
   const selectedCheck = checkResult?.items.find((item) => item.name === selectedName) ?? null
   const testEnabled = Boolean(
-    selectedRobotId && teleop.robotConnected && !activeSession && mode === 'auto'
+    selectedRobotId && teleop.robotConnected && !activeSession
+      && mode === 'auto' && teleop.appliedMode === 'auto'
       && selectedRobot?.system_state === 'active'
+      && !selectedRobot.localization_active
       && selectedCheck && !['blocked', 'outside'].includes(selectedCheck.status),
   )
+  const localizationEnabled = Boolean(
+    selectedRobotId && teleop.robotConnected && !activeSession
+      && mode === 'auto' && teleop.appliedMode === 'auto'
+      && selectedRobot?.system_state === 'active'
+      && !selectedRobot.localization_active,
+  )
+
+  useEffect(() => {
+    handledTestEvent.current = null
+    setTestAlert(null)
+  }, [selectedRobotId])
+
+  useEffect(() => {
+    const latest = waypointEvents.data?.find((event) =>
+      event.event_code === 'waypoint.test_started'
+      || event.event_code === 'waypoint.test_succeeded'
+      || event.event_code === 'waypoint.test_failed')
+    if (!latest || latest.event_id === handledTestEvent.current) return
+    handledTestEvent.current = latest.event_id
+    if (Date.now() - Date.parse(latest.occurred_at) > 120_000) return
+
+    if (latest.event_code === 'waypoint.test_started') {
+      setTestAlert(null)
+      return
+    }
+    if (latest.event_code === 'waypoint.test_succeeded') {
+      setTestAlert(null)
+      setNotice(`${String(latest.payload.waypoint_name ?? 'Waypoint')} 시험 주행을 완료했습니다.`)
+      return
+    }
+    if (latest.payload.reason === 'goal_occupied'
+        || Number(latest.payload.error_code) === 206) {
+      setTestAlert(
+        `${String(latest.payload.waypoint_name ?? 'Waypoint')} 목표 위치가 `
+        + 'costmap 갱신 후에도 장애물로 확인됐습니다. 주변을 비우거나 좌표를 다시 측정하세요.',
+      )
+    } else {
+      setTestAlert(
+        `${String(latest.payload.waypoint_name ?? 'Waypoint')} 시험 주행에 실패했습니다. `
+        + `오류 코드 ${String(latest.payload.error_code ?? '?')}`,
+      )
+    }
+  }, [waypointEvents.data])
 
   function updateSelected(field: keyof WaypointValue, value: number) {
     if (!selectedName || !Number.isFinite(value)) return
@@ -159,6 +221,37 @@ export function WaypointDashboard() {
       setNotice('시험 주행 명령을 보냈습니다. 지도 경로와 비상정지를 확인하세요.')
     } catch {
       setNotice('시험 주행 명령을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function cancelTestDrive() {
+    if (!selectedRobotId) return
+    if (!window.confirm(`${selectedRobotId}의 현재 시험 주행과 복구 동작을 취소할까요?`)) return
+    setBusy(true)
+    try {
+      await sendOrder(selectedRobotId, 'cancel_navigation', 'run')
+      setNotice('시험 주행 취소 명령을 보냈습니다.')
+    } catch {
+      setNotice('시험 주행 취소 명령을 보내지 못했습니다.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function findRobotLocation() {
+    if (!localizationEnabled || !selectedRobotId) return
+    if (!window.confirm(
+      `${selectedRobotId}의 위치를 다시 찾을까요?\n로봇이 제자리에서 돌거나 앞뒤로 움직일 수 있으니 주변을 비워주세요.`,
+    )) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      await sendOrder(selectedRobotId, 'localize', 'run')
+      setNotice('위치 다시 찾기 명령을 보냈습니다. 로봇 주변을 비워두고 완료될 때까지 기다리세요.')
+    } catch {
+      setNotice('위치 다시 찾기 명령을 보내지 못했습니다.')
     } finally {
       setBusy(false)
     }
@@ -245,37 +338,87 @@ export function WaypointDashboard() {
           이 로봇은 환자 안내 중입니다. 조회와 편집만 가능하며 조작·시험 주행은 차단됩니다.
         </div>
       )}
+      {testAlert && (
+        <div className="waypoint-safety-banner" role="alert">{testAlert}</div>
+      )}
       {notice && <div className="waypoint-notice" role="status">{notice}</div>}
 
       <div className="waypoint-workspace">
-        <section className="waypoint-control-column">
-          {selectedRobotId && (
-            <RobotModeControl robotId={selectedRobotId} mode={mode} robotConnected={teleop.robotConnected} />
-          )}
-          <TeleopPad
-            drive={drive}
-            enabled={teleopEnabled}
-            disabledReason={activeSession
-              ? '환자 안내 중에는 수동 조작할 수 없습니다.'
-              : !teleop.robotConnected
-                ? '로봇이 관제에 연결되어 있지 않습니다.'
-                : mode === 'estop'
-                  ? '비상정지가 걸려 있습니다.'
-                  : '수동 조작 모드로 전환하세요.'}
-              />
+        <section className="waypoint-map-panel">
+          <header className="waypoint-map-panel__header">
+            <div>
+              <span className="waypoint-page-header__eyebrow">LIVE MAP</span>
+              <strong>{selectedRobot?.display_name ?? '작업 로봇을 선택하세요'}</strong>
+            </div>
+            <span className={`control-deck__connection${teleop.robotConnected ? ' is-online' : ' is-offline'}`}>
+              <i aria-hidden="true" />
+              {teleop.robotConnected ? '실시간 연결' : '연결 끊김'}
+            </span>
+          </header>
+          <LazyHospitalMap3D
+            pose={teleop.pose}
+            live={teleop.robotConnected}
+            scan={teleop.scan}
+            particles={teleop.particles}
+            plan={teleop.plan}
+            recoveryPlan={teleop.recoveryPlan}
+            waypoints={markers}
+            onSelectWaypoint={setSelectedName}
+          />
         </section>
 
-        <RobotMap
-          pose={teleop.pose}
-          live={teleop.robotConnected}
-          scan={teleop.scan}
-          particles={teleop.particles}
-          plan={teleop.plan}
-          waypoints={markers}
-          onSelectWaypoint={setSelectedName}
-        />
-
-        <section className="waypoint-editor card">
+        <aside className="waypoint-command-rail" aria-label="Waypoint 작업 제어">
+          <header className="waypoint-command-rail__header">
+            <span className="waypoint-page-header__eyebrow">OPERATOR RAIL</span>
+            <strong>주행 및 좌표 도구</strong>
+          </header>
+          <section className="waypoint-control-column">
+            {selectedRobotId && (
+              <RobotModeControl
+                robotId={selectedRobotId}
+                mode={mode}
+                appliedMode={teleop.appliedMode}
+                modeStatusRevision={teleop.modeStatusRevision}
+                robotConnected={teleop.robotConnected}
+              />
+            )}
+            <section className="card waypoint-localize-control">
+              <div className="card-title">로봇 위치 다시 찾기</div>
+              <strong className={selectedRobot?.localization_active ? 'waypoint-localize-running' : ''}>
+                {selectedRobot?.localization_active
+                  ? '위치를 찾는 중입니다'
+                  : '지도와 실제 위치가 다를 때 실행하세요'}
+              </strong>
+              <p>로봇이 주변을 확인하며 제자리에서 돌거나 앞뒤로 잠시 움직일 수 있습니다.</p>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !localizationEnabled}
+                onClick={findRobotLocation}
+              >
+                위치 다시 찾기
+              </button>
+              {activeSession && (
+                <p className="waypoint-localize-disabled">환자 안내 중에는 위치를 다시 찾을 수 없습니다.</p>
+              )}
+            </section>
+            <TeleopPad
+              drive={drive}
+              enabled={teleopEnabled}
+              disabledReason={activeSession
+                ? '환자 안내 중에는 수동 조작할 수 없습니다.'
+                : !teleop.robotConnected
+                  ? '로봇이 관제에 연결되어 있지 않습니다.'
+                  : teleop.appliedMode === null
+                    ? '로봇 제어기의 모드 적용 상태를 확인하는 중입니다.'
+                  : mode !== teleop.appliedMode
+                    ? '요청 모드와 실제 적용 모드가 일치하지 않습니다.'
+                  : teleop.appliedMode === 'estop'
+                    ? '비상정지가 걸려 있습니다.'
+                    : '수동 조작 모드로 전환하세요.'}
+            />
+          </section>
+          <section className="waypoint-editor card">
           <div className="card-title">좌표 초안</div>
           <div className="waypoint-add-row">
             <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="새 waypoint 이름" />
@@ -311,6 +454,10 @@ export function WaypointDashboard() {
           <div className="waypoint-editor-actions">
             <button type="button" className="btn" disabled={busy} onClick={runCheck}>Waypoint Check</button>
             <button type="button" className="btn primary" disabled={busy || !testEnabled} onClick={testDrive}>선택 지점 시험 주행</button>
+            <button type="button" className="btn danger"
+              disabled={busy || !selectedRobotId || !teleop.robotConnected
+                || selectedRobot?.system_state !== 'active'}
+              onClick={cancelTestDrive}>시험 주행 취소</button>
             <button type="button" className="btn" disabled={!source} onClick={exportYaml}>YAML 내보내기</button>
           </div>
           {checkResult && checkResult.conflicts.length > 0 && (
@@ -321,7 +468,8 @@ export function WaypointDashboard() {
               ))}
             </div>
           )}
-        </section>
+          </section>
+        </aside>
       </div>
     </div>
   )

@@ -14,8 +14,8 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
   robot_id:=pinky-01 backend_url:=https://mingkycarepro.site/api
 ```
 
-통합 launch는 전방 QR 카메라, 후방 USB 카메라와 후방 ArUco 검출기를 함께
-실행합니다. 원본 영상은 로봇 내부의 ArUco 처리에 사용하고, 관제 화면을 연
+통합 launch는 전방 QR 카메라, 후방 USB 카메라와 후방 QR 거리 측정을 함께
+실행합니다. 원본 영상은 로봇 내부의 QR 거리 측정에 사용하고, 관제 화면을 연
 동안에만 최대 640px·10 FPS·JPEG 품질 60으로 인코딩합니다. `robot_id`에 따라
 `pinky-01`은 `pinky_6294`, `pinky-02`는 `pinky_15e2`의 후방 카메라 보정값을
 자동으로 사용합니다.
@@ -32,13 +32,12 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
   start_qr_reader:=false start_rear_camera_stream:=false
 ```
 
-후방 영상은 사용하되 ArUco 검출만 끄려면 다음 인자를 사용합니다. 등록되지
-않은 새 로봇은 `camera_profile`에 보정 폴더 이름을 명시합니다.
+ArUco 검출기는 후방 QR 거리 측정과 같은 영상을 중복 처리하므로 통합 launch에
+포함하지 않습니다. 별도 시험이 필요할 때만 `mingky_aruco_detector` 패키지를
+직접 실행합니다. 등록되지 않은 새 로봇은 `camera_profile`에 보정 폴더 이름을
+명시합니다.
 
 ```bash
-ros2 launch mingky_bringup mingky_system.launch.xml \
-  start_rear_aruco_detector:=false
-
 ros2 launch mingky_bringup mingky_system.launch.xml \
   robot_id:=pinky-03 camera_profile:=pinky_abcd
 ```
@@ -67,6 +66,17 @@ LCD는 환자 확인, `출발 위치 → X-ray` 또는 `X-ray → CT` 안내, �
 `start_lcd_status:=false`를 전달합니다. 같은 SPI 장치를 사용하는
 `pinky_emotion emotion_server`와 동시에 실행하면 안 됩니다.
 
+로봇 이미지의 기존 `battery` 명령도 LCD를 직접 초기화하므로 LCD 상태 노드와
+동시에 실행하면 안 됩니다. 빌드 후 아래 설치기를 한 번 실행하면 `battery`를
+ROS 토픽만 읽는 안전한 명령으로 교체합니다. 기존 LCD 표시 명령은
+`battery-lcd`로 보존하지만 LCD 상태 노드 실행 중에는 사용하지 마세요.
+
+```bash
+ros2 run mingky_bringup install_battery_command.sh
+source ~/.bashrc
+battery
+```
+
 `robot_id`의 숫자 접미사로 충전소를 선택합니다. 예를 들어 `pinky-02`는
 `charging_station_2`를 사용합니다. 명시적으로 바꾸려면
 `charging_waypoint:=charging_station_1`을 전달합니다.
@@ -76,6 +86,46 @@ LCD는 환자 확인, `출발 위치 → X-ray` 또는 `X-ray → CT` 안내, �
 `mingky-gateway.service`와 중복되지 않습니다. systemd가 없는 개발 장치에서만
 `start_event_gateway:=true`로 실행합니다. 다른 맵을 쓸 때는 같은 맵에 대응하는
 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
+
+### 저상 장애물 옆걸음 회피
+
+라이다가 보지 못하고 `/us_sensor/range` 초음파에만 잡히는 낮은 장애물은
+선택적으로 직접 옆걸음 회피할 수 있습니다. 기본값은 기존 Nav2 동작을 보존하는
+`disabled`이며, 실제 로봇에서 기능을 시험할 때만 `sidestep`을 명시합니다.
+초음파 감지 임계값은 10cm 미만이고 2회 연속 확인해야 회피를 시작합니다. 회피
+이동 중 거리가 4cm 미만으로 줄어들면 안전을 위해 현재 동작을 즉시 취소합니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  low_obstacle_mode:=sidestep
+```
+
+운영 systemd에서는 `/etc/mingky/robot.env`에 다음 값을 넣고 통합 시스템을
+재시작합니다.
+
+```bash
+MINGKY_LOW_OBSTACLE_MODE=sidestep
+```
+
+안내 주행 또는 Waypoint 시험 주행이 시작되기 전에는 재시작 없이도 모드를 바꿀
+수 있습니다. 진행 중인 주행이나 회피가 있으면 변경 요청을 거부합니다.
+
+```bash
+ros2 param set /guide_manager low_obstacle_mode sidestep
+ros2 param set /navigation_manager low_obstacle_mode sidestep
+ros2 param set /guide_manager low_obstacle_mode disabled
+ros2 param set /navigation_manager low_obstacle_mode disabled
+```
+
+운영에서는 관제의 **로봇 시스템 관리 → 저상 장애물 대응**에서 같은 값을
+선택할 수 있습니다. 주행이 시작되기 전에만 변경되며, 화면의 현재 적용값은 로봇
+게이트웨이가 `guide_manager`와 `navigation_manager` 양쪽의 파라미터 적용 성공을
+확인한 뒤 보고합니다.
+
+`sidestep`은 안내 목표나 Waypoint 시험 목표를 취소하고 좌우 탐색과 단계 전진을
+완료한 뒤 원래 목표를 다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며,
+LiDAR가 오래됐거나 초음파가 끊기면 직접 회피를 시작하지 않습니다.
+`RangeSensorLayer` 방식은 넓은 환경에서 별도 검증한 뒤 후속 모드로 추가합니다.
 
 카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
 카메라로 QR을 읽을 때는 소스만 바꿉니다.
@@ -101,10 +151,64 @@ Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`�
 유지됩니다. 활성 환자 안내 중에는 중지·재시작 명령을 서버와 로봇 양쪽에서
 거부합니다.
 
+같은 화면의 `주행 속도 설정`은 Nav2 `FollowPath.desired_linear_vel`을
+0.05–0.25m/s 범위에서 0.01m/s 단위로 조절합니다. 기본 목표속도는 0.20m/s이고
+`velocity_smoother`의 기존 0.25m/s 상한은 그대로 유지됩니다. 환자 안내·화재
+경보·위치 재탐색 중이거나 자동 주행 모드가 아니면 변경을 거부하며, 통합
+시스템을 재시작하면 기본값으로 돌아갑니다.
+
+## 환자 거리 기반 안내
+
+`start_patient_follow:=true`를 주면 후방 카메라의 환자 QR·YOLO로
+안내 속도를 조절합니다. 기본 임계값은 0.15m 감속, 0.30m 대기이며
+YOLO는 13cm 인형 높이와 카메라 보정값으로 절대거리를 근사합니다.
+QR은 환자 ID와 YOLO 거리를 다시 보정하는 기준으로 사용합니다.
+
+환자가 멀어지면 Guide Manager가 현재 Nav2 목표를 정상 취소해
+Adaptive Recovery가 실행되지 않게 하고, 환자가 복귀하면 같은 Waypoint를
+다시 전송합니다. 카메라·QR·추적 heartbeat가 끊겨도 대기로 전환합니다.
+
+현재 시험을 위해 기본값이 `true`입니다. 운영 로봇은
+`/etc/mingky/robot.env`에서 다음 값을 설정합니다.
+
+```dotenv
+MINGKY_PATIENT_FOLLOW_ENABLED=true
+MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL=http://<GPU-PC-IP>:5001/infer
+MINGKY_PATIENT_FOLLOW_SLOW_DISTANCE_M=0.15
+MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M=0.30
+MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC=2.0
+MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_GRACE_SEC=4.0
+MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_DISTANCE_M=0.30
+MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M=0.13
+MINGKY_PATIENT_FOLLOW_SLOW_SPEED_PERCENT=35.0
+```
+
+YOLO를 쓰지 않으면 URL을 비워 QR 거리 단독으로 실행할 수 있습니다.
+
 같은 화면의 `AMCL 위치 재탐색`은 엔지니어가 명시적으로 실행합니다. 의료진은
 선택한 로봇 화면의 `로봇 위치 다시 찾기`로 같은 기능을 실행할 수 있습니다. 활성 안내
 세션 전체와 Waypoint 시험 주행 중에는 시작할 수 없고, 재탐색이 실행 중일 때도
 새 안내·시험 주행을 시작할 수 없습니다.
+
+재탐색은 충전소 좌표나 AMCL particle의 단순 수렴을 정답으로 사용하지 않습니다.
+현재 `/map`과 `/scan`으로 전역 위치 후보 Top-K를 만들고, 1등 점수와 2등과의
+차이가 모두 충분한지 확인합니다. 후보가 비슷하면 앞뒤의 안전한 방향으로 5cm씩,
+최대 15cm만 움직이며 새 scan으로 후보를 제거합니다. 같은 후보가 연속 확인된
+경우에만 `/initialpose`를 발행하고 AMCL은 이후 추적을 담당합니다.
+
+고정 초기 위치가 없으면 `map→odom`이 생기기 전에는 Nav2 planner가 active가
+될 수 없습니다. 재탐색은 이 상태에서도 AMCL·map·scan·odom만으로 실행되며,
+검증된 위치를 적용한 다음 중단됐던 navigation lifecycle을 자동으로 초기화하고
+다시 활성화합니다.
+
+AMCL 인수 확인은 정지 상태에서도 도착하는 첫 새 particle을 기준으로 합니다.
+LiDAR 후보는 앞 단계에서 두 scan으로 이미 확인했으므로 AMCL particle의 두 번째
+자발 갱신을 요구하지 않으며, 위치 퍼짐 15cm·seed 차이 20cm·방향 20도 안이면
+주행 가능한 초기 위치로 인정합니다.
+
+대칭 복도처럼 짧게 움직여도 구분할 수 없는 경우에는 잘못된 위치를 선택하지 않고
+`ambiguous_candidates`로 실패합니다. 그 밖에 `no_map`, `no_scan`, `stale_scan`,
+`no_candidates`, `probe_blocked`, `timeout`, `amcl_seed_rejected`로 원인을 구분합니다.
 
 ## QR 안내 상태머신 테스트
 
@@ -160,12 +264,14 @@ sudo apt install ros-jazzy-v4l2-camera
 ```
 
 후방 카메라는 번호가 바뀌는 `/dev/videoN` 대신 장치의 고정 by-id 경로를
-사용합니다. 기본 영상은 ArUco 처리에 맞춘 `640x480 mono8`이며 로봇 내부의
+사용합니다. 기본 영상은 QR 거리 측정과 환자 YOLO 추론을 함께 지원하는
+`640x480 bgr8` 컬러이며 로봇 내부의
 다음 토픽으로 발행됩니다.
 
 ```text
 /rear_camera/image_raw
 /rear_camera/camera_info
+/rear_qr/observation
 ```
 
 실행과 확인:
@@ -174,6 +280,7 @@ sudo apt install ros-jazzy-v4l2-camera
 ros2 launch mingky_bringup rear_camera.launch.py
 ros2 topic hz /rear_camera/image_raw
 ros2 topic echo /rear_camera/camera_info --once
+ros2 topic echo /rear_qr/observation
 ```
 
 다른 장치를 시험할 때만 launch 인자로 덮어씁니다.
@@ -182,7 +289,8 @@ ros2 topic echo /rear_camera/camera_info --once
 ros2 launch mingky_bringup rear_camera.launch.py video_device:=/dev/video8
 ```
 
-컬러 영상 확인이 필요하면 `output_encoding:=bgr8`을 추가합니다.
+QR 거리 측정만 단독 시험해 대역폭을 줄여야 할 때는
+`output_encoding:=mono8`으로 덮어쓸 수 있습니다.
 
 `camera_info_url`은 캘리브레이션 전까지 비워 둡니다. 영상 메시지의 frame은
 `rear_camera_optical_frame`이며 URDF의 `rear_camera_link` 아래에 등록됩니다.

@@ -9,26 +9,37 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+
   <exec_depend>mingky_guide_manager</exec_depend>
   <exec_depend>mingky_lcd_status</exec_depend>
   <exec_depend>mingky_navigation_manager</exec_depend>
+  <exec_depend>mingky_person_follow</exec_depend>
   <exec_depend>mingky_battery_guard</exec_depend>
   <exec_depend>mingky_event_gateway</exec_depend>
+  <exec_depend>mingky_fire_evac</exec_depend>
   <exec_depend>mingky_qr_reader</exec_depend>
   <exec_depend>mingky_camera_streamer</exec_depend>
-  <exec_depend>mingky_aruco_detector</exec_depend>
+  <exec_depend>mingky_qr_distance</exec_depend>
   <exec_depend>mingky_teleop</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>pinky_navigation</exec_depend>
   <exec_depend>pinky_bringup</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>ros2cli</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>twist_mux</exec_depend>
   <exec_depend>v4l2_camera</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

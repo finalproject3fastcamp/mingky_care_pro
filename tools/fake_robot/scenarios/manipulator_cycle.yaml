@@ -1,0 +1,57 @@
+# 조제 사이클 — 정상 경로.
+#
+# 팔의 어휘는 mobile 과 다르다 (monitoring-spec.md §4.4):
+#   - arming 도 QR 스캔도 없다. activation.* 는 mobile 전용이다
+#   - 이 조제는 특정 안내 세션에 딸리지 않으므로 session_id 가 0 이다
+#     (하네스가 qr_scan 을 하지 않으면 0 으로 나간다. 백엔드가 NULL 로 저장한다)
+#   - 배터리 스텝도 없다. OMX 는 유선 급전이다
+#
+# 기대 동작:
+#   - 9개 코드가 전부 정본에 있고 manipulator 가 낼 수 있다 (오배선 0건)
+#   - policy_loaded 가 사이클보다 먼저 온다 — 이 사이클이 어느 체크포인트로
+#     돌았는지가 나중에 실패를 조사할 때의 첫 질문이다 (§4.4)
+
+name: 조제 사이클 완주 (omx-01, 2정)
+
+robots:
+  - id: omx-01
+    type: manipulator
+
+steps:
+  # 기동 시 어떤 정책을 물고 올라왔는지 먼저 알린다.
+  - robot: omx-01
+    action: event
+    code: manipulator.policy_loaded
+    payload: { checkpoint_id: act_omx_020000, dataset_revision: v3 }
+
+  - robot: omx-01
+    action: event
+    code: manipulator.cycle_started
+    payload: { dispense_id: d-1001, medication_id: med-a }
+
+  - robot: omx-01
+    action: event
+    code: manipulator.pick_succeeded
+    payload: { medication_id: med-a, attempt: 1, duration_ms: 4200 }
+    wait: 0.5          # 즉시 끝나면 대시보드에서 '조제중'을 볼 수 없다
+
+  - robot: omx-01
+    action: event
+    code: manipulator.place_succeeded
+    payload: { tray_slot: 1 }
+
+  - robot: omx-01
+    action: event
+    code: manipulator.pick_succeeded
+    payload: { medication_id: med-b, attempt: 1, duration_ms: 3900 }
+    wait: 0.5
+
+  - robot: omx-01
+    action: event
+    code: manipulator.place_succeeded
+    payload: { tray_slot: 2 }
+
+  - robot: omx-01
+    action: event
+    code: manipulator.cycle_completed
+    payload: { dispense_id: d-1001, duration_ms: 11800 }
