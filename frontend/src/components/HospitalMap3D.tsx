@@ -45,6 +45,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 
 import { getQrObservation } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
+import { MapRearCam } from './MapRearCam'
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
 import type { QrObservation } from '../types/monitoring'
@@ -110,6 +111,20 @@ type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
  * 복귀는 박동하지 않는다. **문제가 아니라 진행 중**이기 때문이다. 대신
  * 고리가 한 번 퍼지며 나타난다 — 박동이 멎는 것만으로는 눈이 못 잡는다.
  */
+/** `follow_source` 를 사람 말로. 뒤쪽 카메라 창 제목줄에 쓴다. */
+function sourceText(source: string | null | undefined): string {
+  switch (source) {
+    case 'qr': return 'QR 인식'
+    case 'visual': return 'YOLO 추정'
+    case 'partial_near': return '일부만 보임'
+    case 'acquiring': return '시야 확보 중'
+    case 'grace': return '유예'
+    case 'stale': return '놓침'
+    case 'none': return '추적 꺼짐'
+    default: return '확인 중'
+  }
+}
+
 const MAP_STATE: Record<
   MapState,
   { text: string; tone: string; pulseMs: number | null; ring: boolean }
@@ -300,6 +315,16 @@ export function HospitalMap3D({
   const [robotReady, setRobotReady] = useState(0)
   const [failed, setFailed] = useState(false)
   const [placing, setPlacing] = useState(false)
+  /**
+   * 뒤쪽 카메라 창은 **꺼진 채로 시작한다.**
+   *
+   * 시연에서는 켜 두는 쪽이 낫다 — 원인과 결과가 한 화면에서 이어진다.
+   * 그런데 의료진 화면에는 `GuidanceRearCamera` 가 이미 같은 영상을 받고
+   * 있어서, 켠 채로 두면 같은 카메라에 두 명이 붙는다. 영상 서버가 한
+   * 명만 받는다면 **팀이 쓰던 화면이 깨진다.** 확인되기 전까지는 눌러서
+   * 켜는 쪽이 안전하다.
+   */
+  const [camOn, setCamOn] = useState(false)
   const [drag, setDrag] = useState<{ u: number; v: number } | null>(null)
   const [visible, setVisible] = useState<Record<LayerKey, boolean>>({
     scan: true,
@@ -1264,6 +1289,16 @@ export function HospitalMap3D({
             {placing ? '바닥을 클릭하세요' : '위치 지정'}
           </button>
         )}
+        {robotId && (
+          <button
+            type="button"
+            className={`robot-map__toggle${camOn ? '' : ' off'}`}
+            onClick={() => setCamOn((v) => !v)}
+            title="로봇 뒤쪽 카메라를 지도 위에 띄웁니다. 끌어서 옮길 수 있습니다"
+          >
+            뒤 카메라
+          </button>
+        )}
         <button
           type="button"
           className="map3d__reset"
@@ -1315,6 +1350,13 @@ export function HospitalMap3D({
       >
         <div ref={hostRef} className="map3d__canvas" />
         <div ref={labelHostRef} className="map3d__signs" />
+        {camOn && robotId && (
+          <MapRearCam
+            robotId={robotId}
+            tone={MAP_STATE[mapState].tone}
+            label={sourceText(followNow?.follow_source)}
+          />
+        )}
         {log.length > 0 && (
           <ul className="map3d__log">
             {log.map((row) => (
