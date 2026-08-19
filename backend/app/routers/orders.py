@@ -114,6 +114,12 @@ async def create_order(
         if runtime is not None and runtime.fire_alarm_active is False:
             raise HTTPException(
                 status_code=409, detail="fire alarm is not active")
+    if body.command in ("cancel_navigation", "cancel_fire_evacuation"):
+        if body.argument != "run":
+            raise HTTPException(
+                status_code=422,
+                detail=f"{body.command} requires argument 'run'",
+            )
     if body.command in ("set_navigation_speed", "set_low_obstacle_mode"):
         if body.command == "set_navigation_speed":
             _validate_navigation_speed(body.argument)
@@ -174,15 +180,16 @@ async def create_order(
             # 뒤 다시 켰을 때 낡은 목표가 갑자기 실행되는 일을 막는다.
             orders.clear_motion(robot_id)
     if body.command in (
-            "goto", "goto_pose", "start_guidance", "cancel_guidance", "localize",
-            "fire_alarm_reset"):
+            "goto", "goto_pose", "start_guidance", "cancel_guidance",
+            "cancel_navigation", "localize", "fire_alarm_reset",
+            "cancel_fire_evacuation"):
         runtime = robot_runtime.snapshot().get(robot_id)
         if runtime is not None and runtime.system_state != "active":
             raise HTTPException(
                 status_code=409,
                 detail=f"robot system is {runtime.system_state}",
             )
-    if body.command == "cancel_guidance":
+    if body.command in ("cancel_guidance", "cancel_navigation"):
         # 취소보다 먼저 적재됐지만 아직 로봇이 받지 않은 출발·목적지 명령이
         # 취소 직후 실행되는 것을 막는다.
         orders.clear_motion(robot_id)

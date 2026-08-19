@@ -9,13 +9,14 @@ from geometry_msgs.msg import PoseStamped
 from mingky_guide_manager.low_obstacle import SidestepOutcome
 from mingky_interfaces.msg import GuideState
 from mingky_navigation_manager.navigation_manager_node import (
-    BUSY_ERROR,
     CLINICAL_ERROR,
     LOCALIZATION_ERROR,
     NavigationManager,
-    RECOVERY_ERROR,
     SAFETY_ERROR,
 )
+from mingky_smart_recovery.selector import EscapeCandidate
+from nav2_msgs.action import ComputePathToPose
+from nav_msgs.msg import Path
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
@@ -125,6 +126,8 @@ def adaptive_manager():
     ])
     node.nav = FakeNav()
     node.path_planner = FakePathPlanner()
+    node.recovery_spin = FakeNav()
+    node.recovery_drive = FakeNav()
     published = []
     node.result_pub.publish = lambda msg: published.append(json.loads(msg.data))
     yield node, published
@@ -155,6 +158,21 @@ def _set_fresh_recovery_inputs(node: NavigationManager) -> None:
     node._latest_nav_pose_received_ns = node.get_clock().now().nanoseconds
 
 
+def _path_to(goal: PoseStamped, *, end_at_goal: bool = True) -> Path:
+    path = Path()
+    start = PoseStamped()
+    start.pose.orientation.w = 1.0
+    end = PoseStamped()
+    end.pose.orientation.w = 1.0
+    if end_at_goal:
+        end.pose.position.x = goal.pose.position.x
+        end.pose.position.y = goal.pose.position.y
+    else:
+        end.pose.position.x = 0.02
+    path.poses = [start, end]
+    return path
+
+
 def test_test_metadata_does_not_replace_ros_context(manager):
     node, _ = manager
 
@@ -181,16 +199,33 @@ def test_temporary_pose_starts_one_nav2_goal(manager):
     }]
 
 
-def test_second_goal_is_rejected_while_test_is_active(manager):
+def test_second_goal_cancels_and_replaces_active_test(manager):
     node, published = manager
     node._on_goto_pose(_pose('first'))
+    first_handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(first_handle))
 
     node._on_goto_pose(_pose('second'))
 
-    assert len(node.nav.sent) == 1
-    assert published[-1]['status'] == 'rejected'
+    assert first_handle.cancelled == 1
+    assert len(node.nav.sent) == 2
+    assert published[-2]['status'] == 'canceled'
+    assert published[-2]['waypoint_name'] == 'first'
+    assert published[-1]['status'] == 'started'
     assert published[-1]['waypoint_name'] == 'second'
-    assert published[-1]['error_code'] == BUSY_ERROR
+
+
+def test_cancel_command_stops_active_test(manager):
+    node, published = manager
+    node._on_goto_pose(_pose('first'))
+    handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(handle))
+
+    node._on_cancel(Bool(data=True))
+
+    assert handle.cancelled == 1
+    assert node._active is False
+    assert published[-1]['status'] == 'failed'
 
 
 def test_patient_session_blocks_waypoint_test(manager):
@@ -289,6 +324,27 @@ def test_adaptive_mode_uses_motion_free_behavior_tree(adaptive_manager):
         'navigate_no_recovery_navfn.xml')
 
 
+def test_plan_layers_hide_validation_and_split_active_recovery(adaptive_manager):
+    node, _ = adaptive_manager
+    route_plans = []
+    recovery_plans = []
+    node.route_plan_pub.publish = route_plans.append
+    node.recovery_plan_pub.publish = recovery_plans.append
+    message = Path()
+    message.poses = [PoseStamped(), PoseStamped()]
+
+    node._active = True
+    node._plan_phase = 'original'
+    node._on_nav_plan(message)
+    node._plan_phase = 'validation'
+    node._on_nav_plan(message)
+    node._plan_phase = 'recovery'
+    node._on_nav_plan(message)
+
+    assert route_plans == [message]
+    assert recovery_plans == [message]
+
+
 def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
     node, _ = adaptive_manager
     _set_fresh_recovery_inputs(node)
@@ -304,11 +360,12 @@ def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
     assert node.path_planner.sent[0].use_start is False
     path_handle = FakeActionHandle()
     node.path_planner.futures[0].callback(ImmediateFuture(path_handle))
+    planned_goal = node.path_planner.sent[0].goal
     path_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
         status=GoalStatus.STATUS_SUCCEEDED,
         result=SimpleNamespace(
             error_code=0,
-            path=SimpleNamespace(poses=[object(), object()]),
+            path=_path_to(planned_goal),
         ),
     )))
 
@@ -327,19 +384,165 @@ def test_aborted_goal_recovers_then_resends_original(adaptive_manager):
     assert node._test_context['recovery_attempt'] == 1
 
 
-def test_recovery_stops_after_configured_maximum(adaptive_manager):
-    node, published = adaptive_manager
-    node.recovery_max_attempts = 1
-    node._on_goto_pose(_pose('blocked_target'))
+def test_nearby_fallback_recovery_path_is_rejected(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('adaptive_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+    path_handle = FakeActionHandle()
+    node.path_planner.futures[0].callback(ImmediateFuture(path_handle))
+    planned_goal = node.path_planner.sent[0].goal
+    path_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(
+            error_code=0,
+            path=_path_to(planned_goal, end_at_goal=False),
+        ),
+    )))
+
+    assert len(node.nav.sent) == 1
+    assert len(node.path_planner.sent) == 2
+
+
+def test_direct_escape_moves_briefly_then_resends_original(adaptive_manager):
+    node, _ = adaptive_manager
+    node._on_goto_pose(_pose('occupied_start'))
+    candidate = EscapeCandidate(
+        name='forward',
+        bearing_rad=0.0,
+        distance_m=0.35,
+        x_m=0.35,
+        y_m=0.0,
+        clearance_m=1.0,
+        score=1.0,
+    )
+    recovery = {
+        'recovery_attempt': 0,
+        'failures': {},
+        'candidates': [candidate],
+        'generation': node._generation,
+    }
+
+    node._start_direct_recovery_escape(recovery)
+
+    assert node.recovery_spin.sent == []
+    assert len(node.recovery_drive.sent) == 1
+    assert node.recovery_drive.sent[0].target.x == pytest.approx(0.12)
+    drive_handle = FakeActionHandle()
+    node.recovery_drive.futures[0].callback(ImmediateFuture(drive_handle))
+    drive_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(error_code=0),
+    )))
+
+    assert len(node.nav.sent) == 2
+    assert node.nav.sent[1].pose.pose.position.x == pytest.approx(1.25)
+    assert node._test_context['recovery_attempt'] == 1
+
+
+def test_direct_escape_rotates_before_moving(adaptive_manager):
+    node, _ = adaptive_manager
+    node._on_goto_pose(_pose('occupied_start'))
+    candidate = EscapeCandidate(
+        name='left_045',
+        bearing_rad=math.radians(45.0),
+        distance_m=0.20,
+        x_m=0.14,
+        y_m=0.14,
+        clearance_m=0.8,
+        score=0.8,
+    )
+    recovery = {
+        'recovery_attempt': 0,
+        'failures': {},
+        'candidates': [candidate],
+        'generation': node._generation,
+    }
+
+    node._start_direct_recovery_escape(recovery)
+
+    assert len(node.recovery_spin.sent) == 1
+    assert node.recovery_drive.sent == []
+    spin_handle = FakeActionHandle()
+    node.recovery_spin.futures[0].callback(ImmediateFuture(spin_handle))
+    spin_handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(error_code=0),
+    )))
+    assert len(node.recovery_drive.sent) == 1
+
+
+def test_near_goal_abort_retries_original_without_sidestep(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('near_target'))
+    node._latest_nav_pose.pose.position.x = 1.15
+    node._latest_nav_pose.pose.position.y = -0.5
 
     node._on_goal_result(
         ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
         node._generation,
     )
 
+    assert node.path_planner.sent == []
+    assert node._recovery_retry_timer is not None
+
+
+def test_recovery_cooldown_retries_original_without_sidestep(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('cooldown_target'))
+    node._last_recovery_completed_ns = node.get_clock().now().nanoseconds
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+
+    assert node.path_planner.sent == []
+    assert node._recovery_retry_timer is not None
+
+
+def test_recovery_has_no_attempt_limit(adaptive_manager):
+    node, published = adaptive_manager
+    node._on_goto_pose(_pose('blocked_target'))
+    node._test_context['recovery_attempt'] = 99
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+
+    assert node._active is True
+    assert node._test_context['recovery_attempt'] == 100
+    assert node._recovery_retry_timer is not None
+    assert not any(item['status'] == 'failed' for item in published)
+
+
+def test_goal_occupied_stops_after_costmap_refresh(adaptive_manager):
+    node, published = adaptive_manager
+    node._on_goto_pose(_pose('blocked_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(
+            status=GoalStatus.STATUS_ABORTED,
+            result=SimpleNamespace(
+                error_code=ComputePathToPose.Result.GOAL_OCCUPIED),
+        )),
+        node._generation,
+    )
+
     assert node._active is False
+    assert node.path_planner.sent == []
+    assert node._recovery_retry_timer is None
     assert published[-1]['status'] == 'failed'
-    assert published[-1]['error_code'] == RECOVERY_ERROR
+    assert published[-1]['error_code'] == (
+        ComputePathToPose.Result.GOAL_OCCUPIED)
+    assert 'costmap' in published[-1]['message']
 
 
 def test_emergency_cancels_scheduled_recovery_retry(adaptive_manager):

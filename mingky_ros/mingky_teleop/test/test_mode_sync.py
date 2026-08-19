@@ -1,4 +1,8 @@
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path
+
 from mingky_teleop.mode_sync import ModeAlignmentMonitor
+from mingky_teleop.teleop_bridge import TeleopBridge
 
 
 def test_short_mismatch_is_not_reported():
@@ -27,3 +31,21 @@ def test_new_mismatch_can_be_reported_after_recovery():
     assert monitor.check("auto", "auto", 3.0) == "recovered"
     monitor.check("manual", "auto", 4.0)
     assert monitor.check("manual", "auto", 5.0) == "mismatch"
+
+
+def test_recovery_path_payload_has_a_separate_message_type():
+    path = Path()
+    first = PoseStamped()
+    first.pose.position.x = 1.2345
+    first.pose.position.y = -0.4567
+    second = PoseStamped()
+    second.pose.position.x = 2.0
+    second.pose.position.y = 3.0
+    path.poses = [first, second]
+
+    payload = TeleopBridge._path_payload(path, "recovery_plan")
+
+    assert payload == {
+        "type": "recovery_plan",
+        "points": [[1.234, -0.457], [2.0, 3.0]],
+    }

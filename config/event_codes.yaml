@@ -95,6 +95,11 @@ fire.evacuation_failed:
   level: error
   payload: { reason: string, status: int }
 
+fire.evacuation_canceled:
+  robot_types: [mobile]
+  level: warning
+  payload: { reason: string }
+
 fire.inference_unavailable:
   robot_types: [mobile]
   level: error
@@ -126,6 +131,7 @@ nav.goal_aborted:
   level: error
   payload: { visit_name: string, error_code: int }
   # error_code 는 Nav2 NavigateToPose 결과 코드를 그대로 넣는다.
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 nav.waiting_spot_failed:
   robot_types: [mobile]
@@ -133,6 +139,7 @@ nav.waiting_spot_failed:
   payload: { visit_name: string, waypoint_name: string, error_code: int }
   # 검사실 도착 기록은 유지하지만 로봇을 paused 로 전환한다. 설정 누락이나
   # 주행 실패를 정상 대기로 숨기지 않으며, 운영자 확인 전에는 QR 진행을 막는다.
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 nav.stuck:
   robot_types: [mobile]
@@ -181,6 +188,7 @@ waypoint.test_failed:
   robot_types: [mobile]
   level: error
   payload: { waypoint_name: string, error_code: int }
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 
 # === 자동 로컬라이제이션 ====================================================
@@ -236,6 +244,7 @@ dock.return_failed:
   robot_types: [mobile]
   level: error
   payload: { station_name: string, error_code: int }
+  # GOAL_OCCUPIED(206)는 reason=goal_occupied 와 운영자용 message를 추가한다.
 
 
 # === 세션 ===================================================================

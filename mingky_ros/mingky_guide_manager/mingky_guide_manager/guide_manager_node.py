@@ -35,10 +35,12 @@ from geometry_msgs.msg import PoseStamped
 from mingky_interfaces.msg import GuideState, SessionStart
 from mingky_smart_recovery.selector import (
     EscapeCandidate,
+    SelectorConfig,
     candidate_to_map,
     select_diverse_candidates,
     select_escape_candidates,
 )
+from mingky_smart_recovery.path_validation import validate_recovery_path
 from nav2_msgs.action import ComputePathToPose, DriveOnHeading, NavigateToPose, Spin
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient
@@ -93,7 +95,9 @@ class GuideManager(Node):
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
-        self.declare_parameter('recovery_retry_delay_sec', 5.0)
+        self.declare_parameter('recovery_retry_delay_sec', 0.3)
+        self.declare_parameter('recovery_near_goal_distance_m', 0.20)
+        self.declare_parameter('recovery_cooldown_sec', 3.0)
         self.declare_parameter('arrival_notice_sec', 3.0)
         self.declare_parameter('use_arrival_chime', True)
         # disabled 는 기존 동작을 그대로 유지한다. range_layer 는 후속 검증 뒤
@@ -157,7 +161,12 @@ class GuideManager(Node):
                 'recovery_candidate_separation_deg').value)),
         ))
         self.recovery_retry_delay_sec = max(
-            0.5, float(self.get_parameter('recovery_retry_delay_sec').value))
+            0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
+        self.recovery_near_goal_distance_m = max(
+            0.0, float(self.get_parameter(
+                'recovery_near_goal_distance_m').value))
+        self.recovery_cooldown_sec = max(
+            0.0, float(self.get_parameter('recovery_cooldown_sec').value))
         self.arrival_notice_sec = max(
             0.0, float(self.get_parameter('arrival_notice_sec').value))
         self.use_arrival_chime = bool(
@@ -241,6 +250,7 @@ class GuideManager(Node):
         self._latest_nav_pose = None
         self._latest_nav_pose_received_ns = 0
         self._adaptive_retry_timer = None
+        self._last_recovery_completed_ns = 0
         self._arrival_notice_timer = None
         self._pending_waiting_move = None
         self._maintenance_nav_active = False
@@ -740,10 +750,17 @@ class GuideManager(Node):
                     GuideState.ROBOT_PAUSED if self._emergency_engaged
                     else GuideState.ROBOT_BATTERY_LOW if self._battery_alarm
                     else GuideState.ROBOT_IDLE)
-            self.events.publish('waypoint.test_failed', {
+            payload = {
                 'waypoint_name': name,
                 'error_code': int(result.get('error_code', -4)),
-            })
+            }
+            if payload['error_code'] == ComputePathToPose.Result.GOAL_OCCUPIED:
+                payload.update({
+                    'reason': 'goal_occupied',
+                    'message': str(result.get('message') or
+                                   'costmap 갱신 후에도 목표 위치가 막혀 있습니다.'),
+                })
+            self.events.publish('waypoint.test_failed', payload)
 
     # ------------------------------------------------------------------ 세션
 
@@ -1440,15 +1457,18 @@ class GuideManager(Node):
         # 확인할 때까지 완료 QR 스캔과 자동 진행을 열지 않는다.
         self.robot_state = GuideState.ROBOT_PAUSED
         self.session_state = GuideState.SESSION_ARRIVED
+        payload = {
+            'visit_name': visit_name,
+            'waypoint_name': waypoint_name,
+            'error_code': int(error_code),
+        }
+        if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+            payload.update({
+                'reason': 'goal_occupied',
+                'message': 'costmap 갱신 후에도 대기 위치가 막혀 있습니다.',
+            })
         self.events.publish(
-            'nav.waiting_spot_failed',
-            {
-                'visit_name': visit_name,
-                'waypoint_name': waypoint_name,
-                'error_code': int(error_code),
-            },
-            self.session_id,
-        )
+            'nav.waiting_spot_failed', payload, self.session_id)
         self.get_logger().error(
             f'waiting spot 이동 실패; 운영자 확인이 필요합니다: {visit_name}')
 
@@ -1500,6 +1520,8 @@ class GuideManager(Node):
 
     def _dock_failed(
             self, waypoint_name: str, error_code: int, *, retryable: bool) -> None:
+        if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+            retryable = False
         dock_active = (
             self._dock_reason is not None
             and (self._dock_reason != 'battery' or self._battery_alarm))
@@ -1517,9 +1539,16 @@ class GuideManager(Node):
             self._dock_retry_timer = self.create_timer(
                 self.dock_retry_delay, self._retry_dock)
             return
-        self.events.publish(
-            'dock.return_failed',
-            {'station_name': waypoint_name, 'error_code': int(error_code)})
+        payload = {
+            'station_name': waypoint_name,
+            'error_code': int(error_code),
+        }
+        if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+            payload.update({
+                'reason': 'goal_occupied',
+                'message': 'costmap 갱신 후에도 충전소 진입 위치가 막혀 있습니다.',
+            })
+        self.events.publish('dock.return_failed', payload)
         failed_reason = self._dock_reason
         self._dock_reason = None
         self._dock_pending = False
@@ -1695,7 +1724,10 @@ class GuideManager(Node):
         self._active_nav_result_future = None
         self._active_nav_context = None
         try:
-            status = future.result().status
+            wrapped = future.result()
+            status = wrapped.status
+            nav_result = getattr(wrapped, 'result', None)
+            nav_error_code = int(getattr(nav_result, 'error_code', 0))
         except Exception as exc:  # noqa: BLE001
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -4,
@@ -1752,6 +1784,15 @@ class GuideManager(Node):
                     session_id,
                 )
                 return
+            if (status == GoalStatus.STATUS_ABORTED
+                    and nav_error_code
+                    == ComputePathToPose.Result.GOAL_OCCUPIED):
+                self._goal_failed(
+                    waypoint_name, is_dock, session_id, nav_error_code,
+                    '전역 costmap을 갱신한 뒤에도 안내 목표가 '
+                    '장애물 셀로 확인됐습니다.',
+                    is_waiting=is_waiting)
+                return
             adaptive_dock = is_dock and recovery_attempt == 0
             if (not is_waiting and status == 6
                     and (not is_dock or adaptive_dock)
@@ -1794,6 +1835,21 @@ class GuideManager(Node):
         if wp is None:
             return False
         pose = self._latest_nav_pose.pose
+        goal_distance = math.hypot(
+            float(wp['x']) - pose.position.x,
+            float(wp['y']) - pose.position.y,
+        )
+        if goal_distance <= self.recovery_near_goal_distance_m:
+            self.get_logger().info(
+                f'목표까지 {goal_distance:.2f}m로 가까워 옆걸음 복구 없이 '
+                '원래 목표의 최종 정렬을 계속합니다.')
+            return False
+        cooldown_ns = int(self.recovery_cooldown_sec * 1_000_000_000)
+        if (self._last_recovery_completed_ns > 0
+                and now_ns - self._last_recovery_completed_ns < cooldown_ns):
+            self.get_logger().info(
+                'Adaptive Recovery 직후 cooldown 동안 원래 목표를 계속합니다.')
+            return False
         robot_yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
         map_goal_angle = math.atan2(
             float(wp['y']) - pose.position.y,
@@ -1812,6 +1868,9 @@ class GuideManager(Node):
                     math.cos(map_goal_angle - robot_yaw),
                 ),
                 failures=failures,
+                # 뒤쪽의 빈 공간도 후보로 검토하되, MPPI vx_min=0이므로
+                # 실제 이동은 제자리 회전 후 전진으로만 수행한다.
+                config=SelectorConfig(allow_reverse=True),
             ),
             limit=self.recovery_candidate_limit,
             minimum_separation_rad=self.recovery_candidate_separation_rad,
@@ -1905,18 +1964,36 @@ class GuideManager(Node):
             self, future, context: dict, candidate: EscapeCandidate) -> None:
         if context['generation'] != self._nav_generation:
             return
+        validation = None
         try:
             wrapped = future.result()
             path_result = wrapped.result
+            goal_pose = self._candidate_pose(context, candidate).pose.position
+            points = [
+                (float(item.pose.position.x), float(item.pose.position.y))
+                for item in path_result.path.poses
+            ]
+            validation = validate_recovery_path(
+                points,
+                expected_start=(context['robot_x'], context['robot_y']),
+                expected_goal=(float(goal_pose.x), float(goal_pose.y)),
+                requested_distance_m=candidate.distance_m,
+            )
             valid = (
                 wrapped.status == 4
                 and path_result.error_code == ComputePathToPose.Result.NONE
-                and len(path_result.path.poses) >= 2
+                and validation.valid
             )
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(f'탈출 경로 결과 실패({candidate.name}): {exc}')
             valid = False
         if not valid:
+            if validation is not None and not validation.valid:
+                self.get_logger().warn(
+                    f'탈출 경로 거부({candidate.name}): '
+                    f'시작오차={validation.start_error_m:.2f}m, '
+                    f'끝점오차={validation.endpoint_error_m:.2f}m, '
+                    f'실이동={validation.displacement_m:.2f}m')
             self._reject_recovery_candidate(context, candidate)
             return
         self.get_logger().info(
@@ -1975,6 +2052,7 @@ class GuideManager(Node):
             self._recovery_motion_failed(context)
             return
         target_kind = '충전소' if context['is_dock'] else '안내'
+        self._last_recovery_completed_ns = self.get_clock().now().nanoseconds
         self.get_logger().info(
             f'임시 탈출 지점 도착; 원래 {target_kind} 목표를 다시 시도합니다.')
         self._send_nav_goal(
@@ -2051,12 +2129,18 @@ class GuideManager(Node):
         else:
             self.robot_state = GuideState.ROBOT_IDLE
             self.session_state = GuideState.SESSION_CONFIRMED
+            payload = {
+                'visit_name': self._visit_name_for_waypoint(waypoint_name),
+                'error_code': int(error_code),
+            }
+            if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+                payload.update({
+                    'reason': 'goal_occupied',
+                    'message': message,
+                })
             self.events.publish(
                 'nav.goal_aborted',
-                {
-                    'visit_name': self._visit_name_for_waypoint(waypoint_name),
-                    'error_code': int(error_code),
-                },
+                payload,
                 session_id)
 
     # ------------------------------------------------------------------ 발행

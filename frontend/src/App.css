@@ -210,6 +210,8 @@
 
 .app-main {
   flex: 1;
+  /* 뷰포트에 따라 22~44px 로 부드럽게 스케일. 세 화면(의료진·약국·엔지니어)이
+     같은 규칙을 공유한다. */
   padding: clamp(22px, 3vw, 44px);
 }
 
@@ -222,7 +224,9 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 1080px;
+  /* 약국·엔지니어와 동일한 최대 폭. 셋 다 1240 으로 맞춰 화면을 오갈 때
+     좌우 여백이 튀지 않는다. */
+  max-width: 1240px;
   margin: 0 auto;
 }
 
@@ -236,9 +240,7 @@
   .dashboard-row {
     grid-template-columns: 1fr;
   }
-  .app-main {
-    padding: 20px;
-  }
+  /* .app-main padding 은 clamp() 가 이미 반응형이라 override 불필요. */
 }
 
 /* 폴링 실패 배너. 카드 위에 얹혀 이전 데이터를 그대로 유지한 채 상태만 알린다. */
@@ -1346,6 +1348,26 @@
 .robot-map__toggle--particles::before { background: #10b981; }
 .robot-map__toggle--plan::before { background: #2563eb; }
 
+.robot-map__recovery-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.robot-map__recovery-key::before {
+  width: 16px;
+  height: 2px;
+  content: '';
+  background: repeating-linear-gradient(
+    90deg,
+    #f97316 0 5px,
+    transparent 5px 8px
+  );
+}
+
 .robot-map__toggle.off {
   opacity: 0.4;
   text-decoration: line-through;
@@ -1850,7 +1872,8 @@
 
 /* Engineer workspace */
 .engineer-shell {
-  width: min(1760px, 100%);
+  /* .dashboard / .pharm-container 와 동일한 최대 폭. */
+  width: min(1240px, 100%);
   margin: 0 auto;
 }
 .engineer-content { min-width: 0; }

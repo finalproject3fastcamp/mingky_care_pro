@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pinky
+# 수동 조작은 안전 경로이므로 일반 관제 수집보다 높은 몫을 보장한다.
+CPUWeight=800
 EnvironmentFile=-/etc/environment
 EnvironmentFile=/etc/mingky/robot.env
 ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run mingky_teleop teleop_bridge --ros-args -p backend_url:=${MINGKY_BACKEND_URL} -p robot_id:=${MINGKY_ROBOT_ID}'

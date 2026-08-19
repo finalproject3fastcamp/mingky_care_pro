@@ -1,5 +1,7 @@
 """후방 ROS Image에서 QR 내용과 보정된 거리를 발행한다."""
 
+import time
+
 import cv2
 from cv_bridge import CvBridge, CvBridgeError
 from mingky_aruco_detector.detector import (
@@ -26,9 +28,13 @@ class QrDistanceNode(Node):
         self.declare_parameter('calibration_file', '')
         self.declare_parameter('qr_size', 0.028)
         self.declare_parameter('process_every_n', 2)
+        self.declare_parameter('max_process_fps', 5.0)
 
         get = self.get_parameter
         self._process_every_n = max(1, int(get('process_every_n').value))
+        max_process_fps = max(0.1, float(get('max_process_fps').value))
+        self._min_process_interval = 1.0 / max_process_fps
+        self._last_process_at = 0.0
         self._frame_count = 0
         self._bridge = CvBridge()
         self._estimator = QrPoseEstimator(float(get('qr_size').value))
@@ -69,6 +75,10 @@ class QrDistanceNode(Node):
         self._frame_count += 1
         if self._frame_count % self._process_every_n:
             return
+        now = time.monotonic()
+        if now - self._last_process_at < self._min_process_interval:
+            return
+        self._last_process_at = now
         if self._calibration is None:
             if not self._warned_calibration:
                 self.get_logger().warn('캘리브레이션을 기다리는 중입니다.')
