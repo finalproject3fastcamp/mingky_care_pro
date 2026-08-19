@@ -29,6 +29,15 @@ def test_smac_tree_selects_smac_planner() -> None:
     assert root.find('.//RateController').attrib['hz'] == '1.0'
 
 
+def test_stalled_follow_path_immediately_returns_to_adaptive_recovery() -> None:
+    for planner in ('navfn', 'smac2d'):
+        root = _root(f'navigate_no_recovery_{planner}.xml')
+        follow_recovery = root.find('.//RecoveryNode[@name="FollowPath"]')
+
+        assert follow_recovery is not None
+        assert follow_recovery.attrib['number_of_retries'] == '0'
+
+
 def test_final_fallback_retains_existing_motion_recoveries() -> None:
     root = _root('navigate_recovery_smac2d.xml')
 

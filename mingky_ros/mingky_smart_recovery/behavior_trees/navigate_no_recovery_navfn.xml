@@ -12,7 +12,7 @@
           </Sequence>
         </RecoveryNode>
       </RateController>
-      <RecoveryNode number_of_retries="1" name="FollowPath">
+      <RecoveryNode number_of_retries="0" name="FollowPath">
         <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
         <Sequence>
           <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>

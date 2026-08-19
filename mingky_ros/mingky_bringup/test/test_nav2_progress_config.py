@@ -21,7 +21,7 @@ def test_progress_checker_matches_small_robot_motion_scale() -> None:
     assert progress['plugin'] == 'nav2_controller::PoseProgressChecker'
     assert progress['required_movement_radius'] == pytest.approx(0.03)
     assert progress['required_movement_angle'] == pytest.approx(0.10)
-    assert progress['movement_time_allowance'] == pytest.approx(8.0)
+    assert progress['movement_time_allowance'] == pytest.approx(1.0)
 
 
 def test_mppi_uses_live_costmap_for_dynamic_avoidance() -> None:

@@ -212,7 +212,7 @@ controller_server:
     progress_checker:
       # 소형 로봇이 코너에서 제자리 회전해도 진행으로 인정한다.
       plugin: "nav2_controller::PoseProgressChecker"
-      movement_time_allowance: 8.0               # [s] 완전히 멈춘 상태는 빠르게 복구로 넘긴다
+      movement_time_allowance: 1.0               # [s] 멈춤을 1초 안에 감지해 Adaptive Recovery로 넘긴다
       required_movement_radius: 0.03             # [m] 목표 10cm 근처의 미세 접근도 정상 진행으로 인정
       required_movement_angle: 0.10              # [rad] 제자리 회전 약 6도도 정상 진행으로 인정
 
