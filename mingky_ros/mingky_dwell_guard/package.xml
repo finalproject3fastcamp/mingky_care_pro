@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mingky_dwell_guard</name>
+  <version>0.0.0</version>
+  <description>환자를 놓친 채 너무 오래 서 있으면 안내를 접고 충전소로 보낸다. 기존 노드는 고치지 않고, 관제가 쓰는 취소 토픽을 그대로 쓴다.</description>
+  <maintainer email="mingky-care@example.com">Mingky Care Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>mingky_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
