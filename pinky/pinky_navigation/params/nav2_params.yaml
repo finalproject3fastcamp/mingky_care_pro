@@ -91,13 +91,13 @@ controller_server:
     # ==========================================================
     # 안내 주행과 Waypoint 시험주행은 모두 FollowPath를 사용한다. MPPI가
     # 2초 앞의 여러 속도 궤적을 비교해 새로 들어온 LiDAR 장애물을 정지 후
-    # 복구로 넘기기 전에 우선 우회한다. Pi 5에서 20 Hz를 유지하도록 표본 수를
-    # 기본 Nav2 예제(2000)보다 보수적인 600으로 제한한다.
+    # 복구로 넘기기 전에 우선 우회한다. Pi 5의 지속 부하를 낮추기 위해
+    # 10 Hz에서 20개 시점과 300개 표본만 평가한다.
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 40
-      model_dt: 0.05
-      batch_size: 600
+      time_steps: 20
+      model_dt: 0.1
+      batch_size: 300
       iteration_count: 1
       ax_max: 2.5
       ax_min: -2.5
@@ -179,7 +179,7 @@ controller_server:
     # 2. 컨트롤러 서버 공통 설정
     # ==========================================================
     controller_plugins: ["FollowPath"]           # 메인 주행 플러그인 (위에서 설정한 이름)
-    controller_frequency: 20.0                   # [Hz] 제어 명령(cmd_vel)을 1초에 20번 내보냄
+    controller_frequency: 10.0                   # [Hz] 제어 명령(cmd_vel)을 1초에 10번 내보내 Pi 5 부하를 제한
     action_server_result_timeout: 10.0           # [s] 액션 서버 결과 대기 최대 시간
     autostart_node: false                        # 노드 켤 때 자동 활성화 여부
     bond_heartbeat_period: 0.1                   # [s] 시스템 상태 체크(하트비트) 주기
@@ -227,8 +227,8 @@ local_costmap:
   local_costmap:
     ros__parameters:
       footprint_padding: 0.01                    # global_costmap 과 맞춘다. 생략하면 Nav2 기본값 0.01 이지만 명시해 둔다
-      update_frequency: 10.0
-      publish_frequency: 2.0
+      update_frequency: 5.0
+      publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true
@@ -237,22 +237,18 @@ local_costmap:
       resolution: 0.025                          # 맵(yun_map_highres_clean)이 0.025 다. 굵으면 벽이 실제보다 두꺼워진다
       #robot_radius: 0.22
       footprint: '[[0.06, 0.06], [0.06, -0.06], [-0.06, -0.06], [-0.06, 0.06]]'
-      plugins: ["voxel_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
         # MPPI footprint 대각 반경(약 0.099m)을 간신히 넘기는 최소값이다.
         # 전역 경로의 0.08m는 유지해 좁은 통로 선택 특성은 바꾸지 않는다.
         inflation_radius: 0.10
-      voxel_layer:
-        plugin: "nav2_costmap_2d::VoxelLayer"
+      # 입력이 2D LaserScan뿐이므로 3D voxel 적재·발행 비용을 사용하지 않는다.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        publish_voxel_map: True
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
         max_obstacle_height: 2.0
-        mark_threshold: 0
         observation_sources: scan
         scan:
           topic: /scan

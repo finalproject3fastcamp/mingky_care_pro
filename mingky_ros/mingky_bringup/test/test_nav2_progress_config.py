@@ -34,10 +34,18 @@ def test_mppi_uses_live_costmap_for_dynamic_avoidance() -> None:
 
     assert follow_path['plugin'] == 'nav2_mppi_controller::MPPIController'
     assert follow_path['model_dt'] * follow_path['time_steps'] == pytest.approx(2.0)
+    assert follow_path['time_steps'] == 20
+    assert follow_path['model_dt'] == pytest.approx(0.1)
+    assert follow_path['batch_size'] == 300
+    assert follow_path['iteration_count'] == 1
     assert follow_path['CostCritic']['consider_footprint'] is True
+    assert controller['controller_frequency'] == pytest.approx(10.0)
     assert controller['failure_tolerance'] == pytest.approx(1.0)
-    assert local_costmap['update_frequency'] == pytest.approx(10.0)
-    assert local_costmap['plugins'] == ['voxel_layer', 'inflation_layer']
+    assert local_costmap['update_frequency'] == pytest.approx(5.0)
+    assert local_costmap['publish_frequency'] == pytest.approx(1.0)
+    assert local_costmap['plugins'] == ['obstacle_layer', 'inflation_layer']
+    assert local_costmap['obstacle_layer']['plugin'] == (
+        'nav2_costmap_2d::ObstacleLayer')
     assert local_costmap['inflation_layer']['inflation_radius'] == pytest.approx(
         0.10)
 
