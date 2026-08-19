@@ -8,6 +8,7 @@ from mingky_localize.auto_localize_node import (
     AUTO_MODE,
     AutoLocalizeNode,
 )
+from mingky_localize.global_matcher import PoseHypothesis
 from nav2_msgs.srv import ManageLifecycleNodes
 import pytest
 
@@ -90,3 +91,25 @@ def test_active_navigation_lifecycle_is_not_restarted():
     node._call_navigation_lifecycle = unexpected_restart
 
     assert node._ensure_navigation_active() is True
+
+
+def test_seed_acceptance_uses_pre_publish_particle_timestamp(monkeypatch):
+    node = AutoLocalizeNode.__new__(AutoLocalizeNode)
+    hypothesis = PoseHypothesis(1.0, 2.0, 0.1, 0.9)
+    node.matcher_seed_timeout_sec = 0.2
+    node.matcher_seed_confirmations = 1
+    node.matcher_seed_spread_m = 0.15
+    node.matcher_seed_yaw_spread_rad = math.radians(20.0)
+    node.matcher_seed_pose_tolerance_m = 0.20
+    node.matcher_seed_yaw_tolerance_rad = math.radians(20.0)
+    node._particles_updated_at = 11.0
+    node._particles = [
+        (1.02, 2.01, 0.11),
+        (0.98, 1.99, 0.09),
+    ]
+    node._localization_abort_reason = lambda: None
+    monkeypatch.setattr(
+        'mingky_localize.auto_localize_node.rclpy.ok', lambda: True)
+
+    assert node._wait_for_seed_acceptance(
+        hypothesis, updated_after=10.0) is True

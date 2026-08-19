@@ -201,6 +201,11 @@ YOLO를 쓰지 않으면 URL을 비워 QR 거리 단독으로 실행할 수 있�
 검증된 위치를 적용한 다음 중단됐던 navigation lifecycle을 자동으로 초기화하고
 다시 활성화합니다.
 
+AMCL 인수 확인은 정지 상태에서도 도착하는 첫 새 particle을 기준으로 합니다.
+LiDAR 후보는 앞 단계에서 두 scan으로 이미 확인했으므로 AMCL particle의 두 번째
+자발 갱신을 요구하지 않으며, 위치 퍼짐 15cm·seed 차이 20cm·방향 20도 안이면
+주행 가능한 초기 위치로 인정합니다.
+
 대칭 복도처럼 짧게 움직여도 구분할 수 없는 경우에는 잘못된 위치를 선택하지 않고
 `ambiguous_candidates`로 실패합니다. 그 밖에 `no_map`, `no_scan`, `stale_scan`,
 `no_candidates`, `probe_blocked`, `timeout`, `amcl_seed_rejected`로 원인을 구분합니다.

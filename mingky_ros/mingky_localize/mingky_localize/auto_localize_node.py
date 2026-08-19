@@ -196,10 +196,14 @@ class AutoLocalizeNode(Node):
         self.declare_parameter("matcher_min_margin", 0.08)
         self.declare_parameter("matcher_confirmations", 2)
         self.declare_parameter("matcher_seed_timeout_sec", 6.0)
-        self.declare_parameter("matcher_seed_spread_m", 0.10)
-        self.declare_parameter("matcher_seed_yaw_spread_deg", 10.0)
-        self.declare_parameter("matcher_seed_pose_tolerance_m", 0.15)
-        self.declare_parameter("matcher_seed_yaw_tolerance_deg", 15.0)
+        # LiDAR 후보는 이미 두 scan으로 검증했다. 여기서는 AMCL이 seed를
+        # 실제로 인수했는지만 확인하므로 정지 상태에서 오지 않는 두 번째
+        # particle update를 강제하지 않고, 주행 가능한 현실적 오차를 허용한다.
+        self.declare_parameter("matcher_seed_confirmations", 1)
+        self.declare_parameter("matcher_seed_spread_m", 0.15)
+        self.declare_parameter("matcher_seed_yaw_spread_deg", 20.0)
+        self.declare_parameter("matcher_seed_pose_tolerance_m", 0.20)
+        self.declare_parameter("matcher_seed_yaw_tolerance_deg", 20.0)
 
         get = self.get_parameter
         self.robot_id = str(get("robot_id").value)
@@ -229,6 +233,8 @@ class AutoLocalizeNode(Node):
             2, int(get("matcher_confirmations").value))
         self.matcher_seed_timeout_sec = float(
             get("matcher_seed_timeout_sec").value)
+        self.matcher_seed_confirmations = max(
+            1, int(get("matcher_seed_confirmations").value))
         self.matcher_seed_spread_m = float(
             get("matcher_seed_spread_m").value)
         self.matcher_seed_yaw_spread_rad = math.radians(
@@ -548,8 +554,10 @@ class AutoLocalizeNode(Node):
                 f'{math.degrees(best.yaw):.1f}도)')
 
             if result.confident and confirmations >= self.matcher_confirmations:
+                particle_time_before_seed = self._particles_updated_at
                 self._publish_initial_pose(best)
-                accepted = self._wait_for_seed_acceptance(best)
+                accepted = self._wait_for_seed_acceptance(
+                    best, updated_after=particle_time_before_seed)
                 if not accepted:
                     abort_reason = self._localization_abort_reason()
                     if abort_reason is not None:
@@ -781,19 +789,26 @@ class AutoLocalizeNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         self.initial_pose_pub.publish(msg)
 
-    def _wait_for_seed_acceptance(self, hypothesis: PoseHypothesis) -> bool:
-        """AMCL particle이 seed 주변에서 두 번 연속 안정적인지 확인한다."""
-        start = time.monotonic()
-        deadline = start + self.matcher_seed_timeout_sec
+    def _wait_for_seed_acceptance(
+        self,
+        hypothesis: PoseHypothesis,
+        *,
+        updated_after=None,
+    ) -> bool:
+        """초기 위치 발행 뒤 생긴 AMCL particle이 seed 근처인지 확인한다."""
+        deadline = time.monotonic() + self.matcher_seed_timeout_sec
         confirmations = 0
-        last_particle_time = None
+        # initialpose를 발행한 직후 AMCL 응답이 매우 빨리 오면 이 함수가
+        # 시작되기 전에 callback이 끝날 수 있다. 함수 시작 시각과 비교하면
+        # 그 정상 응답을 과거 데이터로 오판하므로 발행 전 timestamp를 쓴다.
+        last_particle_time = updated_after
         while rclpy.ok() and time.monotonic() < deadline:
             safety_reason = self._localization_abort_reason()
             if safety_reason is not None:
                 return False
             updated_at = self._particles_updated_at
             if (
-                updated_at is None or updated_at < start
+                updated_at is None
                 or updated_at == last_particle_time
             ):
                 time.sleep(0.1)
@@ -815,7 +830,7 @@ class AutoLocalizeNode(Node):
                 <= self.matcher_seed_yaw_tolerance_rad
             )
             confirmations = confirmations + 1 if result.converged and pose_close else 0
-            if confirmations >= 2:
+            if confirmations >= self.matcher_seed_confirmations:
                 return True
             time.sleep(0.1)
         return False
