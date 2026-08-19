@@ -540,7 +540,7 @@ export function PharmacyDashboard() {
               {COLORS.map((c) => {
                 const v = trayCounts?.[c] ?? null;
                 return (
-                  <div key={c} className={`pharm-tc ${v === 0 ? "zero" : ""}`}>
+                  <div key={c} className="pharm-tc">
                     <div
                       className="dot"
                       style={{
@@ -562,7 +562,7 @@ export function PharmacyDashboard() {
               className="pharm-actions pharm-actions--stack"
               style={{ marginTop: "24px", paddingTop: 12 }}
             >
-              <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              <span className="pharm-tray__status">
                 {trayBusy
                   ? "카메라로 읽는 중…"
                   : tray === null
@@ -571,17 +571,16 @@ export function PharmacyDashboard() {
                       ? `⚠ ${tray.오류}`
                       : `${tray.모드} 모드 · ${tray.시각} 에 읽었습니다`}
               </span>
+              {/* 진행 표시는 위 상태 줄이 맡는다 ("카메라로 읽는 중…").
+                  버튼까지 "읽는 중…" 으로 바꾸면 같은 말을 두 번 하는 셈이고,
+                  누르고 나서 무엇을 하는 버튼이었는지가 사라진다. */}
               <button
                 className="pharm-btn"
                 onClick={refreshTray}
                 disabled={trayBusy}
               >
                 <Icon name="rotate-ccw" />
-                {trayBusy
-                  ? "읽는 중…"
-                  : tray === null
-                    ? "트레이 확인"
-                    : "다시 확인"}
+                {tray === null ? "트레이 확인" : "다시 확인"}
               </button>
             </div>
           </section>

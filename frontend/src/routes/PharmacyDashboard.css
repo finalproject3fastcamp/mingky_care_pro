@@ -498,11 +498,13 @@
   font-size: 0.75rem;
   margin-top: 4px;
 }
-.pharm-tc.zero {
-  opacity: 0.4;
+.pharm-tray__status {
+  color: var(--text-muted);
+  font-size: 0.94rem;
 }
-.pharm-tc.zero .n {
-  color: var(--danger);
+.pharm-card__head .pharm-badge {
+  font-size: 0.82rem;
+  padding: 4px 11px;
 }
 
 /* 진행 단계 */
