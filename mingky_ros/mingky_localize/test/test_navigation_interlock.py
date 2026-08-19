@@ -8,6 +8,7 @@ from mingky_localize.auto_localize_node import (
     AUTO_MODE,
     AutoLocalizeNode,
 )
+from nav2_msgs.srv import ManageLifecycleNodes
 import pytest
 
 
@@ -49,3 +50,43 @@ def test_relative_odom_is_expressed_in_previous_robot_frame():
     assert dx == pytest.approx(0.10)
     assert dy == pytest.approx(0.0, abs=1e-9)
     assert dyaw == pytest.approx(0.0)
+
+
+def test_navigation_lifecycle_is_reset_before_restart_after_initial_pose():
+    node = AutoLocalizeNode.__new__(AutoLocalizeNode)
+    readiness = iter((False, True))
+    checked = []
+    commands = []
+
+    def wait_until_active(names, timeout_sec):
+        checked.append((names, timeout_sec))
+        return next(readiness)
+
+    def call_lifecycle(command, timeout_sec):
+        commands.append((command, timeout_sec))
+        return True
+
+    node._wait_until_active = wait_until_active
+    node._call_navigation_lifecycle = call_lifecycle
+    node.get_logger = lambda: type(
+        'Logger', (), {'info': lambda self, message: None})()
+
+    assert node._ensure_navigation_active() is True
+    assert commands == [
+        (ManageLifecycleNodes.Request.RESET, 20.0),
+        (ManageLifecycleNodes.Request.STARTUP, 80.0),
+    ]
+    assert checked[0][0] == ('planner_server', 'bt_navigator')
+    assert checked[-1][0] == ('planner_server', 'bt_navigator')
+
+
+def test_active_navigation_lifecycle_is_not_restarted():
+    node = AutoLocalizeNode.__new__(AutoLocalizeNode)
+    node._wait_until_active = lambda names, timeout_sec: True
+
+    def unexpected_restart(command, timeout_sec):
+        raise AssertionError('active navigation must not be restarted')
+
+    node._call_navigation_lifecycle = unexpected_restart
+
+    assert node._ensure_navigation_active() is True

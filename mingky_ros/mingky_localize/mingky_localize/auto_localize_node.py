@@ -69,6 +69,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
 from mingky_interfaces.msg import Event, GuideState
 from nav2_msgs.msg import ParticleCloud
+from nav2_msgs.srv import ManageLifecycleNodes
 from nav_msgs.msg import OccupancyGrid, Odometry
 import rclpy
 from rclpy.node import Node
@@ -99,6 +100,7 @@ GUIDE_STATE_TOPIC = "/guide_manager/state"
 ACTIVE_TOPIC = "/auto_localize/active"
 PROBE_CMD_TOPIC = "cmd_vel_localize_probe"
 CANCEL_NAV_SERVICE = "/navigate_to_pose/_action/cancel_goal"
+NAV_LIFECYCLE_SERVICE = "/lifecycle_manager_navigation/manage_nodes"
 TRIGGER_SERVICE = "auto_localize/trigger"
 EVENT_TOPIC = "/events"
 
@@ -285,6 +287,8 @@ class AutoLocalizeNode(Node):
         # 있다. 이동 직전에 한 번 더 이걸로 Nav2 의 현재 목표를 강제로
         # 취소해 확실히 막는다.
         self.cancel_nav_client = self.create_client(CancelGoal, CANCEL_NAV_SERVICE)
+        self.nav_lifecycle_client = self.create_client(
+            ManageLifecycleNodes, NAV_LIFECYCLE_SERVICE)
         self.create_service(Trigger, TRIGGER_SERVICE, self._on_trigger_request)
         self._publish_active()
 
@@ -295,7 +299,7 @@ class AutoLocalizeNode(Node):
         # 라이브러리 자체의 spin 사용에 있었다). 그래서 여기서도 안 쓴다.
         self.lifecycle_clients = {
             name: self.create_client(GetState, f'/{name}/get_state')
-            for name in ('amcl', 'bt_navigator')
+            for name in ('amcl', 'planner_server', 'bt_navigator')
         }
 
         if self.auto_run_on_start:
@@ -475,10 +479,16 @@ class AutoLocalizeNode(Node):
         self.get_logger().info("자동 로컬라이제이션 시작")
         self._emit("localize.started", Event.LEVEL_INFO, f'{{"source": "{source}"}}')
 
-        if not self._wait_until_active(('amcl', 'bt_navigator'), timeout_sec=20.0):
-            msg = "amcl/bt_navigator 가 20초 안에 active 상태가 되지 않았습니다."
+        # 고정 initial pose를 사용하지 않으면 map->odom이 아직 없어서 전역
+        # costmap과 planner_server는 active가 될 수 없다. bt_navigator까지
+        # 기다리면 위치를 찾아야 Nav2가 뜨고, Nav2가 떠야 위치를 찾는 교착이
+        # 생긴다. 전역 매칭에는 active AMCL과 map/scan/odom만 필요하다.
+        if not self._wait_until_active(('amcl',), timeout_sec=20.0):
+            msg = "amcl이 20초 안에 active 상태가 되지 않았습니다."
             self.get_logger().error(msg)
-            self._emit("localize.failed", Event.LEVEL_ERROR, '{"reason": "nav2_not_active"}')
+            self._emit(
+                "localize.failed", Event.LEVEL_ERROR,
+                '{"reason": "amcl_not_active"}')
             return False, msg
 
         if self._matcher is None:
@@ -547,6 +557,12 @@ class AutoLocalizeNode(Node):
                     return self._localization_failure(
                         'amcl_seed_rejected',
                         '찾은 위치를 AMCL이 제한 시간 안에 인수하지 못했습니다.',
+                        score=result.best_score, margin=result.margin)
+                if not self._ensure_navigation_active():
+                    return self._localization_failure(
+                        'nav2_reactivation_failed',
+                        '위치는 적용됐지만 Nav2 주행 노드를 다시 활성화하지 '
+                        '못했습니다.',
                         score=result.best_score, margin=result.margin)
                 payload = json.dumps({
                     'x': round(best.x, 4),
@@ -829,6 +845,53 @@ class AutoLocalizeNode(Node):
         if pending:
             self.get_logger().warn(f"active 대기 시간 초과: {sorted(pending)}")
         return not pending
+
+    def _call_navigation_lifecycle(self, command: int, timeout_sec: float) -> bool:
+        """Navigation lifecycle manager 명령을 보내고 성공 여부를 기다린다."""
+        service_deadline = time.monotonic() + min(timeout_sec, 10.0)
+        while (
+            rclpy.ok()
+            and not self.nav_lifecycle_client.service_is_ready()
+            and time.monotonic() < service_deadline
+        ):
+            time.sleep(0.1)
+        if not self.nav_lifecycle_client.service_is_ready():
+            return False
+
+        request = ManageLifecycleNodes.Request()
+        request.command = command
+        future = self.nav_lifecycle_client.call_async(request)
+        deadline = time.monotonic() + timeout_sec
+        while not future.done() and rclpy.ok() and time.monotonic() < deadline:
+            if self._localization_abort_reason() is not None:
+                return False
+            time.sleep(0.1)
+        if not future.done() or future.result() is None:
+            return False
+        return bool(future.result().success)
+
+    def _ensure_navigation_active(self) -> bool:
+        """초기 위치 적용 후 중단됐던 Nav2 navigation lifecycle을 복구한다."""
+        if self._wait_until_active(
+            ('planner_server', 'bt_navigator'), timeout_sec=1.0,
+        ):
+            return True
+
+        self.get_logger().info(
+            '초기 위치 적용 후 Nav2 navigation lifecycle을 다시 시작합니다.')
+        # planner 활성화 timeout 뒤에는 controller만 active인 부분 상태가
+        # 남는다. 바로 STARTUP하면 active 노드의 configure 전이가 실패하므로
+        # navigation 그룹만 RESET으로 정리한 뒤 다시 시작한다.
+        if not self._call_navigation_lifecycle(
+            ManageLifecycleNodes.Request.RESET, timeout_sec=20.0,
+        ):
+            return False
+        if not self._call_navigation_lifecycle(
+            ManageLifecycleNodes.Request.STARTUP, timeout_sec=80.0,
+        ):
+            return False
+        return self._wait_until_active(
+            ('planner_server', 'bt_navigator'), timeout_sec=20.0)
 
     def _cancel_active_nav_goal(self):
         """Nav2(bt_navigator) 의 지금 목표를 강제로 전부 취소한다.

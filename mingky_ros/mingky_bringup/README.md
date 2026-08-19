@@ -196,6 +196,11 @@ YOLO를 쓰지 않으면 URL을 비워 QR 거리 단독으로 실행할 수 있�
 최대 15cm만 움직이며 새 scan으로 후보를 제거합니다. 같은 후보가 연속 확인된
 경우에만 `/initialpose`를 발행하고 AMCL은 이후 추적을 담당합니다.
 
+고정 초기 위치가 없으면 `map→odom`이 생기기 전에는 Nav2 planner가 active가
+될 수 없습니다. 재탐색은 이 상태에서도 AMCL·map·scan·odom만으로 실행되며,
+검증된 위치를 적용한 다음 중단됐던 navigation lifecycle을 자동으로 초기화하고
+다시 활성화합니다.
+
 대칭 복도처럼 짧게 움직여도 구분할 수 없는 경우에는 잘못된 위치를 선택하지 않고
 `ambiguous_candidates`로 실패합니다. 그 밖에 `no_map`, `no_scan`, `stale_scan`,
 `no_candidates`, `probe_blocked`, `timeout`, `amcl_seed_rejected`로 원인을 구분합니다.
