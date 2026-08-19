@@ -37,7 +37,7 @@ def test_rotation_shim_wraps_mppi_for_heading_then_dynamic_avoidance() -> None:
     assert follow_path['primary_controller'] == (
         'nav2_mppi_controller::MPPIController')
     assert follow_path['rotate_to_goal_heading'] is True
-    assert follow_path['rotate_to_heading_once'] is True
+    assert follow_path['rotate_to_heading_once'] is False
     assert follow_path['use_path_orientations'] is False
     assert follow_path['angular_dist_threshold'] == pytest.approx(0.52)
     assert follow_path['angular_disengage_threshold'] == pytest.approx(0.17)

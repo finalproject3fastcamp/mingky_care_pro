@@ -75,13 +75,10 @@ class NavigationManager(Node):
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
         self.declare_parameter('recovery_retry_delay_sec', 0.3)
-        self.declare_parameter('recovery_reverse_after_attempt', 6)
         self.declare_parameter('recovery_near_goal_distance_m', 0.20)
         self.declare_parameter('recovery_cooldown_sec', 3.0)
         self.declare_parameter('recovery_direct_escape_distance_m', 0.12)
         self.declare_parameter('recovery_direct_escape_speed_mps', 0.10)
-        self.declare_parameter('waiting_final_distance_m', 0.18)
-        self.declare_parameter('waiting_final_yaw_tolerance_rad', 0.20)
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -141,8 +138,6 @@ class NavigationManager(Node):
         ))
         self.recovery_retry_delay_sec = max(
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
-        self.recovery_reverse_after_attempt = max(
-            0, int(self.get_parameter('recovery_reverse_after_attempt').value))
         self.recovery_near_goal_distance_m = max(
             0.0, float(self.get_parameter(
                 'recovery_near_goal_distance_m').value))
@@ -154,11 +149,6 @@ class NavigationManager(Node):
         self.recovery_direct_escape_speed_mps = max(
             0.03, float(self.get_parameter(
                 'recovery_direct_escape_speed_mps').value))
-        self.waiting_final_distance_m = max(
-            0.10, float(self.get_parameter('waiting_final_distance_m').value))
-        self.waiting_final_yaw_tolerance_rad = max(
-            0.05, float(self.get_parameter(
-                'waiting_final_yaw_tolerance_rad').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -209,7 +199,6 @@ class NavigationManager(Node):
         self._goal_handle = None
         self._goal_result_future = None
         self._recovery_retry_timer = None
-        self._waiting_alignment_context = None
         self._last_recovery_completed_ns = 0
         self._latest_scan = None
         self._latest_scan_received_ns = 0
@@ -534,31 +523,6 @@ class NavigationManager(Node):
             return
         self._latest_nav_pose = feedback_msg.feedback.current_pose
         self._latest_nav_pose_received_ns = self.get_clock().now().nanoseconds
-        context = self._test_context
-        if (context is None
-                or not str(context.get('waypoint_name', '')).endswith('_waiting')
-                or self._plan_phase != 'original'
-                or self._waiting_alignment_context is not None
-                or self._goal_handle is None):
-            return
-        pose = self._latest_nav_pose.pose
-        distance = math.hypot(
-            float(context['x']) - pose.position.x,
-            float(context['y']) - pose.position.y,
-        )
-        if distance > self.waiting_final_distance_m:
-            return
-        self._waiting_alignment_context = {
-            'generation': generation,
-            'current_yaw': _quat_to_yaw(
-                pose.orientation.z, pose.orientation.w),
-            'target_yaw': float(context['yaw']),
-            'distance': distance,
-        }
-        self.get_logger().info(
-            f'waiting 지점 {distance:.2f}m 이내 진입; 곡선 접근을 멈추고 '
-            '제자리 최종 정렬로 전환합니다.')
-        self._goal_handle.cancel_goal_async()
 
     def _on_guide_state(self, msg: GuideState) -> None:
         active_states = (
@@ -784,14 +748,6 @@ class NavigationManager(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self._finish('succeeded', 0, 'Waypoint 시험 주행에 도착했습니다.')
             return
-        alignment = self._waiting_alignment_context
-        if (status == GoalStatus.STATUS_CANCELED
-                and alignment is not None
-                and alignment['generation'] == generation):
-            self._goal_handle = None
-            self._goal_result_future = None
-            self._start_waiting_final_alignment(alignment)
-            return
         context = self._test_context
         if (status == GoalStatus.STATUS_ABORTED
                 and self.recovery_mode == 'adaptive'
@@ -809,68 +765,6 @@ class NavigationManager(Node):
             return
         self._finish(
             'failed', status, f'Waypoint 시험 주행 실패 (status={status})')
-
-    def _start_waiting_final_alignment(self, alignment: dict) -> None:
-        if alignment['generation'] != self._generation or not self._active:
-            return
-        delta = math.atan2(
-            math.sin(alignment['target_yaw'] - alignment['current_yaw']),
-            math.cos(alignment['target_yaw'] - alignment['current_yaw']),
-        )
-        if abs(delta) <= self.waiting_final_yaw_tolerance_rad:
-            self._waiting_alignment_context = None
-            self._finish(
-                'succeeded', 0,
-                'Waypoint 대기 지점 허용 범위에 도착했습니다.')
-            return
-        if not self.recovery_spin.wait_for_server(timeout_sec=0.2):
-            self._waiting_alignment_context = None
-            self._finish('failed', -4, '대기 지점 최종 회전 서버가 없습니다.')
-            return
-        goal = Spin.Goal()
-        goal.target_yaw = float(delta)
-        goal.time_allowance = Duration(sec=10)
-        future = self.recovery_spin.send_goal_async(goal)
-        future.add_done_callback(
-            lambda done: self._on_waiting_spin_response(done, alignment))
-
-    def _on_waiting_spin_response(self, future, alignment: dict) -> None:
-        if alignment['generation'] != self._generation:
-            return
-        try:
-            handle = future.result()
-        except Exception as exc:  # noqa: BLE001
-            self._waiting_alignment_context = None
-            self._finish('failed', -4, f'대기 지점 최종 회전 전송 실패: {exc}')
-            return
-        if not handle.accepted:
-            self._waiting_alignment_context = None
-            self._finish('failed', -4, '대기 지점 최종 회전이 거부됐습니다.')
-            return
-        self._goal_handle = handle
-        handle.get_result_async().add_done_callback(
-            lambda done: self._on_waiting_spin_result(done, alignment))
-
-    def _on_waiting_spin_result(self, future, alignment: dict) -> None:
-        if alignment['generation'] != self._generation:
-            return
-        self._goal_handle = None
-        self._waiting_alignment_context = None
-        try:
-            wrapped = future.result()
-            succeeded = (
-                int(wrapped.status) == GoalStatus.STATUS_SUCCEEDED
-                and int(getattr(wrapped.result, 'error_code', 0)) == 0
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._finish('failed', -4, f'대기 지점 최종 회전 결과 실패: {exc}')
-            return
-        if succeeded:
-            self._finish(
-                'succeeded', 0,
-                'Waypoint 대기 지점 최종 정렬을 완료했습니다.')
-        else:
-            self._finish('failed', -4, '대기 지점 최종 회전에 실패했습니다.')
 
     def _start_adaptive_recovery(
             self, recovery_attempt: int, failures: dict[str, int]) -> bool:
@@ -927,11 +821,10 @@ class NavigationManager(Node):
                     math.cos(map_goal_angle - robot_yaw),
                 ),
                 failures=failures,
-                config=SelectorConfig(
-                    allow_reverse=(
-                        recovery_attempt >= self.recovery_reverse_after_attempt
-                    ),
-                ),
+                # allow_reverse는 속도 명령이 아니라 로봇 뒤쪽 공간도 탈출
+                # 후보로 살필지를 뜻한다. 실제 주행 후진은 MPPI vx_min=0으로
+                # 금지하고, 뒤쪽 후보는 Rotation Shim이 회전 후 전진한다.
+                config=SelectorConfig(allow_reverse=True),
             ),
             limit=self.recovery_candidate_limit,
             minimum_separation_rad=self.recovery_candidate_separation_rad,
@@ -1067,7 +960,6 @@ class NavigationManager(Node):
             self, recovery: dict, candidate: EscapeCandidate) -> None:
         self._plan_phase = 'recovery'
         self._generation += 1
-        self._waiting_alignment_context = None
         recovery['generation'] = self._generation
         recovery['active_candidate'] = candidate
         goal = NavigateToPose.Goal()
@@ -1324,7 +1216,6 @@ class NavigationManager(Node):
             self, error_code: int, message: str, *, status: str = 'failed') -> None:
         context = self._public_test_context()
         self._generation += 1
-        self._waiting_alignment_context = None
         self._cancel_recovery_retry()
         self._cancel_low_obstacle_operation()
         if self._goal_handle is not None:
@@ -1347,7 +1238,6 @@ class NavigationManager(Node):
         self._cancel_low_obstacle_operation()
         self._goal_handle = None
         self._goal_result_future = None
-        self._waiting_alignment_context = None
         self._active = False
         self._test_context = None
         self._clear_test_plans()
