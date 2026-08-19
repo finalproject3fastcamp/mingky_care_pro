@@ -95,6 +95,8 @@ class GuideManager(Node):
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
         self.declare_parameter('recovery_retry_delay_sec', 0.3)
+        self.declare_parameter('recovery_near_goal_distance_m', 0.20)
+        self.declare_parameter('recovery_cooldown_sec', 3.0)
         self.declare_parameter('arrival_notice_sec', 3.0)
         self.declare_parameter('use_arrival_chime', True)
         # disabled 는 기존 동작을 그대로 유지한다. range_layer 는 후속 검증 뒤
@@ -159,6 +161,11 @@ class GuideManager(Node):
         ))
         self.recovery_retry_delay_sec = max(
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
+        self.recovery_near_goal_distance_m = max(
+            0.0, float(self.get_parameter(
+                'recovery_near_goal_distance_m').value))
+        self.recovery_cooldown_sec = max(
+            0.0, float(self.get_parameter('recovery_cooldown_sec').value))
         self.arrival_notice_sec = max(
             0.0, float(self.get_parameter('arrival_notice_sec').value))
         self.use_arrival_chime = bool(
@@ -242,6 +249,7 @@ class GuideManager(Node):
         self._latest_nav_pose = None
         self._latest_nav_pose_received_ns = 0
         self._adaptive_retry_timer = None
+        self._last_recovery_completed_ns = 0
         self._arrival_notice_timer = None
         self._pending_waiting_move = None
         self._maintenance_nav_active = False
@@ -1795,6 +1803,21 @@ class GuideManager(Node):
         if wp is None:
             return False
         pose = self._latest_nav_pose.pose
+        goal_distance = math.hypot(
+            float(wp['x']) - pose.position.x,
+            float(wp['y']) - pose.position.y,
+        )
+        if goal_distance <= self.recovery_near_goal_distance_m:
+            self.get_logger().info(
+                f'목표까지 {goal_distance:.2f}m로 가까워 옆걸음 복구 없이 '
+                '원래 목표의 최종 정렬을 계속합니다.')
+            return False
+        cooldown_ns = int(self.recovery_cooldown_sec * 1_000_000_000)
+        if (self._last_recovery_completed_ns > 0
+                and now_ns - self._last_recovery_completed_ns < cooldown_ns):
+            self.get_logger().info(
+                'Adaptive Recovery 직후 cooldown 동안 원래 목표를 계속합니다.')
+            return False
         robot_yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
         map_goal_angle = math.atan2(
             float(wp['y']) - pose.position.y,
@@ -1994,6 +2017,7 @@ class GuideManager(Node):
             self._recovery_motion_failed(context)
             return
         target_kind = '충전소' if context['is_dock'] else '안내'
+        self._last_recovery_completed_ns = self.get_clock().now().nanoseconds
         self.get_logger().info(
             f'임시 탈출 지점 도착; 원래 {target_kind} 목표를 다시 시도합니다.')
         self._send_nav_goal(

@@ -75,6 +75,8 @@ class NavigationManager(Node):
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
         self.declare_parameter('recovery_retry_delay_sec', 0.3)
         self.declare_parameter('recovery_reverse_after_attempt', 6)
+        self.declare_parameter('recovery_near_goal_distance_m', 0.20)
+        self.declare_parameter('recovery_cooldown_sec', 3.0)
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -136,6 +138,11 @@ class NavigationManager(Node):
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
         self.recovery_reverse_after_attempt = max(
             0, int(self.get_parameter('recovery_reverse_after_attempt').value))
+        self.recovery_near_goal_distance_m = max(
+            0.0, float(self.get_parameter(
+                'recovery_near_goal_distance_m').value))
+        self.recovery_cooldown_sec = max(
+            0.0, float(self.get_parameter('recovery_cooldown_sec').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -186,6 +193,7 @@ class NavigationManager(Node):
         self._goal_handle = None
         self._goal_result_future = None
         self._recovery_retry_timer = None
+        self._last_recovery_completed_ns = 0
         self._latest_scan = None
         self._latest_scan_received_ns = 0
         self._latest_nav_pose = None
@@ -769,6 +777,21 @@ class NavigationManager(Node):
             return False
 
         pose = self._latest_nav_pose.pose
+        goal_distance = math.hypot(
+            float(self._test_context['x']) - pose.position.x,
+            float(self._test_context['y']) - pose.position.y,
+        )
+        if goal_distance <= self.recovery_near_goal_distance_m:
+            self.get_logger().info(
+                f'목표까지 {goal_distance:.2f}m로 가까워 옆걸음 복구 없이 '
+                '원래 목표의 최종 정렬을 계속합니다.')
+            return False
+        cooldown_ns = int(self.recovery_cooldown_sec * 1_000_000_000)
+        if (self._last_recovery_completed_ns > 0
+                and now_ns - self._last_recovery_completed_ns < cooldown_ns):
+            self.get_logger().info(
+                'Adaptive Recovery 직후 cooldown 동안 원래 목표를 계속합니다.')
+            return False
         robot_yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
         map_goal_angle = math.atan2(
             float(self._test_context['y']) - pose.position.y,
@@ -980,6 +1003,7 @@ class NavigationManager(Node):
         attempt = int(recovery['recovery_attempt']) + 1
         self._test_context['recovery_attempt'] = attempt
         self._test_context['recovery_failures'] = dict(recovery['failures'])
+        self._last_recovery_completed_ns = self.get_clock().now().nanoseconds
         self.get_logger().info(
             '임시 탈출 지점 도착; 원래 Waypoint 시험 목표를 '
             '다시 전송합니다.')

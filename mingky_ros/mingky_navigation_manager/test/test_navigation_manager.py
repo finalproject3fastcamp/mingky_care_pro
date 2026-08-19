@@ -404,6 +404,37 @@ def test_nearby_fallback_recovery_path_is_rejected(adaptive_manager):
     assert len(node.path_planner.sent) == 2
 
 
+def test_near_goal_abort_retries_original_without_sidestep(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('near_target'))
+    node._latest_nav_pose.pose.position.x = 1.15
+    node._latest_nav_pose.pose.position.y = -0.5
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+
+    assert node.path_planner.sent == []
+    assert node._recovery_retry_timer is not None
+
+
+def test_recovery_cooldown_retries_original_without_sidestep(adaptive_manager):
+    node, _ = adaptive_manager
+    _set_fresh_recovery_inputs(node)
+    node._on_goto_pose(_pose('cooldown_target'))
+    node._last_recovery_completed_ns = node.get_clock().now().nanoseconds
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(status=GoalStatus.STATUS_ABORTED)),
+        node._generation,
+    )
+
+    assert node.path_planner.sent == []
+    assert node._recovery_retry_timer is not None
+
+
 def test_recovery_has_no_attempt_limit(adaptive_manager):
     node, published = adaptive_manager
     node._on_goto_pose(_pose('blocked_target'))
