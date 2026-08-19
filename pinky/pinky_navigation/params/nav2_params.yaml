@@ -50,7 +50,9 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: odom
     bt_loop_duration: 10
-    default_server_timeout: 20
+    # Pi 5가 카메라·QR과 동시에 동작할 때 20ms 안에 action goal ACK를
+    # 못 보내 정상 목표가 취소됐다. 계산 결과 제한과 별개인 통신 여유다.
+    default_server_timeout: 500
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
@@ -306,7 +308,9 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    # 전용 BT의 1Hz 재계획보다 충분히 빠르면서 Pi 5에 불필요한 20Hz
+    # 성능 경고를 만들지 않는 기준이다.
+    expected_planner_frequency: 5.0
     planner_plugins: ["GridBased", "Smac2D"]
     costmap_update_timeout: 1.0
     GridBased:

@@ -26,7 +26,7 @@ def test_smac_tree_selects_smac_planner() -> None:
 
     assert selector is not None
     assert selector.attrib['default_planner'] == 'Smac2D'
-    assert root.find('.//RateController').attrib['hz'] == '2.0'
+    assert root.find('.//RateController').attrib['hz'] == '1.0'
 
 
 def test_final_fallback_retains_existing_motion_recoveries() -> None:

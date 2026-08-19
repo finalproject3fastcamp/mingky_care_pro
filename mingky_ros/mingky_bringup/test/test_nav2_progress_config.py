@@ -60,6 +60,16 @@ def test_smac2d_is_the_primary_global_planner() -> None:
 
     assert 'Smac2D' in planner['planner_plugins']
     assert planner['Smac2D']['plugin'] == 'nav2_smac_planner::SmacPlanner2D'
+    assert planner['expected_planner_frequency'] == pytest.approx(5.0)
+
+
+def test_bt_action_ack_timeout_tolerates_loaded_robot() -> None:
+    with NAV2_PARAMS.open(encoding='utf-8') as stream:
+        params = yaml.safe_load(stream)
+
+    bt = params['bt_navigator']['ros__parameters']
+
+    assert bt['default_server_timeout'] == 500
 
 
 def test_amcl_waits_for_verified_lidar_initial_pose() -> None:
