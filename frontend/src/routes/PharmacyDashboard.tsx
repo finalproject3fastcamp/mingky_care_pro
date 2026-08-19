@@ -126,7 +126,11 @@ export function PharmacyDashboard() {
   rxSelRef.current = rxSel;
 
   const log = useCallback((msg: string, kind: LogKind = "") => {
-    const at = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+    const d = new Date();
+    const at =
+      `${String(d.getHours()).padStart(2, "0")}:` +
+      `${String(d.getMinutes()).padStart(2, "0")}:` +
+      `${String(d.getSeconds()).padStart(2, "0")}`;
     setLogs((prev) => [{ at, msg, kind }, ...prev].slice(0, 200));
   }, []);
 
@@ -312,18 +316,9 @@ export function PharmacyDashboard() {
 
   // ── 조제 시작·중단·포장·리셋 ──────────────────────────
   const start = async () => {
-    if (!rxSel) {
-      alert("처방을 선택하세요");
-      return;
-    }
-    if (!pt) {
-      alert("환자를 먼저 검색해 선택하세요");
-      return;
-    }
-    if (!polSel) {
-      alert("조제 방식을 선택하세요");
-      return;
-    }
+    // 버튼이 startBlockedReason 을 보고 disabled 되므로 여기 도달하면 전제조건은 만족.
+    // 여전히 방어적으로 종료 — 상태가 도중에 바뀐 경우 대비.
+    if (!pt || !rxSel || !polSel) return;
     const r = rx?.처방.find((p) => p.코드 === rxSel);
     if (!r) return;
     setStepState([]);
@@ -393,6 +388,18 @@ export function PharmacyDashboard() {
   const trayCounts = tray?.개수 ?? { red: 0, yellow: 0, green: 0 };
   const packDone = job === "done" && stateText.startsWith("완료");
 
+  // "조제 시작" 이 아직 못 눌리는 이유. null 이면 준비 완료.
+  // 조제 방식 카드 하단 CTA 옆에 힌트로 붙는다.
+  const startBlockedReason: string | null = !pt
+    ? "환자를 선택하세요"
+    : !rxSel
+      ? "처방을 선택하세요"
+      : !polSel
+        ? "조제 방식을 선택하세요"
+        : job === "running"
+          ? "조제가 진행 중입니다"
+          : null;
+
   const stepItems = useMemo(() => {
     if (!selectedRx || !rx) return [];
     return [
@@ -411,7 +418,7 @@ export function PharmacyDashboard() {
   return (
     <div className="pharm">
       <div className="pharm-container">
-        <div className="pharm-grid pharm-g2">
+        <div className="pharm-grid pharm-g2 pharm-g2--fixed">
           {/* 환자 */}
           <section className="pharm-card">
             <h2>환자 정보</h2>
@@ -589,84 +596,97 @@ export function PharmacyDashboard() {
               </button>
             ))}
           </div>
-        </section>
-
-        {/* 진행 */}
-        <section className="pharm-card" style={{ marginTop: 18 }}>
-          <h2>진행 상황</h2>
-          <div className="pharm-steps">
-            {stepItems.length === 0 ? (
-              <div className="pharm-empty">
-                처방을 선택하면 단계가 표시됩니다
-              </div>
-            ) : (
-              stepItems.map((it, i) => (
-                <div key={i} className={`pharm-st ${it.state}`}>
-                  <div className={`bar ${it.state === "done" ? "done" : ""}`} />
-                  <div className="c">
-                    {it.state === "done"
-                      ? "✓"
-                      : it.state === "fail"
-                        ? "!"
-                        : i + 1}
-                  </div>
-                  <div className="lb">{it.label}</div>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="pharm-actions" style={{ marginTop: 18 }}>
+          {/* "조제 방식" 을 마지막으로 선택하는 흐름이라 다음 액션인 "조제 시작" 을
+              이 카드 하단에 두어 시선을 이어 준다. 진행 중 제어 (중단·포장·처음부터)
+              는 아래 "진행 상황" 카드에 남긴다. */}
+          <div className="pharm-cta">
             <button
-              className="pharm-btn pri"
+              className="pharm-btn pri lg"
               onClick={start}
-              disabled={job === "running"}
+              disabled={startBlockedReason !== null}
             >
               <Icon name="play" />
               조제 시작
             </button>
-            <button
-              className="pharm-btn"
-              onClick={stop}
-              disabled={job !== "running"}
-            >
-              <Icon name="stop" />
-              중단
-            </button>
-            <button
-              className="pharm-btn ok"
-              onClick={pack}
-              disabled={job !== "done" || packDone}
-            >
-              <Icon name="package" />
-              포장하기
-            </button>
-            <button className="pharm-btn" onClick={reset}>
-              <Icon name="rotate-ccw" />
-              처음부터
-            </button>
-            <span className={`pharm-state ${job === "idle" ? "" : job}`}>
-              <span className="d" />
-              {stateText}
-            </span>
+            <span className="pharm-cta__hint">{startBlockedReason ?? ""}</span>
           </div>
         </section>
 
-        {/* 알림 */}
-        <section className="pharm-card" style={{ marginTop: 18 }}>
-          <h2>알림</h2>
-          <div className="pharm-logs">
-            {logs.length === 0 ? (
-              <div className="pharm-empty">아직 기록이 없습니다</div>
-            ) : (
-              logs.map((l, i) => (
-                <div key={i} className={`pharm-log ${l.kind}`}>
-                  <span className="t">{l.at}</span>
-                  <span>{l.msg}</span>
+        {/* 진행 · 알림 — 한 행에 나란히. 진행 상황이 주 시선, 알림은 로그 요약. */}
+        <div
+          className="pharm-grid pharm-g2 pharm-g2--tall"
+          style={{ marginTop: 18, gridTemplateColumns: "3fr 2fr" }}
+        >
+          <section className="pharm-card pharm-card--flex">
+            <h2>진행 상황</h2>
+            <div className="pharm-steps">
+              {stepItems.length === 0 ? (
+                <div className="pharm-empty">
+                  처방을 선택하면 단계가 표시됩니다
                 </div>
-              ))
-            )}
-          </div>
-        </section>
+              ) : (
+                stepItems.map((it, i) => (
+                  <div key={i} className={`pharm-st ${it.state}`}>
+                    <div className={`bar ${it.state === "done" ? "done" : ""}`} />
+                    <div className="c">
+                      {it.state === "done"
+                        ? "✓"
+                        : it.state === "fail"
+                          ? "!"
+                          : i + 1}
+                    </div>
+                    <div className="lb">{it.label}</div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div
+              className="pharm-actions"
+              style={{ marginTop: "auto", paddingTop: 18 }}
+            >
+              <button
+                className="pharm-btn"
+                onClick={stop}
+                disabled={job !== "running"}
+              >
+                <Icon name="stop" />
+                중단
+              </button>
+              <button
+                className="pharm-btn ok"
+                onClick={pack}
+                disabled={job !== "done" || packDone}
+              >
+                <Icon name="package" />
+                포장하기
+              </button>
+              <button className="pharm-btn" onClick={reset}>
+                <Icon name="rotate-ccw" />
+                처음부터
+              </button>
+              <span className={`pharm-state ${job === "idle" ? "" : job}`}>
+                <span className="d" />
+                {stateText}
+              </span>
+            </div>
+          </section>
+
+          <section className="pharm-card pharm-card--flex">
+            <h2>알림</h2>
+            <div className="pharm-logs">
+              {logs.length === 0 ? (
+                <div className="pharm-empty">아직 기록이 없습니다</div>
+              ) : (
+                logs.map((l, i) => (
+                  <div key={i} className={`pharm-log ${l.kind}`}>
+                    <span className="msg">{l.msg}</span>
+                    <span className="t">{l.at}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

@@ -11,8 +11,9 @@
   --pill-yellow: #d9a52c;
   --pill-green: #3aa564;
 
-  /* padding·min-height 는 상위 .app-main 이 관리한다. 여기에 다시 적으면
-     의료진·엔지니어 화면과 여백이 어긋난다. */
+  /* 상하좌우 padding 은 상위 .app-main 이 관리 — 다른 화면과 통일.
+     하단만 추가로 넉넉히 여백을 두어 마지막 카드 아래 공간이 답답하지 않게 한다. */
+  padding-bottom: 96px;
   background: var(--bg);
   color: var(--text);
   font: 15.5px/1.55 var(--font-sans);
@@ -74,23 +75,42 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* 내부 요소를 세로로 배치하고 액션을 카드 하단으로 밀 때 (진행 상황·알림 등).
+   그리드가 두 카드 높이를 맞춰주므로 짧은 쪽은 아래 여백이 생기는데, 그 여백에
+   버튼을 붙여 시선이 카드 밑변에 딱 맞게 정렬된다. */
+.pharm-card--flex {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 진행·알림 행 — 로그 개수와 무관하게 카드 높이 고정. 알림이 짧을 때도
+   진행 상황이 쪼그라들지 않는다. 로그가 이 값을 넘으면 알림 내부에서 스크롤. */
+.pharm-grid.pharm-g2--tall > .pharm-card {
+  height: 420px;
+}
+.pharm-grid.pharm-g2--tall > .pharm-card .pharm-logs {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}
+
 /* 환자·트레이 카드는 환자 선택 상태와 관계없이 같은 높이를 유지한다.
    이전 min-height 는 카드가 300 "이상" 으로 자라는 것을 허용해 여전히 리스트가
    길면 화면이 튀었다. height 로 고정한다. 검색 리스트는 flex 로 남는 공간만
    채우고 넘치면 내부 스크롤 (base .pharm-hits 의 overflow-y: auto). */
-.pharm-grid.pharm-g2 > .pharm-card {
+.pharm-grid.pharm-g2--fixed > .pharm-card {
   height: 308px;
   display: flex;
   flex-direction: column;
 }
-.pharm-grid.pharm-g2 > .pharm-card .pharm-picker,
-.pharm-grid.pharm-g2 > .pharm-card .pharm-info {
+.pharm-grid.pharm-g2--fixed > .pharm-card .pharm-picker,
+.pharm-grid.pharm-g2--fixed > .pharm-card .pharm-info {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
-.pharm-grid.pharm-g2 > .pharm-card .pharm-hits {
+.pharm-grid.pharm-g2--fixed > .pharm-card .pharm-hits {
   flex: 1;
   min-height: 0;
   max-height: none; /* 부모 flex 가 상한 역할 */
@@ -562,37 +582,45 @@
   color: var(--accent-strong);
 }
 
-/* 알림 */
+/* 알림 — 로그가 몇 개든 각 아이템은 자기 콘텐츠 만큼만 (grid 는 남는 공간을 행에
+   배분해 아이템이 부풀어 보였다). align-content: start 로 위에서부터 자연 높이.
+   scrollbar-gutter: stable 로 스크롤이 생겨도 오른쪽 콘텐츠가 밀리지 않는다. */
 .pharm-logs {
   display: grid;
+  align-content: start;
   gap: 6px;
   max-height: 290px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 .pharm-log {
   display: flex;
+  align-items: center;
   gap: 12px;
-  padding: 10px 13px;
+  padding: 6px 12px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
-  border-left: 3px solid var(--border-strong);
   font-size: 0.88rem;
+  line-height: 1.4;
 }
+/* 왼쪽 색상 바 없이 배경색만으로 종류 구분. */
 .pharm-log.ok {
   background: var(--success-bg);
-  border-color: var(--success);
 }
 .pharm-log.warn {
   background: var(--warning-bg);
-  border-color: var(--warning);
   color: var(--warning);
 }
 .pharm-log.bad {
   background: var(--danger-bg);
-  border-color: var(--danger);
   color: var(--danger);
 }
+.pharm-log .msg {
+  flex: 1;
+  min-width: 0;
+}
 .pharm-log .t {
+  margin-left: auto;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -650,13 +678,10 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
-.pharm-btn.pri {
-  background: var(--accent-bg);
-  border-color: var(--accent);
-  color: var(--accent-strong);
-}
+.pharm-btn.pri,
 .pharm-btn.pri:hover:not(:disabled) {
   background: var(--accent);
+  border-color: var(--accent);
   color: var(--surface);
 }
 .pharm-btn.ok {
@@ -672,34 +697,72 @@
   padding: 5px 12px;
   font-size: 0.8rem;
 }
+/* CTA 크기 — 조제 시작처럼 흐름의 마지막 액션에 붙는다. */
+.pharm-btn.lg {
+  padding: 14px 28px;
+  font-size: 1rem;
+  gap: 8px;
+}
+.pharm-btn.lg svg {
+  width: 18px;
+  height: 18px;
+}
 
+/* 조제 방식 카드 하단의 "조제 시작" 자리. 왼쪽에 큰 primary 버튼, 오른쪽에
+   안 눌리는 이유(muted 힌트). 사용자의 마지막 라디오 클릭 바로 아래에 CTA. */
+.pharm-cta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.pharm-cta__hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* 상태 배지 — 조제/포장의 현재 상태를 눈에 확 띄게. 크기·굵기·테두리로 부각한다. */
 .pharm-state {
   margin-left: auto;
-  font-size: 0.8rem;
-  font-weight: 600;
-  padding: 6px 14px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  padding: 9px 18px;
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-muted);
+  border: 1.5px solid var(--border-strong);
 }
 .pharm-state.run {
   background: var(--accent-bg);
   color: var(--accent-strong);
+  border-color: var(--accent);
+  /* 진행 중일 때 은은한 pulse — 정지 상태와 구분이 확실해진다. */
+  animation: pharm-state-pulse 1.6s ease-in-out infinite;
 }
 .pharm-state.done {
   background: var(--success-bg);
   color: var(--success);
+  border-color: var(--success);
 }
 .pharm-state.bad {
   background: var(--danger-bg);
   color: var(--danger);
+  border-color: var(--danger);
 }
 .pharm-state .d {
   display: inline-block;
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
   background: currentColor;
-  margin-right: 7px;
+  margin-right: 8px;
   vertical-align: 1px;
+}
+@keyframes pharm-state-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35); }
+  50%      { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
 }
