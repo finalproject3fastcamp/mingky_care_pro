@@ -1,8 +1,11 @@
 """저전압 세션 종료와 충전소 복귀 흐름의 회귀 테스트."""
 
 import json
+import math
 from types import SimpleNamespace
 
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import PoseStamped
 from mingky_guide_manager.guide_manager_node import GuideManager
 from mingky_interfaces.msg import GuideState, SessionStart
 import pytest
@@ -29,6 +32,15 @@ class FakeNav:
 
     def send_goal_async(self, goal, feedback_callback=None):
         self.sent.append(goal)
+        return PendingFuture()
+
+
+class FakeGoalHandle:
+    def __init__(self):
+        self.cancelled = 0
+
+    def cancel_goal_async(self):
+        self.cancelled += 1
         return PendingFuture()
 
 
@@ -353,6 +365,46 @@ def test_clinical_goal_waits_for_notice_before_moving_to_waiting_spot(manager):
     assert node.session_state == GuideState.SESSION_IN_ROOM
     assert published == [
         ('nav.goal_succeeded', {'visit_name': 'X-ray'}, 74)]
+
+
+def test_waiting_spot_finishes_without_orbit_inside_18cm(manager):
+    node, _ = manager
+    node.session_id = 81
+    node.current_visit = '진료실'
+    node.session_state = GuideState.SESSION_ARRIVED
+    node.waypoints['treatment_room_waiting'] = {
+        'x': 1.0, 'y': 2.0, 'yaw': -1.2}
+    node._nav_generation = 3
+    context = {
+        'waypoint_name': 'treatment_room_waiting',
+        'is_dock': False,
+        'session_id': 81,
+        'is_waiting': True,
+        'recovery_attempt': 0,
+        'recovery_failures': {},
+        'low_obstacle_attempts': 0,
+        'low_obstacle_side': None,
+    }
+    handle = FakeGoalHandle()
+    node._active_nav_context = context
+    node._active_nav_goal_handle = handle
+    node._active_nav_result_future = PendingFuture()
+    pose = PoseStamped()
+    pose.pose.position.x = 0.85
+    pose.pose.position.y = 2.0
+    pose.pose.orientation.z = math.sin(-1.2 / 2.0)
+    pose.pose.orientation.w = math.cos(-1.2 / 2.0)
+    feedback = SimpleNamespace(feedback=SimpleNamespace(current_pose=pose))
+
+    node._on_nav_feedback(feedback, 3)
+
+    assert handle.cancelled == 1
+    canceled = SimpleNamespace(result=lambda: SimpleNamespace(
+        status=GoalStatus.STATUS_CANCELED))
+    node._on_goal_result(
+        canceled, 3, 'treatment_room_waiting', False, 81, True)
+    assert node.robot_state == GuideState.ROBOT_WAITING
+    assert node.session_state == GuideState.SESSION_IN_ROOM
 
 
 def test_missing_waiting_spot_pauses_for_operator(manager):

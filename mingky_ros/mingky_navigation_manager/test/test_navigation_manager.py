@@ -475,6 +475,29 @@ def test_direct_escape_rotates_before_moving(adaptive_manager):
     assert len(node.recovery_drive.sent) == 1
 
 
+def test_waiting_goal_finishes_without_orbit_inside_18cm(adaptive_manager):
+    node, published = adaptive_manager
+    node._on_goto_pose(_pose('treatment_room_waiting'))
+    handle = FakeActionHandle()
+    node.nav.futures[0].callback(ImmediateFuture(handle))
+    feedback = SimpleNamespace(feedback=SimpleNamespace(
+        current_pose=PoseStamped()))
+    feedback.feedback.current_pose.pose.position.x = 1.10
+    feedback.feedback.current_pose.pose.position.y = -0.5
+    feedback.feedback.current_pose.pose.orientation.z = math.sin(1.2 / 2.0)
+    feedback.feedback.current_pose.pose.orientation.w = math.cos(1.2 / 2.0)
+
+    node._on_nav_feedback(feedback, node._generation)
+
+    assert handle.cancelled == 1
+    handle.result_future.callback(ImmediateFuture(SimpleNamespace(
+        status=GoalStatus.STATUS_CANCELED,
+    )))
+    assert node.recovery_spin.sent == []
+    assert node._active is False
+    assert published[-1]['status'] == 'succeeded'
+
+
 def test_near_goal_abort_retries_original_without_sidestep(adaptive_manager):
     node, _ = adaptive_manager
     _set_fresh_recovery_inputs(node)

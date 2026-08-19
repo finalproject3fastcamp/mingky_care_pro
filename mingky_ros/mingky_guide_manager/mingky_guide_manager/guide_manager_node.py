@@ -27,6 +27,7 @@ from typing import Mapping
 import rclpy
 import yaml
 from action_msgs.msg import GoalStatus
+from builtin_interfaces.msg import Duration
 from ament_index_python.packages import (
     PackageNotFoundError,
     get_package_share_directory,
@@ -99,6 +100,8 @@ class GuideManager(Node):
         self.declare_parameter('recovery_cooldown_sec', 3.0)
         self.declare_parameter('arrival_notice_sec', 3.0)
         self.declare_parameter('use_arrival_chime', True)
+        self.declare_parameter('waiting_final_distance_m', 0.18)
+        self.declare_parameter('waiting_final_yaw_tolerance_rad', 0.20)
         # disabled 는 기존 동작을 그대로 유지한다. range_layer 는 후속 검증 뒤
         # 추가하고, 현재는 실로봇에서 검증한 sidestep 만 선택할 수 있다.
         self.declare_parameter('low_obstacle_mode', 'disabled')
@@ -170,6 +173,11 @@ class GuideManager(Node):
             0.0, float(self.get_parameter('arrival_notice_sec').value))
         self.use_arrival_chime = bool(
             self.get_parameter('use_arrival_chime').value)
+        self.waiting_final_distance_m = max(
+            0.10, float(self.get_parameter('waiting_final_distance_m').value))
+        self.waiting_final_yaw_tolerance_rad = max(
+            0.05, float(self.get_parameter(
+                'waiting_final_yaw_tolerance_rad').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -258,6 +266,7 @@ class GuideManager(Node):
         self._active_nav_goal_handle = None
         self._active_nav_result_future = None
         self._active_nav_context = None
+        self._waiting_alignment_context = None
         self._pending_low_obstacle_context = None
         self._low_obstacle_confirmed_count = 0
         self._patient_follow_state = 'inactive'
@@ -1328,6 +1337,7 @@ class GuideManager(Node):
         self._active_nav_goal_handle = None
         self._active_nav_result_future = None
         self._active_nav_context = None
+        self._waiting_alignment_context = None
         self._pending_low_obstacle_context = None
         self._low_obstacle_confirmed_count = 0
 
@@ -1336,6 +1346,33 @@ class GuideManager(Node):
             return
         self._latest_nav_pose = feedback_msg.feedback.current_pose
         self._latest_nav_pose_received_ns = self.get_clock().now().nanoseconds
+        context = self._active_nav_context
+        if (context is None or not context.get('is_waiting')
+                or self._waiting_alignment_context is not None
+                or self._active_nav_goal_handle is None):
+            return
+        wp = self.waypoints.get(context['waypoint_name'])
+        if wp is None:
+            return
+        pose = self._latest_nav_pose.pose
+        distance = math.hypot(
+            float(wp['x']) - pose.position.x,
+            float(wp['y']) - pose.position.y,
+        )
+        if distance > self.waiting_final_distance_m:
+            return
+        self._waiting_alignment_context = {
+            'generation': generation,
+            'nav_context': dict(context),
+            'current_yaw': _quat_to_yaw(
+                pose.orientation.z, pose.orientation.w),
+            'target_yaw': float(wp['yaw']),
+            'distance': distance,
+        }
+        self.get_logger().info(
+            f'waiting 지점 {distance:.2f}m 이내 진입; 곡선 접근을 멈추고 '
+            '제자리 최종 정렬로 전환합니다.')
+        self._active_nav_goal_handle.cancel_goal_async()
 
     def send_goal(self, waypoint_name: str) -> None:
         """환자 안내 목적지로 이동한다."""
@@ -1589,6 +1626,7 @@ class GuideManager(Node):
 
         self._nav_generation += 1
         generation = self._nav_generation
+        self._waiting_alignment_context = None
         context = {
             'waypoint_name': waypoint_name,
             'is_dock': is_dock,
@@ -1711,6 +1749,13 @@ class GuideManager(Node):
                 f'결과 수신 중 예외: {exc}', is_waiting=is_waiting)
             return
 
+        alignment = self._waiting_alignment_context
+        if (status == GoalStatus.STATUS_CANCELED
+                and alignment is not None
+                and alignment['generation'] == generation):
+            self._start_waiting_final_alignment(alignment)
+            return
+
         # action_msgs/GoalStatus.STATUS_SUCCEEDED == 4
         if status == 4:
             if is_dock:
@@ -1728,10 +1773,7 @@ class GuideManager(Node):
                 self._dock_pending = False
                 self._dock_attempt = 0
             elif is_waiting:
-                self.robot_state = GuideState.ROBOT_WAITING
-                self.session_state = GuideState.SESSION_IN_ROOM
-                self.get_logger().info(
-                    f'waiting spot 도착: {self.current_visit}')
+                self._waiting_spot_succeeded()
             else:
                 self._cancel_adaptive_retry()
                 self.robot_state = GuideState.ROBOT_WAITING
@@ -1777,6 +1819,78 @@ class GuideManager(Node):
             self._goal_failed(
                 waypoint_name, is_dock, session_id, int(status),
                 f'주행 실패 (status={status})', is_waiting=is_waiting)
+
+    def _start_waiting_final_alignment(self, alignment: dict) -> None:
+        if alignment['generation'] != self._nav_generation:
+            return
+        delta = math.atan2(
+            math.sin(alignment['target_yaw'] - alignment['current_yaw']),
+            math.cos(alignment['target_yaw'] - alignment['current_yaw']),
+        )
+        if abs(delta) <= self.waiting_final_yaw_tolerance_rad:
+            self._waiting_alignment_context = None
+            self._waiting_spot_succeeded()
+            return
+        if not self.low_obstacle_spin.wait_for_server(timeout_sec=0.2):
+            self._waiting_alignment_context = None
+            context = alignment['nav_context']
+            self._waiting_spot_failed(
+                self.current_visit, context['waypoint_name'], -4)
+            return
+        goal = Spin.Goal()
+        goal.target_yaw = float(delta)
+        goal.time_allowance = Duration(sec=10)
+        future = self.low_obstacle_spin.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_waiting_spin_response(done, alignment))
+
+    def _on_waiting_spin_response(self, future, alignment: dict) -> None:
+        if alignment['generation'] != self._nav_generation:
+            return
+        try:
+            handle = future.result()
+        except Exception:  # noqa: BLE001
+            handle = None
+        if handle is None or not handle.accepted:
+            self._waiting_alignment_context = None
+            context = alignment['nav_context']
+            self._waiting_spot_failed(
+                self.current_visit, context['waypoint_name'], -4)
+            return
+        self._active_nav_goal_handle = handle
+        self._active_nav_context = alignment['nav_context']
+        result = handle.get_result_async()
+        self._active_nav_result_future = result
+        result.add_done_callback(
+            lambda done: self._on_waiting_spin_result(done, alignment))
+
+    def _on_waiting_spin_result(self, future, alignment: dict) -> None:
+        if alignment['generation'] != self._nav_generation:
+            return
+        self._active_nav_goal_handle = None
+        self._active_nav_result_future = None
+        self._active_nav_context = None
+        self._waiting_alignment_context = None
+        try:
+            wrapped = future.result()
+            succeeded = (
+                int(wrapped.status) == GoalStatus.STATUS_SUCCEEDED
+                and int(getattr(wrapped.result, 'error_code', 0)) == 0
+            )
+        except Exception:  # noqa: BLE001
+            succeeded = False
+        if succeeded:
+            self._waiting_spot_succeeded()
+            return
+        context = alignment['nav_context']
+        self._waiting_spot_failed(
+            self.current_visit, context['waypoint_name'], -4)
+
+    def _waiting_spot_succeeded(self) -> None:
+        self._waiting_alignment_context = None
+        self.robot_state = GuideState.ROBOT_WAITING
+        self.session_state = GuideState.SESSION_IN_ROOM
+        self.get_logger().info(f'waiting spot 도착: {self.current_visit}')
 
     def _start_adaptive_recovery(
             self, waypoint_name: str, session_id: int, recovery_attempt: int,
