@@ -33,6 +33,7 @@ cd frontend && npm run dev
 | 파일 | 내용 |
 |---|---|
 | `policies.json` | 조제에 쓸 수 있는 학습 정책 목록 (pharmacy 전용 · DB 와 무관) |
+| `count_tray.py` | 트레이 알약 계수 브리지 — 백엔드가 il venv 파이썬으로 띄운다 |
 
 ## DB 에 없는 시연용 텍스트
 
@@ -47,14 +48,72 @@ cd frontend && npm run dev
 
 ```
 필요한 것
-  ~/omx_pill_project/         정책 체크포인트와 run.sh
+  ~/omx_pill_project/         정책 체크포인트 · run.sh · pharmacy.py
   ~/venv/il                   lerobot v0.4.4
   /dev/omx_follower           로봇팔
   top / wrist 카메라          /dev/v4l/by-id/ 고정 경로
 ```
 
+| 환경 변수 | 기본값 | 무엇 |
+|---|---|---|
+| `PHARMACY_REAL` | `0` | `1` 이면 트레이·조제 모두 실제 로봇 파트를 쓴다 |
+| `OMX_PILL_ROOT` | `~/omx_pill_project` | 조제 파트 경로 (`pharmacy.py` · `run.sh` 가 있는 곳) |
+| `OMX_PYTHON` | `~/venv/il/bin/python` | 조제 파트를 돌릴 파이썬 (lerobot v0.4.4) |
+
+```bash
+cd backend && PHARMACY_REAL=1 uvicorn app.main:app
+```
+
 없으면 자동으로 시뮬레이션으로 떨어지지 않고 **오류를 표시**한다 — 로봇이
 없는데 있다고 착각하는 것보다 낫기 때문이다.
+
+### 트레이 계수는 왜 별도 프로세스인가
+
+트레이를 세는 것은 조제 파트의 `pharmacy.count_pills()` 다. 그런데 그 모듈은
+import 만 해도 `run_policy` → lerobot · torch · cv2 를 끌어오고, 관제 백엔드
+venv 에는 그 스택이 없다 (`backend/requirements.txt` 는 FastAPI · asyncpg 뿐).
+조제 노트북에서만 되는 것을 관제 서비스 전체의 설치 조건으로 만들 수 없다.
+
+그래서 조제(`run.sh`)와 같은 방식을 쓴다 — `count_tray.py` 를 `OMX_PYTHON` 으로
+띄우고 stdout 의 `TRAY_JSON` 한 줄만 읽는다. 손으로 확인할 때도 같은 명령이다.
+
+```bash
+~/venv/il/bin/python omx/web/count_tray.py --root ~/omx_pill_project --frames 5
+TRAY_JSON {"개수": {"red": 2, "yellow": 1, "green": 3}}
+```
+
+**조제 중에는 트레이를 읽지 않는다.** top 카메라는 V4L2 라 같은 장치가 두 번
+열리지 않아서, 읽으려 들면 돌고 있는 조제가 죽는다. 화면의 "다시 확인" 은 그
+동안 오류를 돌려준다.
+
+밝기가 한 자릿수면(모든 픽셀 0) `top 카메라가 검은 화면만 줍니다` 가 뜬다.
+USB 를 다시 꽂고, 자동절전을 끈다 — [omx/il/TASK.md](../il/TASK.md) 2절.
+
+## 화면 흐름 — 트레이 연결이 첫 관문
+
+약국 화면은 열리자마자 `/pharmacy/tray` 를 한 번 읽는다. **연결이 확인되기
+전에는 조제를 시작할 수 없다** — 환자·처방·정책을 다 고른 뒤에 카메라가 죽어
+있는 것을 알게 되면 고른 것을 다 버리게 되고, 실제 모드에서는 로봇이 빈 트레이를
+뒤지다 제한 시간을 태우기 때문이다.
+
+```
+확인 필요 ─(트레이 확인)─→ 연결됨 ─→ 환자·처방·정책 선택 ─→ 조제 시작
+              └─────────→ 연결 실패 ─(다시 확인)─┘
+```
+
+트레이 카드 제목 옆 배지가 상태를 그대로 보여주고, "조제 시작" 이 막히는 이유는
+버튼 옆에 뜬다.
+
+| 트레이 상태 | 버튼 옆 안내 |
+|---|---|
+| 아직 안 읽음 | 트레이 연결을 먼저 확인하세요 |
+| 읽는 중 | 트레이를 확인하는 중입니다 |
+| 오류 | 트레이가 연결되지 않았습니다 — 다시 확인하세요 |
+| 연결됨 · 처방 색이 트레이에 없음 | 트레이에 빨강 알약이 없습니다 |
+
+무작위로 다시 뽑기도 같은 관문을 지난다 — 트레이에 있는 색에서만 뽑기 때문이다.
+**실제 모드에서는 서버도 조제 시작 직전에 한 번 더 트레이를 읽는다.** 화면이
+들고 있는 값은 읽은 시각의 것이라, 그 사이 알약을 집어 갔을 수 있다.
 
 ## API
 
@@ -64,7 +123,7 @@ cd frontend && npm run dev
 | GET | `/pharmacy/prescriptions` | 약품과 병명별 조합 |
 | GET | `/pharmacy/random-prescriptions` | 모든 처방의 색 조합·순서를 새로 뽑는다 |
 | GET | `/pharmacy/policies` | 쓸 수 있는 학습 정책 |
-| GET | `/pharmacy/tray` | 트레이의 색깔별 알약 개수 |
+| GET | `/pharmacy/tray` | 트레이의 색깔별 알약 개수 (실제 모드는 카메라를 열어 몇 초 걸린다) |
 | POST | `/pharmacy/dispense` | 조제 시작 — `{환자, 처방코드, 조합, 정책}` |
 | POST | `/pharmacy/stop` | 진행 중인 조제 중단 |
 | POST | `/pharmacy/pack` | 포장 단계 실행 |

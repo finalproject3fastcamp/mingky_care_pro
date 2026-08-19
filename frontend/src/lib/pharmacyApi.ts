@@ -8,6 +8,12 @@ import { api } from './api'
 
 export type Color = 'red' | 'yellow' | 'green'
 
+// 트레이를 건드리는 요청은 공용 타임아웃(5초)으로는 못 기다린다. 실제 모드에서
+// `/pharmacy/tray` 는 카메라를 열어 여러 장을 찍으므로 실측 10~18초가 걸리고,
+// 무작위 뽑기와 조제 시작도 서버가 그 계수를 먼저 돌린다. 5초로 두면 카메라가
+// 정상인데도 화면은 언제나 "연결 실패" 로 보인다.
+const TRAY_TIMEOUT_MS = 90_000
+
 export interface Drug {
   이름: string
   성분: string
@@ -50,6 +56,7 @@ export interface Policy {
 
 export interface TrayReading {
   모드: '시뮬레이션' | '실제'
+  시각: string
   개수?: Record<Color, number>
   오류?: string
 }
@@ -108,7 +115,7 @@ export async function getRandomPrescriptions(): Promise<
   const { data } = await api.get<{
     처방: Prescription[]
     트레이: Record<Color, number>
-  }>('/pharmacy/random-prescriptions')
+  }>('/pharmacy/random-prescriptions', { timeout: TRAY_TIMEOUT_MS })
   return data
 }
 
@@ -120,12 +127,17 @@ export async function getPolicies(): Promise<{ 정책: Policy[]; 기본: string 
 }
 
 export async function getTray(): Promise<TrayReading> {
-  const { data } = await api.get<TrayReading>('/pharmacy/tray')
+  const { data } = await api.get<TrayReading>('/pharmacy/tray', {
+    timeout: TRAY_TIMEOUT_MS,
+  })
   return data
 }
 
+// 실제 모드는 조제를 걸기 전에 서버가 트레이를 한 번 더 읽는다 — 그만큼 응답이 늦다.
 export async function startDispense(body: DispenseBody): Promise<DispenseResponse> {
-  const { data } = await api.post<DispenseResponse>('/pharmacy/dispense', body)
+  const { data } = await api.post<DispenseResponse>('/pharmacy/dispense', body, {
+    timeout: TRAY_TIMEOUT_MS,
+  })
   return data
 }
 

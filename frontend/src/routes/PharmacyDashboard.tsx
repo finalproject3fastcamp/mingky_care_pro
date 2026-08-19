@@ -113,6 +113,7 @@ export function PharmacyDashboard() {
   const [rxSel, setRxSel] = useState<string | null>(null);
   const [pt, setPt] = useState<Patient | null>(null);
   const [tray, setTray] = useState<TrayReading | null>(null);
+  const [trayBusy, setTrayBusy] = useState(false);
   const [stepState, setStepState] = useState<StepState[]>([]);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [job, setJob] = useState<JobState>("idle");
@@ -164,12 +165,20 @@ export function PharmacyDashboard() {
   }, []);
 
   // ── 트레이 ─────────────────────────────────────────────
+  // 실제 모드에서는 조제 파트의 top 카메라를 열어 여러 장을 찍으므로 몇 초 걸린다.
+  // 그동안 버튼을 잠근다 — 카메라는 두 번 열리지 않아 서버가 잠금으로 직렬화하므로,
+  // 연타해 봐야 줄만 서고 화면은 응답이 없는 것처럼 보인다.
   const refreshTray = useCallback(async () => {
+    setTrayBusy(true);
     try {
       const t = await getTray();
       setTray(t);
+      // 카드에도 뜨지만 로그에 남겨야 언제 실패했는지가 남는다.
+      if (t.오류) log(`트레이 확인 실패 — ${t.오류}`, "bad");
     } catch (e) {
       log(`트레이 확인 실패: ${String(e)}`, "bad");
+    } finally {
+      setTrayBusy(false);
     }
   }, [log]);
 
@@ -318,7 +327,7 @@ export function PharmacyDashboard() {
   const start = async () => {
     // 버튼이 startBlockedReason 을 보고 disabled 되므로 여기 도달하면 전제조건은 만족.
     // 여전히 방어적으로 종료 — 상태가 도중에 바뀐 경우 대비.
-    if (!pt || !rxSel || !polSel) return;
+    if (!trayReady || !pt || !rxSel || !polSel) return;
     const r = rx?.처방.find((p) => p.코드 === rxSel);
     if (!r) return;
     setStepState([]);
@@ -385,20 +394,45 @@ export function PharmacyDashboard() {
     () => rx?.처방.find((p) => p.코드 === rxSel) ?? null,
     [rx, rxSel],
   );
-  const trayCounts = tray?.개수 ?? { red: 0, yellow: 0, green: 0 };
+  // 아직 안 읽었거나 카메라가 실패한 상태를 0 으로 그리면 "트레이가 비었다" 로
+  // 읽힌다. 모르는 것은 모른다고(—) 표시한다.
+  const trayCounts = tray?.개수 ?? null;
   const packDone = job === "done" && stateText.startsWith("완료");
+
+  // 트레이를 실제로 읽어 개수를 받은 상태만 "연결됨" 이다. 시뮬레이션도 연결로
+  // 친다 — 조제 파트 없이 도는 것이 기본 모드고, 그때도 개수는 서버가 준다.
+  const trayReady = tray !== null && !tray.오류 && trayCounts !== null;
+
+  // 선택한 처방이 요구하는 색 중 트레이에 없는 것. 로봇은 없는 색을 찾다가
+  // 제한 시간을 다 쓰므로, 시작하기 전에 화면에서 막는다.
+  const trayShort = useMemo(() => {
+    if (!selectedRx || trayCounts === null) return [];
+    return [...new Set(selectedRx.조합)].filter((c) => (trayCounts[c] ?? 0) < 1);
+  }, [selectedRx, trayCounts]);
 
   // "조제 시작" 이 아직 못 눌리는 이유. null 이면 준비 완료.
   // 조제 방식 카드 하단 CTA 옆에 힌트로 붙는다.
-  const startBlockedReason: string | null = !pt
-    ? "환자를 선택하세요"
-    : !rxSel
-      ? "처방을 선택하세요"
-      : !polSel
-        ? "조제 방식을 선택하세요"
-        : job === "running"
-          ? "조제가 진행 중입니다"
-          : null;
+  //
+  // **트레이 연결 확인이 첫 관문이다.** 환자·처방·정책을 다 고른 뒤에 카메라가
+  // 죽어 있는 것을 알게 되면 고른 것을 다 버리게 되고, 실제 모드에서는 로봇이
+  // 빈 트레이를 뒤지다 제한 시간을 태운다.
+  const startBlockedReason: string | null = trayBusy
+    ? "트레이를 확인하는 중입니다"
+    : tray === null
+      ? "트레이 연결을 먼저 확인하세요"
+      : tray.오류
+        ? "트레이가 연결되지 않았습니다 — 다시 확인하세요"
+        : !pt
+          ? "환자를 선택하세요"
+          : !rxSel
+            ? "처방을 선택하세요"
+            : trayShort.length > 0
+              ? `트레이에 ${trayShort.map((c) => KOR[c]).join("·")} 알약이 없습니다`
+              : !polSel
+                ? "조제 방식을 선택하세요"
+                : job === "running"
+                  ? "조제가 진행 중입니다"
+                  : null;
 
   const stepItems = useMemo(() => {
     if (!selectedRx || !rx) return [];
@@ -484,12 +518,27 @@ export function PharmacyDashboard() {
             )}
           </section>
 
-          {/* 트레이 */}
+          {/* 트레이 — 조제의 첫 관문이라 연결 상태를 제목 옆에 붙인다. */}
           <section className="pharm-card">
-            <h2>트레이 알약</h2>
+            <div className="pharm-card__head">
+              <h2>트레이 알약</h2>
+              <span
+                className={`pharm-badge ${
+                  trayBusy ? "exp" : trayReady ? "rec" : tray ? "bad" : "exp"
+                }`}
+              >
+                {trayBusy
+                  ? "확인 중"
+                  : trayReady
+                    ? "연결됨"
+                    : tray
+                      ? "연결 실패"
+                      : "확인 필요"}
+              </span>
+            </div>
             <div className="pharm-tray">
               {COLORS.map((c) => {
-                const v = trayCounts[c] ?? 0;
+                const v = trayCounts?.[c] ?? null;
                 return (
                   <div key={c} className={`pharm-tc ${v === 0 ? "zero" : ""}`}>
                     <div
@@ -499,9 +548,8 @@ export function PharmacyDashboard() {
                       }}
                     />
                     <div className="n">
-                      <span>{v}</span>
-                      {/* {v} */}
-                      <span className="unit">알</span>
+                      <span>{v === null ? "—" : v}</span>
+                      {v !== null && <span className="unit">알</span>}
                     </div>
                     <div className="l">
                       {KOR[c]} · {rx?.약품[c]?.이름 ?? ""}
@@ -515,15 +563,25 @@ export function PharmacyDashboard() {
               style={{ marginTop: "24px", paddingTop: 12 }}
             >
               <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                {tray === null
-                  ? "아직 확인하지 않았습니다"
-                  : tray.오류
-                    ? `⚠ ${tray.오류}`
-                    : `${tray.모드} 모드로 읽었습니다`}
+                {trayBusy
+                  ? "카메라로 읽는 중…"
+                  : tray === null
+                    ? "아직 확인하지 않았습니다"
+                    : tray.오류
+                      ? `⚠ ${tray.오류}`
+                      : `${tray.모드} 모드 · ${tray.시각} 에 읽었습니다`}
               </span>
-              <button className="pharm-btn" onClick={refreshTray}>
+              <button
+                className="pharm-btn"
+                onClick={refreshTray}
+                disabled={trayBusy}
+              >
                 <Icon name="rotate-ccw" />
-                {tray === null ? "트레이 확인" : "다시 확인"}
+                {trayBusy
+                  ? "읽는 중…"
+                  : tray === null
+                    ? "트레이 확인"
+                    : "다시 확인"}
               </button>
             </div>
           </section>
@@ -533,11 +591,17 @@ export function PharmacyDashboard() {
         <section className="pharm-card" style={{ marginTop: 18 }}>
           <div className="pharm-card__head">
             <h2>처방 선택</h2>
+            {/* 무작위 조합은 "트레이에 있는 색" 에서만 뽑는다. 트레이를 못 읽은
+                상태에서는 서버가 503 을 돌려주므로 아예 못 누르게 한다. */}
             <button
               className="pharm-btn sm"
               onClick={drawRandom}
-              disabled={randBusy}
-              title="병명은 그대로 두고 모든 처방의 색 조합과 순서를 새로 뽑습니다"
+              disabled={randBusy || !trayReady}
+              title={
+                trayReady
+                  ? "병명은 그대로 두고 모든 처방의 색 조합과 순서를 새로 뽑습니다"
+                  : "트레이 연결을 먼저 확인하세요"
+              }
             >
               <span aria-hidden="true">🎲</span>
               {randBusy ? "뽑는 중…" : "무작위로 다시 뽑기"}

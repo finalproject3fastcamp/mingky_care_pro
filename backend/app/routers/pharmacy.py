@@ -54,7 +54,8 @@ async def get_policies() -> dict:
 
 @router.get("/tray")
 async def get_tray() -> dict:
-    return pharmacy.read_tray()
+    """실제 모드면 조제 파트의 top 카메라로 센다 — 몇 초 걸린다."""
+    return await pharmacy.read_tray()
 
 
 @router.post("/dispense")

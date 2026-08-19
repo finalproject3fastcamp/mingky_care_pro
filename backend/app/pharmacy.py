@@ -19,13 +19,27 @@ Flask 판(`omx/web/app.py`) 을 FastAPI 로 이관한 것. 이유:
   - **모델은 "지정된 알약 하나 집기" 만 안다.** 처방 조합을 순서대로 처리하는 것은
     모델이 아니라 이 서버가 담당한다 — 색마다 pick 을 한 번씩 호출한다.
   - **시뮬레이션이 기본, 실제 모드는 명시적 opt-in.** `PHARMACY_REAL=1` 환경 변수로
-    켠다. 실제 모드는 `pharmacy.py` (OMX 카메라·로봇팔) 모듈과 학습된 정책이
-    필요해서 데모 환경에서는 못 돈다.
+    켠다. 실제 모드는 조제 파트(OMX 카메라·로봇팔)와 학습된 정책이 필요해서
+    데모 환경에서는 못 돈다.
   - **조제는 한 번에 하나.** 로봇이 한 대뿐이라 동시에 두 조제를 못 돌린다.
   - **트레이 카메라가 검은 화면을 주면 오류로 올린다** — 자동노출 잡히기 전
     프레임을 0개로 판정하면 "알약이 하나도 없다" 가 된다.
   - **화면이 보낸 조합이 언제나 우선.** 무작위로 다시 뽑기 후 서버 원본과
     화면 상태가 다르므로, 조제 요청은 조합을 함께 실어 보내야 한다.
+
+## 실제 조제 파트와의 경계
+
+트레이 계수도 조제 실행도 **저장소 밖의 조제 파트**(`~/omx_pill_project` ·
+`OMX_PILL_ROOT`) 를 별도 프로세스로 띄워서 한다. 관제 백엔드 venv 에는 lerobot ·
+torch · cv2 가 없고 앞으로도 넣지 않는다 — 조제 노트북에서만 되는 것을 관제
+서비스 전체의 설치 조건으로 만들 수 없기 때문이다.
+
+    조제   `run.sh`               (il venv 를 스스로 source 한다)
+    트레이 `omx/web/count_tray.py` (il venv 파이썬 `OMX_PYTHON` 으로 띄운다)
+
+두 경로 모두 top 카메라를 쓰는데 V4L2 는 같은 장치를 두 번 열지 못한다. 그래서
+조제 프로세스가 살아 있는 동안 트레이 계수는 거절하고, 계수끼리는 잠금으로
+직렬화한다.
 
 ## SSE 브로드캐스트
 
@@ -41,7 +55,6 @@ import json
 import logging
 import os
 import random
-import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -55,12 +68,23 @@ log = logging.getLogger("mingky.pharmacy")
 # 학습된 정책 목록만 파일로 남는다 (pharmacy 전용 · 관제 DB 와 무관).
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DATA_DIR = _PROJECT_ROOT / "omx" / "web"
-_OMX_ROOT = _PROJECT_ROOT / "omx"
 
-# 실제 모드에서 lazy import 되는 pharmacy.count_pills 를 위해 sys.path 를
-# 한 번만 확장한다. 시뮬 모드에서는 import 자체가 안 일어난다.
-if str(_OMX_ROOT) not in sys.path:
-    sys.path.insert(0, str(_OMX_ROOT))
+# 실제 조제 파트. `pharmacy.py`(트레이 계수) · `run.sh`(정책 실행) · 학습 체크포인트가
+# 있는 곳이다. **저장소 안(`omx/`)이 아니라 조제 담당자 노트북의 작업 디렉터리**라
+# 환경 변수로 받는다 — 저장소에는 로봇 스크립트와 수 GB 체크포인트가 없다.
+_OMX_PROJECT = Path(
+    os.environ.get("OMX_PILL_ROOT", str(Path.home() / "omx_pill_project"))
+).expanduser()
+
+# 조제 파트를 돌리는 파이썬. lerobot v0.4.4 가 깔린 venv 라 관제 백엔드 venv 와
+# 다르다 (`run.sh` 도 이 venv 를 source 한다).
+_OMX_PYTHON = Path(
+    os.environ.get("OMX_PYTHON", str(Path.home() / "venv" / "il" / "bin" / "python"))
+).expanduser()
+
+# 트레이 계수 브리지. 저장소가 들고 있는 스크립트를 _OMX_PYTHON 으로 띄운다.
+_TRAY_SCRIPT = _DATA_DIR / "count_tray.py"
+_TRAY_MARKER = "TRAY_JSON"
 
 _POL_RAW = json.loads((_DATA_DIR / "policies.json").read_text(encoding="utf-8"))["정책"]
 _POLICIES = {p["id"]: p for p in _POL_RAW}
@@ -110,6 +134,10 @@ RECORD = os.environ.get("REC", "0") != "0"         # 정책이 본 화면을 mp4
 PICK_TIMEOUT = 150          # 색 하나에 주는 최대 시간 (초)
 REST = 5                    # 색별 정책에서 색 사이 카메라 회복 대기 (초)
 TRAY_FRAMES = 5             # 트레이를 몇 장 찍어 최빈값을 낼지
+# lerobot·torch import + 장마다 자동노출을 기다리는 시간까지 합쳐 실측 18초였다
+# (모든 프레임이 검은, 즉 매 장이 75프레임을 다 버리는 최악). 카메라가 아예
+# 응답하지 않을 때 요청이 영원히 매달리지 않도록 넉넉히 잡아 끊는다.
+TRAY_TIMEOUT = 60           # 트레이 계수 프로세스에 주는 최대 시간 (초)
 
 # 빨강·노랑은 반경 기준으로 보정값을 잡아 왔다 (색별 정책에만 해당).
 EXTRA = {"red": "--radial-offset", "yellow": "--radial-offset", "green": ""}
@@ -127,6 +155,9 @@ _JOB: dict = {"id": None, "상태": "대기", "단계": [],
 _JOB_LOCK = asyncio.Lock()
 _JOB_TASK: asyncio.Task | None = None
 _JOB_PROC: asyncio.subprocess.Process | None = None
+
+# 트레이 계수 직렬화. top 카메라는 V4L2 라 동시에 두 번 열리지 않는다.
+_TRAY_LOCK = asyncio.Lock()
 
 # 약품 캐시. DB 를 매 단계마다 조회하지 않기 위해 첫 로드 뒤 메모리에 두고,
 # `prescriptions()` (약국 화면 진입 시 호출) 이 갱신한다. 시연 세션 동안 약품
@@ -292,25 +323,89 @@ async def _get_meds() -> dict[str, dict]:
 
 
 # ── 트레이 상태 ────────────────────────────────────────────────────────
-def read_tray() -> dict:
-    """트레이에 각 색이 몇 개 있는지. 실제 모드에서만 카메라를 연다."""
-    if not REAL_MODE:
-        return {"모드": "시뮬레이션", "개수": {"red": 1, "yellow": 1, "green": 1}}
-    try:
-        from pharmacy import count_pills  # noqa: PLC0415
+def _now_hms() -> str:
+    return datetime.now().strftime("%H:%M:%S")
 
-        n = count_pills(TRAY_FRAMES)
-        if not n:
-            return {"모드": "실제",
-                    "오류": "top 카메라가 검은 화면만 줍니다 — USB 를 다시 꽂아 주세요"}
-        return {"모드": "실제", "개수": n}
-    except Exception as e:  # noqa: BLE001
-        return {"모드": "실제", "오류": f"{type(e).__name__}: {e}"}
+
+def _tray_preflight() -> str | None:
+    """실제 트레이를 읽을 수 있는 상태인지. 못 읽으면 그 이유를 돌려준다."""
+    if _JOB_PROC is not None:
+        # top 카메라는 V4L2 라 두 번 열리지 않는다. 조제 중에 트레이를 읽으려
+        # 들면 정책이 쓰던 카메라를 빼앗아 조제가 통째로 죽는다.
+        return "조제 중에는 트레이를 읽을 수 없습니다 — 로봇이 카메라를 쓰고 있습니다"
+    if not _TRAY_SCRIPT.is_file():
+        return f"트레이 계수 스크립트가 없습니다: {_TRAY_SCRIPT}"
+    if not (_OMX_PROJECT / "pharmacy.py").is_file():
+        return (f"조제 파트를 찾지 못했습니다: {_OMX_PROJECT} — "
+                f"OMX_PILL_ROOT 로 경로를 지정하세요")
+    if not _OMX_PYTHON.is_file():
+        return (f"조제 파트 파이썬이 없습니다: {_OMX_PYTHON} — "
+                f"OMX_PYTHON 으로 경로를 지정하세요")
+    return None
+
+
+async def _count_pills() -> dict:
+    """조제 파트의 `count_pills()` 를 별도 프로세스로 돌려 개수를 받는다.
+
+    **in-process import 는 못 한다.** `pharmacy.py` 는 import 만 해도
+    `run_policy` → lerobot · torch · cv2 를 끌어오는데, 관제 백엔드 venv 에는
+    그 스택이 없다. 조제(`run.sh`) 와 같이 il venv 파이썬으로 띄우고 stdout 의
+    `TRAY_JSON` 한 줄만 읽는다 (`omx/web/count_tray.py`).
+    """
+    cmd = [str(_OMX_PYTHON), str(_TRAY_SCRIPT),
+           "--root", str(_OMX_PROJECT), "--frames", str(TRAY_FRAMES)]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, cwd=str(_OMX_PROJECT),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        raw_out, raw_err = await asyncio.wait_for(
+            proc.communicate(), timeout=TRAY_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"오류": f"트레이를 읽는 데 {TRAY_TIMEOUT}초를 넘겼습니다 — "
+                       f"top 카메라가 응답하지 않습니다"}
+
+    out = raw_out.decode(errors="replace")
+    for line in reversed(out.splitlines()):
+        if line.startswith(_TRAY_MARKER):
+            return json.loads(line[len(_TRAY_MARKER):])
+
+    # JSON 한 줄이 없다 = 스크립트가 시작도 못 했다. stderr 꼬리가 진짜 이유다.
+    tail = (raw_err.decode(errors="replace").strip().splitlines() or ["(출력 없음)"])[-1]
+    log.warning("트레이 계수 실패 (rc=%s): %s", proc.returncode, tail)
+    return {"오류": f"트레이 계수가 실패했습니다 — {tail}"}
+
+
+async def read_tray() -> dict:
+    """트레이에 각 색이 몇 개 있는지. 실제 모드에서만 카메라를 연다.
+
+    카메라를 여는 일이라 몇 초 걸리고 동시에 두 번 열 수 없다. 화면 두 개가
+    같이 눌러도 한 번만 읽도록 잠금으로 직렬화한다.
+    """
+    if not REAL_MODE:
+        return {"모드": "시뮬레이션", "시각": _now_hms(),
+                "개수": {"red": 1, "yellow": 1, "green": 1}}
+
+    막힌이유 = _tray_preflight()
+    if 막힌이유:
+        return {"모드": "실제", "시각": _now_hms(), "오류": 막힌이유}
+
+    async with _TRAY_LOCK:
+        # 잠금을 기다리는 사이 조제가 시작됐을 수 있다.
+        막힌이유 = _tray_preflight()
+        if 막힌이유:
+            return {"모드": "실제", "시각": _now_hms(), "오류": 막힌이유}
+        try:
+            결과 = await _count_pills()
+        except Exception as e:  # noqa: BLE001
+            결과 = {"오류": f"{type(e).__name__}: {e}"}
+    return {"모드": "실제", "시각": _now_hms(), **결과}
 
 
 async def random_prescriptions() -> tuple[dict, int]:
     """모든 처방의 색 조합을 새로 뽑는다. 응답과 HTTP 상태를 함께 돌려준다."""
-    tray = read_tray()
+    tray = await read_tray()
     if tray.get("오류"):
         return {"오류": tray["오류"]}, 503
     있는색 = [c for c, n in tray["개수"].items() if n > 0]
@@ -433,14 +528,14 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
         return True, "완료"
 
     cmd = ["timeout", "-s", "INT", str(PICK_TIMEOUT * len(조합)),
-           "bash", str(_OMX_ROOT / "run.sh"), pol["ckpt"],
+           "bash", str(_OMX_PROJECT / "run.sh"), pol["ckpt"],
            "--repo-id", pol["repo"], "--relax-on-exit",
            "--no-freeze-on-grasp", "--offset-step", "1",
            "--sequence", ",".join(조합), "--trace",
-           "--dump-grasp", str(_OMX_ROOT / "grasp_shots" / policy_id)]
+           "--dump-grasp", str(_OMX_PROJECT / "grasp_shots" / policy_id)]
     if RECORD:
         cmd += ["--record-video",
-                str(_OMX_ROOT / "report" / f"web_{policy_id}_{datetime.now():%H%M%S}.mp4")]
+                str(_OMX_PROJECT / "report" / f"web_{policy_id}_{datetime.now():%H%M%S}.mp4")]
     if pol.get("앙상블", True):
         cmd.append("--temporal-ensemble")
     if SHOW_WINDOW:
@@ -453,7 +548,7 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
     await _단계시작(i, 조합[0])
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_OMX_ROOT), env=env,
+            *cmd, cwd=str(_OMX_PROJECT), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         _JOB_PROC = proc
         assert proc.stdout is not None
@@ -495,7 +590,7 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
 
 async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]:
     cmd = ["timeout", "-s", "INT", str(PICK_TIMEOUT),
-           "bash", str(_OMX_ROOT / "run.sh"), pol["ckpt"][color],
+           "bash", str(_OMX_PROJECT / "run.sh"), pol["ckpt"][color],
            "--repo-id", pol["repo"],
            "--no-freeze-on-grasp", "--offset-step", "1", "--trace"]
     if last:
@@ -510,7 +605,7 @@ async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]
            "HF_HUB_OFFLINE": "1"}
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_OMX_ROOT), env=env,
+            *cmd, cwd=str(_OMX_PROJECT), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         try:
             stdout, _ = await asyncio.wait_for(
@@ -573,7 +668,13 @@ async def start_dispense(body: dict) -> tuple[dict, int]:
                      "중단요청": False})
 
     if REAL_MODE:
-        tray = read_tray()
+        tray = await read_tray()
+        # 카메라가 못 읽은 것과 알약이 없는 것은 다르다. 오류를 "알약이 없습니다"
+        # 로 뭉치면 사람이 트레이에 알약을 더 올리며 원인을 못 찾는다.
+        if tray.get("오류"):
+            async with _JOB_LOCK:
+                _JOB["상태"] = "대기"
+            return {"오류": tray["오류"]}, 503
         부족 = [c for c in 처방["조합"] if tray.get("개수", {}).get(c, 0) < 1]
         if 부족:
             async with _JOB_LOCK:

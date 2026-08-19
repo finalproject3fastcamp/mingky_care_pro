@@ -438,6 +438,11 @@
   background: var(--surface-2);
   color: var(--text-muted);
 }
+/* 트레이 연결 실패 — 조제를 시작할 수 없는 상태라 경고색으로 세운다. */
+.pharm-badge.bad {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
 .pharm-polnote {
   margin-top: 13px;
   padding: 13px 15px;
