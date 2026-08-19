@@ -25,6 +25,7 @@ ROBOT_ENV_EXAMPLE = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'robot.env.example'
 )
 REAR_CAMERA_LAUNCH_FILE = LAUNCH_FILE.parent / 'rear_camera.launch.py'
+CAMERA_STREAMS_LAUNCH_FILE = LAUNCH_FILE.parent / 'camera_streams.launch.py'
 REAR_CAMERA_CONFIG_FILE = (
     LAUNCH_FILE.parents[1] / 'config' / 'rear_camera.yaml'
 )
@@ -103,6 +104,36 @@ def test_rear_camera_defaults_to_color_for_yolo() -> None:
 
     assert "default_value='bgr8'" in launch_text
     assert 'output_encoding: bgr8' in config_text
+
+
+def test_rear_tracking_uses_rate_limited_compressed_stream() -> None:
+    root = _root()
+    camera_text = CAMERA_STREAMS_LAUNCH_FILE.read_text(encoding='utf-8')
+    follower = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'person_follow_node'
+    )
+    follower_params = {
+        item.get('name'): item.get('value')
+        for item in follower.findall('param')
+    }
+
+    assert '/rear_camera/tracking/image_raw/compressed' in camera_text
+    assert "prefix=['nice', '-n', '5']" in camera_text
+    assert follower_params['image_topic'] == (
+        '/rear_camera/tracking/image_raw/compressed')
+    assert follower.get('launch-prefix') == 'nice -n 5'
+
+
+def test_high_rate_topic_health_is_aggregated_outside_gateway() -> None:
+    root = _root()
+    monitor = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'topic_health_monitor'
+    )
+
+    assert monitor.get('pkg') == 'mingky_bringup'
+    assert monitor.get('exec') == 'topic_health_monitor'
 
 
 def test_aruco_detector_is_not_started_by_integrated_launch() -> None:

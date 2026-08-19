@@ -30,6 +30,7 @@ from pathlib import Path
 
 import rclpy
 import requests
+from diagnostic_msgs.msg import DiagnosticArray
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
@@ -412,6 +413,10 @@ class EventGateway(Node):
         # 주기를 감시할 토픽 (§7.2). 빈 목록이면 감시하지 않는다 — 팔처럼
         # ROS 가 없는 구성이나, 토픽 구성이 다른 로봇을 위해 열어둔다.
         self.declare_parameter("watched_topics", DEFAULT_WATCHED_TOPICS)
+        # 비우면 호환용 Python 직접 구독을 사용한다. 운영에서는 C++ 모니터가
+        # 고주기 메시지를 집계해 이 저주기 토픽으로 전달한다.
+        self.declare_parameter(
+            "topic_health_topic", "/mingky/topic_health")
         # 형상 보고용 맵 이름 (§7.2 형상 패널). 지문은 /map 에서 직접 뜨고
         # 이 값은 사람이 읽을 이름일 뿐이다 — 이름이 같아도 내용이 다를 수 있고,
         # 판정은 지문으로 한다.
@@ -481,8 +486,18 @@ class EventGateway(Node):
             # 조용히 빠지면 감시가 없는 채로 화면이 정상으로 보인다.
             self.get_logger().error(
                 f"watched_topics 형식 오류 (토픽:타입) — 감시에서 빠집니다: {malformed}")
-        self._topic_ages = topic_watch.TopicAges([name for name, _ in watched])
-        self._subscribe_watched(watched)
+        self._topic_health_lock = threading.Lock()
+        self._topic_health_snapshot: dict[str, dict] = {}
+        health_topic = str(
+            self.get_parameter("topic_health_topic").value).strip()
+        self._topic_ages = None
+        if health_topic:
+            self.create_subscription(
+                DiagnosticArray, health_topic, self._on_topic_health, 1)
+        else:
+            self._topic_ages = topic_watch.TopicAges(
+                [name for name, _ in watched])
+            self._subscribe_watched(watched)
 
         # 지금 돌고 있는 맵 (§7.2 형상 패널). map_server 가 latch 해두므로
         # 구독하는 즉시 한 번 오고, 그 뒤로는 맵을 다시 실을 때만 온다.
@@ -948,6 +963,25 @@ class EventGateway(Node):
                 lambda _msg, name=topic: self._topic_ages.record(name),
                 WATCH_QOS)
 
+    def _on_topic_health(self, message: DiagnosticArray) -> None:
+        """Receive the C++ monitor's low-rate topic timing summary."""
+        snapshot = {}
+        for status in message.status:
+            if not status.name:
+                continue
+            values = {item.key: item.value for item in status.values}
+            try:
+                age = float(values['age_sec'])
+                hz = float(values['hz']) if 'hz' in values else None
+            except (KeyError, TypeError, ValueError):
+                continue
+            snapshot[status.name] = {
+                'age_sec': round(max(0.0, age), 3),
+                'hz': round(max(0.0, hz), 2) if hz is not None else None,
+            }
+        with self._topic_health_lock:
+            self._topic_health_snapshot = snapshot
+
     def _heartbeat_payload(self) -> dict:
         """5초마다 나가는 본문. 작고 자주 바뀌는 것만 싣는다.
 
@@ -974,7 +1008,11 @@ class EventGateway(Node):
         payload["queue_pending"] = self.queue.count()
         # 토픽 나이·주기 (§7.2). 감시 대상이 없으면 빈 객체이고, 서버는 그걸
         # '감시 안 함' 으로 그린다 — 토픽이 죽은 것과 구분해야 한다.
-        payload["topics"] = self._topic_ages.snapshot()
+        if self._topic_ages is not None:
+            payload["topics"] = self._topic_ages.snapshot()
+        else:
+            with self._topic_health_lock:
+                payload["topics"] = dict(self._topic_health_snapshot)
         return payload
 
     def _consume_heartbeat_response(self, response) -> None:

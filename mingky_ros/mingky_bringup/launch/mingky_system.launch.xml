@@ -145,8 +145,10 @@
     <!-- YOLO 환자 클래스·박스로 거리를 연속 추정하고 QR로 보정한다. -->
     <node pkg="mingky_person_follow" exec="person_follow_node"
           name="person_follow_node" output="screen"
-          if="$(var start_patient_follow)">
+          if="$(var start_patient_follow)" launch-prefix="nice -n 5">
         <param name="robot_id" value="$(var robot_id)"/>
+        <param name="image_topic"
+               value="/rear_camera/tracking/image_raw/compressed"/>
         <param name="infer_server_url"
                value="$(var patient_follow_infer_server_url)"/>
         <param name="slow_distance_m"
@@ -189,7 +191,8 @@
     <!-- 화재 감지는 전방 카메라 프레임을 로컬 구독하고 GPU 추론만 HTTP로
          위임한다. 운영 로봇은 robot.env에서 기능과 서버 주소를 명시한다. -->
     <node pkg="mingky_fire_evac" exec="fire_evac_node"
-          name="fire_evac_node" output="screen" if="$(var start_fire_evac)">
+          name="fire_evac_node" output="screen" if="$(var start_fire_evac)"
+          launch-prefix="nice -n 5">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="infer_server_url" value="$(var fire_infer_server_url)"/>
     </node>
@@ -202,6 +205,11 @@
         <!-- 형상 패널이 읽는 이름. 지문은 /map 에서 직접 뜬다. -->
         <param name="map_name" value="$(var map_name)"/>
     </node>
+
+    <!-- 고주기 센서 토픽을 Python Gateway가 직접 역직렬화하지 않도록 C++에서
+         수신 주기만 집계해 1Hz 진단으로 전달한다. -->
+    <node pkg="mingky_bringup" exec="topic_health_monitor"
+          name="topic_health_monitor" output="screen"/>
 
     <!-- 기존 맵과 LiDAR를 비교해 유일한 후보일 때만 AMCL /initialpose를
          발행한다. cmd_vel_localize_probe는 5cm 확인 이동에만 사용한다. -->

@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pinky
+# heartbeat 지연보다 주행 제어 지연의 위험이 크다. 통신은 CPU 포화 때 양보한다.
+CPUWeight=100
+Nice=5
 EnvironmentFile=-/etc/environment
 EnvironmentFile=/etc/mingky/robot.env
 ExecStart=/usr/local/bin/mingky-gateway.sh

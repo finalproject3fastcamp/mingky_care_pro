@@ -2,6 +2,19 @@ cmake_minimum_required(VERSION 3.8)
 project(mingky_bringup)
 
 find_package(ament_cmake REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+
+add_executable(topic_health_monitor src/topic_health_monitor.cpp)
+ament_target_dependencies(
+  topic_health_monitor
+  diagnostic_msgs geometry_msgs nav_msgs rclcpp sensor_msgs
+)
+
+install(TARGETS topic_health_monitor DESTINATION lib/${PROJECT_NAME})
 
 install(
   DIRECTORY launch config map
