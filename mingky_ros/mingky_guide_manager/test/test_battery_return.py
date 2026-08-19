@@ -3,8 +3,10 @@
 import json
 from types import SimpleNamespace
 
+from action_msgs.msg import GoalStatus
 from mingky_guide_manager.guide_manager_node import GuideManager
 from mingky_interfaces.msg import GuideState, SessionStart
+from nav2_msgs.action import ComputePathToPose
 import pytest
 import rclpy
 from rclpy.parameter import Parameter
@@ -561,6 +563,53 @@ def test_rejected_second_waypoint_does_not_clear_active_robot_state(manager):
         'waypoint_name': 'second',
         'error_code': -5,
     }, 0)]
+
+
+def test_waypoint_goal_occupied_is_explained_to_control_ui(manager):
+    node, published = manager
+
+    node._on_navigation_result(String(data=json.dumps({
+        'status': 'failed',
+        'waypoint_name': 'ct_room_waiting',
+        'error_code': ComputePathToPose.Result.GOAL_OCCUPIED,
+        'message': 'costmap 갱신 후에도 목표 위치가 막혀 있습니다.',
+    })))
+
+    assert published == [('waypoint.test_failed', {
+        'waypoint_name': 'ct_room_waiting',
+        'error_code': ComputePathToPose.Result.GOAL_OCCUPIED,
+        'reason': 'goal_occupied',
+        'message': 'costmap 갱신 후에도 목표 위치가 막혀 있습니다.',
+    }, 0)]
+
+
+def test_guidance_goal_occupied_does_not_start_adaptive_recovery(manager):
+    node, published = manager
+    node.session_id = 87
+    node.current_visit = 'CT'
+    node.session_state = GuideState.SESSION_GUIDING
+    node.robot_state = GuideState.ROBOT_MOVING
+    node._nav_generation = 4
+
+    wrapped = SimpleNamespace(
+        status=GoalStatus.STATUS_ABORTED,
+        result=SimpleNamespace(
+            error_code=ComputePathToPose.Result.GOAL_OCCUPIED),
+    )
+    node._on_goal_result(
+        SimpleNamespace(result=lambda: wrapped),
+        4, 'ct_room_goal', False, 87,
+    )
+
+    assert node.robot_state == GuideState.ROBOT_IDLE
+    assert node.session_state == GuideState.SESSION_CONFIRMED
+    assert node.nav.sent == []
+    assert published == [('nav.goal_aborted', {
+        'visit_name': 'CT',
+        'error_code': ComputePathToPose.Result.GOAL_OCCUPIED,
+        'reason': 'goal_occupied',
+        'message': '전역 costmap을 갱신한 뒤에도 안내 목표가 장애물 셀로 확인됐습니다.',
+    }, 87)]
 
 
 def test_waiting_qr_completes_step_and_starts_next_visit(manager):

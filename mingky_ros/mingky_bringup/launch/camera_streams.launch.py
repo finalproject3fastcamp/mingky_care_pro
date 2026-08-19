@@ -77,11 +77,16 @@ def _rear_stream_action() -> Node:
         output='screen',
         parameters=[{
             'image_topic': '/rear_camera/image_raw',
+            'compressed_topic': LaunchConfiguration(
+                'tracking_compressed_topic'),
+            'compressed_jpeg_quality': LaunchConfiguration(
+                'tracking_jpeg_quality'),
             'port': LaunchConfiguration('rear_preview_port'),
             'max_fps': LaunchConfiguration('preview_max_fps'),
             'max_width': LaunchConfiguration('preview_max_width'),
             'jpeg_quality': LaunchConfiguration('preview_jpeg_quality'),
         }],
+        prefix=['nice -n 5'],
     )
 
 
@@ -132,9 +137,14 @@ def generate_launch_description() -> LaunchDescription:
             default_value='15.0',
             description='전방 준비 신호 최대 대기 시간. 초과 시 후방은 계속 시작',
         ),
-        DeclareLaunchArgument('preview_max_fps', default_value='10.0'),
+        DeclareLaunchArgument('preview_max_fps', default_value='5.0'),
         DeclareLaunchArgument('preview_max_width', default_value='640'),
         DeclareLaunchArgument('preview_jpeg_quality', default_value='60'),
+        DeclareLaunchArgument(
+            'tracking_compressed_topic',
+            default_value='/rear_camera/tracking/image_raw/compressed',
+        ),
+        DeclareLaunchArgument('tracking_jpeg_quality', default_value='70'),
         GroupAction(
             actions=_rear_actions(),
             condition=UnlessCondition(

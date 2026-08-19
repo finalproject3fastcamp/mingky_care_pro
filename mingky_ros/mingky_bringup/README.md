@@ -190,6 +190,26 @@ YOLO를 쓰지 않으면 URL을 비워 QR 거리 단독으로 실행할 수 있�
 세션 전체와 Waypoint 시험 주행 중에는 시작할 수 없고, 재탐색이 실행 중일 때도
 새 안내·시험 주행을 시작할 수 없습니다.
 
+재탐색은 충전소 좌표나 AMCL particle의 단순 수렴을 정답으로 사용하지 않습니다.
+현재 `/map`과 `/scan`으로 전역 위치 후보 Top-K를 만들고, 1등 점수와 2등과의
+차이가 모두 충분한지 확인합니다. 후보가 비슷하면 앞뒤의 안전한 방향으로 5cm씩,
+최대 15cm만 움직이며 새 scan으로 후보를 제거합니다. 같은 후보가 연속 확인된
+경우에만 `/initialpose`를 발행하고 AMCL은 이후 추적을 담당합니다.
+
+고정 초기 위치가 없으면 `map→odom`이 생기기 전에는 Nav2 planner가 active가
+될 수 없습니다. 재탐색은 이 상태에서도 AMCL·map·scan·odom만으로 실행되며,
+검증된 위치를 적용한 다음 중단됐던 navigation lifecycle을 자동으로 초기화하고
+다시 활성화합니다.
+
+AMCL 인수 확인은 정지 상태에서도 도착하는 첫 새 particle을 기준으로 합니다.
+LiDAR 후보는 앞 단계에서 두 scan으로 이미 확인했으므로 AMCL particle의 두 번째
+자발 갱신을 요구하지 않으며, 위치 퍼짐 15cm·seed 차이 20cm·방향 20도 안이면
+주행 가능한 초기 위치로 인정합니다.
+
+대칭 복도처럼 짧게 움직여도 구분할 수 없는 경우에는 잘못된 위치를 선택하지 않고
+`ambiguous_candidates`로 실패합니다. 그 밖에 `no_map`, `no_scan`, `stale_scan`,
+`no_candidates`, `probe_blocked`, `timeout`, `amcl_seed_rejected`로 원인을 구분합니다.
+
 ## QR 안내 상태머신 테스트
 
 QR을 인식하면 Guide Manager는 세션을 `patient_confirmed` 상태로 저장하고

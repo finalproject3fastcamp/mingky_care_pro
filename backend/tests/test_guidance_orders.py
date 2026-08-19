@@ -210,6 +210,13 @@ def test_fire_alarm_reset_command_is_part_of_the_contract():
     assert command.argument == 'run'
 
 
+def test_navigation_and_fire_evacuation_cancel_commands_are_in_contract():
+    assert OrderIn(command='cancel_navigation', argument='run').command \
+        == 'cancel_navigation'
+    assert OrderIn(command='cancel_fire_evacuation', argument='run').command \
+        == 'cancel_fire_evacuation'
+
+
 def test_fire_alarm_reset_does_not_overwrite_safety_or_motion_command():
     assert orders._slot('fire_alarm_reset') is not orders._slot('set_mode')
     assert orders._slot('fire_alarm_reset') is not orders._slot('goto')

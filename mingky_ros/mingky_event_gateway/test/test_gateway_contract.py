@@ -25,6 +25,7 @@ from mingky_event_gateway.gateway_node import (
     send_outcome,
 )
 from mingky_interfaces.msg import GuideState, QrObservation
+from std_msgs.msg import Bool
 
 
 def test_system_commands_only_target_fixed_systemd_actions():
@@ -210,6 +211,30 @@ def test_cancel_guidance_never_cancels_a_different_current_session():
 
     assert handled is True
     assert published == []
+
+
+def test_cancel_navigation_dispatches_stop_signal():
+    published = []
+    gateway = SimpleNamespace(
+        _navigation_cancel_pub=SimpleNamespace(
+            publish=lambda message: published.append(message)),
+        get_logger=lambda: SimpleNamespace(
+            info=lambda message: None,
+            warn=lambda message: None,
+            error=lambda message: None,
+        ),
+    )
+
+    handled = EventGateway._dispatch(gateway, {
+        'order_id': 'cancel-nav',
+        'command': 'cancel_navigation',
+        'argument': 'run',
+    })
+
+    assert handled is True
+    assert len(published) == 1
+    assert isinstance(published[0], Bool)
+    assert published[0].data is True
 
 
 def test_heartbeat_guard_triggers_once_after_sustained_failure():

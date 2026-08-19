@@ -156,6 +156,15 @@ def test_full_open_scan_creates_24_directions() -> None:
         'forward', 'left_015', 'right_015', 'left_030', 'right_030', 'rear'}
 
 
+def test_reverse_candidates_can_be_disabled() -> None:
+    result = candidates(
+        scan(default=1.0), config=SelectorConfig(allow_reverse=False))
+
+    assert result
+    assert all(math.cos(candidate.bearing_rad) >= -1.0e-9 for candidate in result)
+    assert all(not candidate.name.startswith('rear') for candidate in result)
+
+
 def test_finds_escape_between_old_45_degree_directions() -> None:
     ranges = scan()
     open_sector(ranges, 30, 1.0)

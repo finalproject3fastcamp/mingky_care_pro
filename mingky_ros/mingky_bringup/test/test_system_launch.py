@@ -25,6 +25,7 @@ ROBOT_ENV_EXAMPLE = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'robot.env.example'
 )
 REAR_CAMERA_LAUNCH_FILE = LAUNCH_FILE.parent / 'rear_camera.launch.py'
+CAMERA_STREAMS_LAUNCH_FILE = LAUNCH_FILE.parent / 'camera_streams.launch.py'
 REAR_CAMERA_CONFIG_FILE = (
     LAUNCH_FILE.parents[1] / 'config' / 'rear_camera.yaml'
 )
@@ -69,7 +70,7 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     assert _argument(root, 'qr_preview_port').get('default') == '8091'
     assert _argument(root, 'rear_preview_port').get('default') == '8092'
     assert _argument(root, 'front_camera_ready_timeout').get('default') == '15.0'
-    assert _argument(root, 'camera_preview_max_fps').get('default') == '10.0'
+    assert _argument(root, 'camera_preview_max_fps').get('default') == '5.0'
     assert _argument(root, 'start_rear_camera_stream').get('default') == 'true'
     qr_distance_arg = _argument(root, 'start_rear_qr_distance')
     assert qr_distance_arg.get('default') == 'true'
@@ -105,6 +106,36 @@ def test_rear_camera_defaults_to_color_for_yolo() -> None:
     assert 'output_encoding: bgr8' in config_text
 
 
+def test_rear_tracking_uses_rate_limited_compressed_stream() -> None:
+    root = _root()
+    camera_text = CAMERA_STREAMS_LAUNCH_FILE.read_text(encoding='utf-8')
+    follower = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'person_follow_node'
+    )
+    follower_params = {
+        item.get('name'): item.get('value')
+        for item in follower.findall('param')
+    }
+
+    assert '/rear_camera/tracking/image_raw/compressed' in camera_text
+    assert "prefix=['nice -n 5']" in camera_text
+    assert follower_params['image_topic'] == (
+        '/rear_camera/tracking/image_raw/compressed')
+    assert follower.get('launch-prefix') == 'nice -n 5'
+
+
+def test_high_rate_topic_health_is_aggregated_outside_gateway() -> None:
+    root = _root()
+    monitor = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'topic_health_monitor'
+    )
+
+    assert monitor.get('pkg') == 'mingky_bringup'
+    assert monitor.get('exec') == 'topic_health_monitor'
+
+
 def test_aruco_detector_is_not_started_by_integrated_launch() -> None:
     system_text = LAUNCH_FILE.read_text(encoding='utf-8')
     camera_text = (
@@ -121,7 +152,9 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
     root = _root()
 
     assert _argument(root, 'recovery_mode').get('default') == 'adaptive'
-    assert _argument(root, 'planner_mode').get('default') == 'navfn'
+    assert _argument(root, 'planner_mode').get('default') == 'smac2d'
+    assert _argument(
+        root, 'recovery_retry_delay_sec').get('default') == '0.3'
     managers = {
         item.get('name'): item for item in root.findall('node')
         if item.get('name') in ('guide_manager', 'navigation_manager')
@@ -133,6 +166,8 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
         }
         assert params['recovery_mode'] == '$(var recovery_mode)'
         assert params['planner_mode'] == '$(var planner_mode)'
+        assert params['recovery_retry_delay_sec'] == (
+            '$(var recovery_retry_delay_sec)')
 
 
 def test_low_obstacle_sidestep_is_opt_in() -> None:

@@ -12,7 +12,15 @@ mingky_ros
 # Nav2 가 쓰는 것과 같은 파일이라 복사본을 두지 않는다.
 !mingky_ros/mingky_bringup/map
 !mingky_ros/mingky_bringup/config/waypoints
+# 백엔드 약국 API가 정책 목록과 트레이 계수 브리지를 런타임에 읽는다.
+# 로봇 제어/학습 파일 전체는 제외하고 필요한 web 디렉터리만 빌드 컨텍스트에 둔다.
 omx
+!omx/
+omx/*
+!omx/web/
+omx/web/*
+!omx/web/policies.json
+!omx/web/count_tray.py
 pinky
 tools
 database/.env

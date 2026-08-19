@@ -2,7 +2,8 @@
 
     관제 wss ──→ teleop_bridge ──→ /cmd_vel_teleop_raw → teleop_limiter → twist_mux
     관제 wss ──→ teleop_bridge ──→ /initialpose  (지도에서 위치를 찍어줄 때)
-    관제 wss ←── teleop_bridge ←── /amcl_pose, /scan, /particle_cloud, /plan
+    관제 wss ←── teleop_bridge ←── /amcl_pose, /scan, /particle_cloud,
+                                   /navigation_manager/{route,recovery}_plan
 
 ## 왜 로봇이 서버로 거는가
 
@@ -54,7 +55,8 @@ SCAN_TOPIC = "/scan"
 # Nav2 Jazzy 는 nav2_msgs/ParticleCloud 로 /particle_cloud 에 낸다.
 # 옛 이름 /particlecloud (geometry_msgs/PoseArray) 는 발행자가 없다.
 PARTICLE_TOPIC = "/particle_cloud"
-PLAN_TOPIC = "/plan"
+ROUTE_PLAN_TOPIC = "/navigation_manager/route_plan"
+RECOVERY_PLAN_TOPIC = "/navigation_manager/recovery_plan"
 APPLIED_MODE_TOPIC = "/teleop_limiter/applied_mode"
 SCAN_BASE_FRAME = "base_footprint"
 
@@ -125,7 +127,15 @@ class TeleopBridge(Node):
         self.create_subscription(
             ParticleCloud, PARTICLE_TOPIC, self._on_particles,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
-        self.create_subscription(Path, PLAN_TOPIC, self._on_plan, 1)
+        plan_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.create_subscription(
+            Path, ROUTE_PLAN_TOPIC, self._on_route_plan, plan_qos)
+        self.create_subscription(
+            Path, RECOVERY_PLAN_TOPIC, self._on_recovery_plan, plan_qos)
         self.create_subscription(
             String,
             APPLIED_MODE_TOPIC,
@@ -139,6 +149,7 @@ class TeleopBridge(Node):
         self._scan = None
         self._particles = None
         self._plan = None
+        self._recovery_plan = None
         self._applied_mode = None
         self._applied_mode_at = None
 
@@ -226,17 +237,23 @@ class TeleopBridge(Node):
                        for p in particles[::step]],
         }
 
-    def _on_plan(self, msg: Path):
+    @staticmethod
+    def _path_payload(msg: Path, kind: str) -> dict:
         poses = msg.poses
         if not poses:
-            self._plan = {"type": "plan", "points": []}
-            return
+            return {"type": kind, "points": []}
         step = max(1, len(poses) // PLAN_POINTS)
-        self._plan = {
-            "type": "plan",
+        return {
+            "type": kind,
             "points": [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)]
                        for p in poses[::step]],
         }
+
+    def _on_route_plan(self, msg: Path):
+        self._plan = self._path_payload(msg, "plan")
+
+    def _on_recovery_plan(self, msg: Path):
+        self._recovery_plan = self._path_payload(msg, "recovery_plan")
 
     def _loop(self):
         if websocket is None:
@@ -286,7 +303,12 @@ class TeleopBridge(Node):
 
             if now - last_diag >= self.diag_interval:
                 last_diag = now
-                for payload in (self._scan, self._particles, self._plan):
+                for payload in (
+                    self._scan,
+                    self._particles,
+                    self._plan,
+                    self._recovery_plan,
+                ):
                     if payload is not None:
                         socket.send(json.dumps(payload))
 

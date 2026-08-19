@@ -284,6 +284,16 @@ export function SystemDashboard() {
             disabled={busy || !online || mobileRobot?.system_state !== 'active'
               || mobileRobot?.fire_alarm_active !== true}
             onClick={() => issue(
+              'cancel_fire_evacuation',
+              '비상대피 주행 중단',
+              `${selectedRobotId}의 비상대피 이동을 중단할까요?\n화재 경보는 안전을 위해 계속 유지됩니다.`,
+            )}>
+            비상대피 주행 중단
+          </button>
+          <button type="button" className="btn danger"
+            disabled={busy || !online || mobileRobot?.system_state !== 'active'
+              || mobileRobot?.fire_alarm_active !== true}
+            onClick={() => issue(
               'fire_alarm_reset',
               '화재 경보 해제',
               `${selectedRobotId}의 화재 경보를 해제할까요?\n현장 안전과 대피 종료를 먼저 확인하세요.`,

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Mapping
 
 from action_msgs.msg import GoalStatus
+from builtin_interfaces.msg import Duration
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from geometry_msgs.msg import PoseStamped
 from mingky_guide_manager.low_obstacle import (
@@ -23,11 +24,14 @@ from mingky_guide_manager.low_obstacle_driver import SidestepActionDriver
 from mingky_interfaces.msg import GuideState
 from mingky_smart_recovery.selector import (
     EscapeCandidate,
+    SelectorConfig,
     candidate_to_map,
     select_diverse_candidates,
     select_escape_candidates,
 )
+from mingky_smart_recovery.path_validation import validate_recovery_path
 from nav2_msgs.action import ComputePathToPose, DriveOnHeading, NavigateToPose, Spin
+from nav_msgs.msg import Path as NavPath
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient
@@ -42,7 +46,6 @@ BUSY_ERROR = -5
 SAFETY_ERROR = -6
 CLINICAL_ERROR = -7
 LOCALIZATION_ERROR = -8
-RECOVERY_ERROR = -9
 LOW_OBSTACLE_ERROR = -10
 
 
@@ -71,10 +74,11 @@ class NavigationManager(Node):
         self.declare_parameter('recovery_scan_stale_sec', 1.0)
         self.declare_parameter('recovery_candidate_limit', 4)
         self.declare_parameter('recovery_candidate_separation_deg', 30.0)
-        self.declare_parameter('recovery_retry_delay_sec', 5.0)
-        # 임상 안내와 달리 엔지니어 시험은 유한 시간에 성공/실패가
-        # 나야 한다.
-        self.declare_parameter('recovery_max_attempts', 3)
+        self.declare_parameter('recovery_retry_delay_sec', 0.3)
+        self.declare_parameter('recovery_near_goal_distance_m', 0.20)
+        self.declare_parameter('recovery_cooldown_sec', 3.0)
+        self.declare_parameter('recovery_direct_escape_distance_m', 0.12)
+        self.declare_parameter('recovery_direct_escape_speed_mps', 0.10)
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -134,8 +138,17 @@ class NavigationManager(Node):
         ))
         self.recovery_retry_delay_sec = max(
             0.1, float(self.get_parameter('recovery_retry_delay_sec').value))
-        self.recovery_max_attempts = max(
-            1, int(self.get_parameter('recovery_max_attempts').value))
+        self.recovery_near_goal_distance_m = max(
+            0.0, float(self.get_parameter(
+                'recovery_near_goal_distance_m').value))
+        self.recovery_cooldown_sec = max(
+            0.0, float(self.get_parameter('recovery_cooldown_sec').value))
+        self.recovery_direct_escape_distance_m = max(
+            0.05, float(self.get_parameter(
+                'recovery_direct_escape_distance_m').value))
+        self.recovery_direct_escape_speed_mps = max(
+            0.03, float(self.get_parameter(
+                'recovery_direct_escape_speed_mps').value))
         self.low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
         if self.low_obstacle_mode not in ('disabled', 'sidestep'):
@@ -186,6 +199,7 @@ class NavigationManager(Node):
         self._goal_handle = None
         self._goal_result_future = None
         self._recovery_retry_timer = None
+        self._last_recovery_completed_ns = 0
         self._latest_scan = None
         self._latest_scan_received_ns = 0
         self._latest_nav_pose = None
@@ -196,6 +210,10 @@ class NavigationManager(Node):
         self._test_context: dict | None = None
         self._pending_low_obstacle_context: dict | None = None
         self._low_obstacle_confirmed_count = 0
+        # Nav2의 /plan은 원래 경로, 복구 후보 검증, 실제 복구 경로가 같은
+        # 토픽을 공유한다. 관제에서 세 종류가 섞이지 않도록 현재 목적을
+        # 구분해 별도 토픽으로 다시 발행한다.
+        self._plan_phase = 'idle'
 
         state_qos = QoSProfile(
             depth=1,
@@ -204,6 +222,10 @@ class NavigationManager(Node):
         )
         self.result_pub = self.create_publisher(String, '~/result', 10)
         self.active_pub = self.create_publisher(Bool, '~/active', state_qos)
+        self.route_plan_pub = self.create_publisher(
+            NavPath, '~/route_plan', state_qos)
+        self.recovery_plan_pub = self.create_publisher(
+            NavPath, '~/recovery_plan', state_qos)
         self.obstacle_stop_pub = self.create_publisher(
             Bool, '/emergency_stop/obstacle', 10)
         self.create_subscription(String, '~/goto', self._on_goto, 10)
@@ -222,6 +244,7 @@ class NavigationManager(Node):
             self._on_scan,
             10,
         )
+        self.create_subscription(NavPath, '/plan', self._on_nav_plan, 10)
         range_qos = QoSProfile(depth=5)
         range_qos.reliability = ReliabilityPolicy.BEST_EFFORT
         self.create_subscription(
@@ -237,6 +260,11 @@ class NavigationManager(Node):
         self.low_obstacle_spin = ActionClient(self, Spin, 'spin')
         self.low_obstacle_drive = ActionClient(
             self, DriveOnHeading, 'drive_on_heading')
+        # 전역 planner가 현재 셀을 occupied로 판단하면 어떤 탈출 후보도
+        # ComputePathToPose를 통과할 수 없다. 이때도 Nav2 behavior server의
+        # 충돌 검사를 유지한 채 짧게 회전/전진할 수 있도록 같은 액션을 쓴다.
+        self.recovery_spin = self.low_obstacle_spin
+        self.recovery_drive = self.low_obstacle_drive
         self.low_obstacle_driver = SidestepActionDriver(
             self,
             self.low_obstacle_spin,
@@ -594,12 +622,11 @@ class NavigationManager(Node):
 
     def _start_test(self, name: str, waypoint: dict) -> None:
         if self._active:
-            self._publish_result('rejected', {
-                'waypoint_name': name,
-                'error_code': BUSY_ERROR,
-                'message': '다른 Waypoint 시험 주행이 진행 중입니다.',
-            })
-            return
+            self._cancel_active(
+                BUSY_ERROR,
+                '새 Waypoint가 요청되어 기존 시험 주행을 취소했습니다.',
+                status='canceled',
+            )
         if self._clinical_active:
             self._publish_result('rejected', {
                 'waypoint_name': name,
@@ -668,6 +695,8 @@ class NavigationManager(Node):
         if not self.nav.wait_for_server(timeout_sec=3.0):
             self._finish('failed', -3, 'Nav2 액션 서버가 없습니다.')
             return
+        self._plan_phase = 'original'
+        self.recovery_plan_pub.publish(NavPath())
         goal = NavigateToPose.Goal()
         goal.pose = self._goal_pose()
         if self.recovery_mode == 'adaptive' or self.planner_mode == 'smac2d':
@@ -712,12 +741,22 @@ class NavigationManager(Node):
         self._goal_handle = None
         self._goal_result_future = None
         try:
-            status = int(future.result().status)
+            wrapped = future.result()
+            status = int(wrapped.status)
+            nav_result = getattr(wrapped, 'result', None)
+            nav_error_code = int(getattr(nav_result, 'error_code', 0))
         except Exception as exc:  # noqa: BLE001
             self._finish('failed', -4, f'결과 수신 중 예외: {exc}')
             return
         if status == GoalStatus.STATUS_SUCCEEDED:
             self._finish('succeeded', 0, 'Waypoint 시험 주행에 도착했습니다.')
+            return
+        if (status == GoalStatus.STATUS_ABORTED
+                and nav_error_code == ComputePathToPose.Result.GOAL_OCCUPIED):
+            self._finish(
+                'failed', nav_error_code,
+                '전역 costmap을 갱신한 뒤에도 Waypoint 목표가 '
+                '장애물 셀로 확인됐습니다.')
             return
         context = self._test_context
         if (status == GoalStatus.STATUS_ABORTED
@@ -725,12 +764,6 @@ class NavigationManager(Node):
                 and context is not None):
             attempt = int(context.get('recovery_attempt', 0))
             failures = dict(context.get('recovery_failures') or {})
-            if attempt >= self.recovery_max_attempts:
-                self._finish(
-                    'failed', RECOVERY_ERROR,
-                    f'Adaptive Recovery 최대 {self.recovery_max_attempts}회 후에도 '
-                    'Waypoint에 도달하지 못했습니다.')
-                return
             if self._start_adaptive_recovery(attempt, failures):
                 return
             self._schedule_recovery_retry(
@@ -765,6 +798,21 @@ class NavigationManager(Node):
             return False
 
         pose = self._latest_nav_pose.pose
+        goal_distance = math.hypot(
+            float(self._test_context['x']) - pose.position.x,
+            float(self._test_context['y']) - pose.position.y,
+        )
+        if goal_distance <= self.recovery_near_goal_distance_m:
+            self.get_logger().info(
+                f'목표까지 {goal_distance:.2f}m로 가까워 옆걸음 복구 없이 '
+                '원래 목표의 최종 정렬을 계속합니다.')
+            return False
+        cooldown_ns = int(self.recovery_cooldown_sec * 1_000_000_000)
+        if (self._last_recovery_completed_ns > 0
+                and now_ns - self._last_recovery_completed_ns < cooldown_ns):
+            self.get_logger().info(
+                'Adaptive Recovery 직후 cooldown 동안 원래 목표를 계속합니다.')
+            return False
         robot_yaw = _quat_to_yaw(pose.orientation.z, pose.orientation.w)
         map_goal_angle = math.atan2(
             float(self._test_context['y']) - pose.position.y,
@@ -783,6 +831,10 @@ class NavigationManager(Node):
                     math.cos(map_goal_angle - robot_yaw),
                 ),
                 failures=failures,
+                # allow_reverse는 속도 명령이 아니라 로봇 뒤쪽 공간도 탈출
+                # 후보로 살필지를 뜻한다. 실제 주행 후진은 MPPI vx_min=0으로
+                # 금지하고, 뒤쪽 후보는 Rotation Shim이 회전 후 전진한다.
+                config=SelectorConfig(allow_reverse=True),
             ),
             limit=self.recovery_candidate_limit,
             minimum_separation_rad=self.recovery_candidate_separation_rad,
@@ -802,8 +854,7 @@ class NavigationManager(Node):
             'generation': self._generation,
         }
         self.get_logger().warn(
-            f'Waypoint Adaptive Recovery {recovery_attempt + 1}/'
-            f'{self.recovery_max_attempts}: '
+            f'Waypoint Adaptive Recovery {recovery_attempt + 1}회차: '
             f'{len(candidates)}개 탈출 후보 경로를 검증합니다.')
         self._validate_next_recovery_candidate(recovery)
         return True
@@ -833,14 +884,11 @@ class NavigationManager(Node):
         index = int(recovery['index'])
         candidates = recovery['candidates']
         if index >= len(candidates):
-            self._schedule_recovery_retry(
-                int(recovery['recovery_attempt']) + 1,
-                recovery['failures'],
-                '검증 가능한 탈출 경로가 없습니다.',
-            )
+            self._start_direct_recovery_escape(recovery)
             return
         candidate = candidates[index]
         recovery['index'] = index + 1
+        self._plan_phase = 'validation'
         goal = ComputePathToPose.Goal()
         goal.goal = self._candidate_pose(recovery, candidate)
         goal.planner_id = (
@@ -874,19 +922,37 @@ class NavigationManager(Node):
             self, future, recovery: dict, candidate: EscapeCandidate) -> None:
         if recovery['generation'] != self._generation:
             return
+        validation = None
         try:
             wrapped = future.result()
             path_result = wrapped.result
+            goal_pose = self._candidate_pose(recovery, candidate).pose.position
+            points = [
+                (float(item.pose.position.x), float(item.pose.position.y))
+                for item in path_result.path.poses
+            ]
+            validation = validate_recovery_path(
+                points,
+                expected_start=(recovery['robot_x'], recovery['robot_y']),
+                expected_goal=(float(goal_pose.x), float(goal_pose.y)),
+                requested_distance_m=candidate.distance_m,
+            )
             valid = (
                 wrapped.status == GoalStatus.STATUS_SUCCEEDED
                 and path_result.error_code == ComputePathToPose.Result.NONE
-                and len(path_result.path.poses) >= 2
+                and validation.valid
             )
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(
                 f'탈출 경로 결과 실패({candidate.name}): {exc}')
             valid = False
         if not valid:
+            if validation is not None and not validation.valid:
+                self.get_logger().warn(
+                    f'탈출 경로 거부({candidate.name}): '
+                    f'시작오차={validation.start_error_m:.2f}m, '
+                    f'끝점오차={validation.endpoint_error_m:.2f}m, '
+                    f'실이동={validation.displacement_m:.2f}m')
             self._reject_recovery_candidate(recovery, candidate)
             return
         self.get_logger().info(
@@ -902,6 +968,7 @@ class NavigationManager(Node):
 
     def _send_recovery_goal(
             self, recovery: dict, candidate: EscapeCandidate) -> None:
+        self._plan_phase = 'recovery'
         self._generation += 1
         recovery['generation'] = self._generation
         recovery['active_candidate'] = candidate
@@ -916,6 +983,148 @@ class NavigationManager(Node):
         )
         future.add_done_callback(
             lambda done: self._on_recovery_goal_response(done, recovery))
+
+    def _start_direct_recovery_escape(self, recovery: dict) -> None:
+        """Planner 시작 셀이 막혀도 LiDAR 방향으로 짧게 탈출한다.
+
+        전역 경로 검증이 전부 실패한 경우에만 사용한다. 무검증 cmd_vel을
+        발행하지 않고 Nav2 Spin/DriveOnHeading을 사용하므로 local costmap의
+        footprint 충돌 검사는 그대로 적용된다.
+        """
+        candidates = recovery.get('candidates') or []
+        if not candidates:
+            self._schedule_recovery_retry(
+                int(recovery['recovery_attempt']) + 1,
+                recovery['failures'],
+                'LiDAR 탈출 후보도 없습니다.',
+            )
+            return
+        candidate = min(
+            candidates,
+            key=lambda item: (
+                recovery['failures'].get(item.name, 0),
+                abs(item.bearing_rad),
+                -item.score,
+            ),
+        )
+        distance = min(
+            candidate.distance_m, self.recovery_direct_escape_distance_m)
+        direct_candidate = EscapeCandidate(
+            name=candidate.name,
+            bearing_rad=candidate.bearing_rad,
+            distance_m=distance,
+            x_m=distance * math.cos(candidate.bearing_rad),
+            y_m=distance * math.sin(candidate.bearing_rad),
+            clearance_m=candidate.clearance_m,
+            score=candidate.score,
+        )
+        recovery['active_candidate'] = direct_candidate
+        self._plan_phase = 'recovery'
+        self._generation += 1
+        recovery['generation'] = self._generation
+        self.get_logger().warn(
+            f'Planner 시작 셀이 막혀 {direct_candidate.name} 방향으로 '
+            f'{distance:.2f}m 즉시 탈출을 시도합니다.')
+
+        if abs(direct_candidate.bearing_rad) < math.radians(8.0):
+            self._send_direct_recovery_drive(recovery)
+            return
+        if not self.recovery_spin.wait_for_server(timeout_sec=0.2):
+            self._recovery_motion_failed(recovery)
+            return
+        goal = Spin.Goal()
+        goal.target_yaw = float(direct_candidate.bearing_rad)
+        goal.time_allowance = Duration(sec=3)
+        future = self.recovery_spin.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_direct_recovery_spin_response(
+                done, recovery))
+
+    def _on_direct_recovery_spin_response(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 회전 전송 실패: {exc}')
+            self._recovery_motion_failed(recovery)
+            return
+        if not handle.accepted:
+            self._recovery_motion_failed(recovery)
+            return
+        self._goal_handle = handle
+        handle.get_result_async().add_done_callback(
+            lambda done: self._on_direct_recovery_spin_result(
+                done, recovery))
+
+    def _on_direct_recovery_spin_result(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        self._goal_handle = None
+        try:
+            wrapped = future.result()
+            succeeded = (
+                int(wrapped.status) == GoalStatus.STATUS_SUCCEEDED
+                and int(getattr(wrapped.result, 'error_code', 0)) == 0
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 회전 결과 실패: {exc}')
+            succeeded = False
+        if not succeeded:
+            self._recovery_motion_failed(recovery)
+            return
+        self._send_direct_recovery_drive(recovery)
+
+    def _send_direct_recovery_drive(self, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        if not self.recovery_drive.wait_for_server(timeout_sec=0.2):
+            self._recovery_motion_failed(recovery)
+            return
+        candidate = recovery['active_candidate']
+        goal = DriveOnHeading.Goal()
+        goal.target.x = float(candidate.distance_m)
+        goal.speed = float(self.recovery_direct_escape_speed_mps)
+        goal.time_allowance = Duration(sec=3)
+        future = self.recovery_drive.send_goal_async(goal)
+        future.add_done_callback(
+            lambda done: self._on_direct_recovery_drive_response(
+                done, recovery))
+
+    def _on_direct_recovery_drive_response(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 이동 전송 실패: {exc}')
+            self._recovery_motion_failed(recovery)
+            return
+        if not handle.accepted:
+            self._recovery_motion_failed(recovery)
+            return
+        self._goal_handle = handle
+        handle.get_result_async().add_done_callback(
+            lambda done: self._on_direct_recovery_drive_result(
+                done, recovery))
+
+    def _on_direct_recovery_drive_result(self, future, recovery: dict) -> None:
+        if recovery['generation'] != self._generation:
+            return
+        self._goal_handle = None
+        try:
+            wrapped = future.result()
+            succeeded = (
+                int(wrapped.status) == GoalStatus.STATUS_SUCCEEDED
+                and int(getattr(wrapped.result, 'error_code', 0)) == 0
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'직접 탈출 이동 결과 실패: {exc}')
+            succeeded = False
+        if not succeeded:
+            self._recovery_motion_failed(recovery)
+            return
+        self._complete_recovery_motion(recovery)
 
     def _on_recovery_goal_response(self, future, recovery: dict) -> None:
         if recovery['generation'] != self._generation:
@@ -947,11 +1156,15 @@ class NavigationManager(Node):
         if status != GoalStatus.STATUS_SUCCEEDED:
             self._recovery_motion_failed(recovery)
             return
+        self._complete_recovery_motion(recovery)
+
+    def _complete_recovery_motion(self, recovery: dict) -> None:
         if self._test_context is None:
             return
         attempt = int(recovery['recovery_attempt']) + 1
         self._test_context['recovery_attempt'] = attempt
         self._test_context['recovery_failures'] = dict(recovery['failures'])
+        self._last_recovery_completed_ns = self.get_clock().now().nanoseconds
         self.get_logger().info(
             '임시 탈출 지점 도착; 원래 Waypoint 시험 목표를 '
             '다시 전송합니다.')
@@ -962,9 +1175,6 @@ class NavigationManager(Node):
         failures = recovery['failures']
         failures[candidate.name] = failures.get(candidate.name, 0) + 1
         next_attempt = int(recovery['recovery_attempt']) + 1
-        if next_attempt < self.recovery_max_attempts and self._start_adaptive_recovery(
-                next_attempt, failures):
-            return
         self._schedule_recovery_retry(
             next_attempt, failures, '탈출 지점 이동에 실패했습니다.')
 
@@ -972,12 +1182,6 @@ class NavigationManager(Node):
             self, recovery_attempt: int, failures: Mapping[str, int],
             reason: str) -> None:
         if not self._active or self._test_context is None:
-            return
-        if recovery_attempt >= self.recovery_max_attempts:
-            self._finish(
-                'failed', RECOVERY_ERROR,
-                f'{reason} Adaptive Recovery 최대 '
-                f'{self.recovery_max_attempts}회에 도달했습니다.')
             return
         self._cancel_recovery_retry()
         self._generation += 1
@@ -1018,7 +1222,8 @@ class NavigationManager(Node):
             if key in context
         }
 
-    def _cancel_active(self, error_code: int, message: str) -> None:
+    def _cancel_active(
+            self, error_code: int, message: str, *, status: str = 'failed') -> None:
         context = self._public_test_context()
         self._generation += 1
         self._cancel_recovery_retry()
@@ -1029,8 +1234,9 @@ class NavigationManager(Node):
         self._goal_result_future = None
         self._active = False
         self._test_context = None
+        self._clear_test_plans()
         self._publish_active()
-        self._publish_result('failed', {
+        self._publish_result(status, {
             **context,
             'error_code': error_code,
             'message': message,
@@ -1044,6 +1250,7 @@ class NavigationManager(Node):
         self._goal_result_future = None
         self._active = False
         self._test_context = None
+        self._clear_test_plans()
         self._publish_active()
         self._publish_result(status, {
             **context,
@@ -1053,6 +1260,21 @@ class NavigationManager(Node):
 
     def _publish_active(self) -> None:
         self.active_pub.publish(Bool(data=self._active))
+
+    def _on_nav_plan(self, msg: NavPath) -> None:
+        """후보 검증 경로를 숨기고 원래 경로와 실제 복구 경로만 분리한다."""
+        if self._active and self._plan_phase == 'validation':
+            return
+        if self._active and self._plan_phase == 'recovery':
+            self.recovery_plan_pub.publish(msg)
+            return
+        self.route_plan_pub.publish(msg)
+
+    def _clear_test_plans(self) -> None:
+        self._plan_phase = 'idle'
+        empty = NavPath()
+        self.route_plan_pub.publish(empty)
+        self.recovery_plan_pub.publish(empty)
 
     def _publish_result(self, status: str, payload: dict) -> None:
         self.result_pub.publish(String(data=json.dumps({

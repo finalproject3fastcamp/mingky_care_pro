@@ -11,6 +11,8 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend/app backend/app
+COPY omx/web/policies.json omx/web/policies.json
+COPY omx/web/count_tray.py omx/web/count_tray.py
 # 파일 하나가 아니라 디렉터리 전체다. 서버가 읽는 정본이 다섯 개로 늘었고
 # (event_codes · duplicate_node_severity · topic_watch · servo_limits ·
 # alert_routes), 하나씩 적으면 새 파일을 추가한 사람이 여기를 잊는다.

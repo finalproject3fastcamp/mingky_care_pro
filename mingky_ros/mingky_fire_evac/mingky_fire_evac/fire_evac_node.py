@@ -53,6 +53,7 @@ from pathlib import Path
 import threading
 import time
 
+from action_msgs.msg import GoalStatus
 from action_msgs.srv import CancelGoal
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
@@ -82,6 +83,7 @@ MODE_SET_TOPIC = '/mode/set'
 CANCEL_NAV_SERVICE = '/navigate_to_pose/_action/cancel_goal'
 TEST_TRIGGER_SERVICE = 'fire_evac/trigger_test'
 RESET_ALARM_SERVICE = 'fire_evac/reset_alarm'
+CANCEL_EVAC_SERVICE = 'fire_evac/cancel'
 GUIDE_EVAC_SERVICE = '/guide_manager/fire_evacuation'
 # lcd_status_node(mingky_lcd_status)가 이 토픽을 구독해서 True 인 동안
 # GuideState 화면 대신 '긴급 상황' 화면으로 강제 전환한다. GuideState 는
@@ -196,6 +198,8 @@ class FireEvacNode(Node):
 
         self.mode = None
         self._evacuating = False
+        self._cancel_evacuation = threading.Event()
+        self._current_goal_handle = None
         self._alarm_latched = False
         self._recent: collections.deque = collections.deque(maxlen=self.window_size)
         self._stop = False
@@ -242,6 +246,7 @@ class FireEvacNode(Node):
         # 취소/목표전송 부분만 검증할 때 쓴다.
         self.create_service(Trigger, TEST_TRIGGER_SERVICE, self._on_test_trigger)
         self.create_service(Trigger, RESET_ALARM_SERVICE, self._on_reset_alarm)
+        self.create_service(Trigger, CANCEL_EVAC_SERVICE, self._on_cancel_evacuation)
 
         self.get_logger().info(
             f'추론 서버: {self.infer_server_url}. 감지 스레드 시작.')
@@ -297,6 +302,7 @@ class FireEvacNode(Node):
             level='error')
         self._alarm_latched = True
         self.alarm_active_pub.publish(Bool(data=True))
+        self._cancel_evacuation.clear()
         self._set_evacuating(True)
         threading.Thread(target=self._start_evacuation, daemon=True).start()
         response.success = True
@@ -320,6 +326,25 @@ class FireEvacNode(Node):
         self.events.publish('fire.alarm_reset')
         response.success = True
         response.message = '화재 경보를 초기화했습니다.'
+        return response
+
+    def _on_cancel_evacuation(self, request, response):
+        """Stop evacuation motion while keeping the confirmed fire alarm latched."""
+        if not self._evacuating:
+            response.success = False
+            response.message = '진행 중인 비상대피 주행이 없습니다.'
+            return response
+        self._cancel_evacuation.set()
+        handle = self._current_goal_handle
+        if handle is not None:
+            handle.cancel_goal_async()
+        # 목표 전송 전·복구 대기 중인 경우까지 포함해 Nav2 전체 목표를 중단한다.
+        if self.cancel_nav_client.service_is_ready():
+            self.cancel_nav_client.call_async(CancelGoal.Request())
+        else:
+            self.get_logger().warn('Nav2 전체 목표 취소 서비스가 준비되지 않았습니다.')
+        response.success = True
+        response.message = '비상대피 주행 취소를 요청했습니다. 화재 경보는 유지됩니다.'
         return response
 
     # ------------------------------------------------------------ 감지 루프
@@ -368,6 +393,7 @@ class FireEvacNode(Node):
                 # 전송하지 못하게 한다. 대피 실패 뒤에도 현장 확인 전까지 유지한다.
                 self._alarm_latched = True
                 self.alarm_active_pub.publish(Bool(data=True))
+                self._cancel_evacuation.clear()
                 self._set_evacuating(True)
                 threading.Thread(target=self._start_evacuation, daemon=True).start()
 
@@ -404,7 +430,17 @@ class FireEvacNode(Node):
     def _start_evacuation(self):
         safe_to_clear = True
         try:
+            if self._cancel_evacuation.is_set():
+                self.events.publish(
+                    'fire.evacuation_canceled', {'reason': 'operator_request'},
+                    level='warning')
+                return
             if not self._ensure_auto_mode():
+                if self._cancel_evacuation.is_set():
+                    self.events.publish(
+                        'fire.evacuation_canceled',
+                        {'reason': 'operator_request'}, level='warning')
+                    return
                 self.events.publish(
                     'fire.evacuation_failed',
                     {'reason': 'automatic_mode_unavailable', 'status': -1},
@@ -431,7 +467,10 @@ class FireEvacNode(Node):
             status, reason, safe_to_clear = self._navigate_with_adaptive_recovery(
                 deadline)
             self.get_logger().info(f'대피 이동 종료. status={status}')
-            if status == 4:
+            if reason == 'operator_canceled':
+                self.events.publish(
+                    'fire.evacuation_canceled', {'reason': reason}, level='warning')
+            elif status == 4:
                 self.events.publish('fire.evacuation_succeeded')
             else:
                 self.events.publish(
@@ -448,9 +487,13 @@ class FireEvacNode(Node):
             self, deadline: float) -> tuple[int, str, bool]:
         """대피소 이동 실패 시 LiDAR 기반 임시 탈출 후 원래 목표를 재시도한다."""
         while time.monotonic() < deadline and rclpy.ok() and not self._stop:
+            if self._cancel_evacuation.is_set():
+                return GoalStatus.STATUS_CANCELED, 'operator_canceled', True
             if self.mode == 'estop':
                 return -1, 'emergency_stop', True
             result = self._run_nav_goal(self._pose(*self.shelter), deadline)
+            if self._cancel_evacuation.is_set():
+                return GoalStatus.STATUS_CANCELED, 'operator_canceled', True
             if result is None:
                 return -1, 'cancel_unconfirmed', False
             if result == -1:
@@ -464,12 +507,14 @@ class FireEvacNode(Node):
             if candidate is None:
                 self.get_logger().warn(
                     f'탈출 후보가 없어 {self.recovery_retry_delay_sec:.1f}초 정지 후 재판단합니다.')
-                time.sleep(min(
+                self._cancel_evacuation.wait(min(
                     self.recovery_retry_delay_sec,
                     max(0.0, deadline - time.monotonic())))
                 continue
             recovery_result = self._run_nav_goal(
                 self._candidate_pose(candidate), deadline)
+            if self._cancel_evacuation.is_set():
+                return GoalStatus.STATUS_CANCELED, 'operator_canceled', True
             if recovery_result is None:
                 return -1, 'cancel_unconfirmed', False
             if recovery_result == -1:
@@ -493,11 +538,15 @@ class FireEvacNode(Node):
             timeout_sec=min(5.0, max(0.0, deadline - time.monotonic())))
         if handle is None or not handle.accepted:
             return 6
+        self._current_goal_handle = handle
         result_future = handle.get_result_async()
-        result = self._wait_for_future(
-            result_future,
-            timeout_sec=max(0.0, deadline - time.monotonic()))
+        while (not result_future.done() and rclpy.ok()
+               and time.monotonic() < deadline
+               and not self._cancel_evacuation.is_set()):
+            time.sleep(0.05)
+        result = result_future.result() if result_future.done() else None
         if result is not None:
+            self._current_goal_handle = None
             return int(result.status)
 
         cancel = self._wait_for_future(
@@ -507,6 +556,7 @@ class FireEvacNode(Node):
                 '대피 목표 취소 응답이 없습니다. 대피 상태를 유지합니다.')
             return None
         terminal = self._wait_for_future(result_future, timeout_sec=5.0)
+        self._current_goal_handle = None
         if terminal is None:
             self.get_logger().fatal(
                 '대피 목표 취소 후 종료 결과가 없습니다. 대피 상태를 유지합니다.')
@@ -610,6 +660,8 @@ class FireEvacNode(Node):
         self.mode_set_pub.publish(String(data=AUTO_MODE))
         deadline = time.monotonic() + 3.0
         while rclpy.ok() and not self._stop and time.monotonic() < deadline:
+            if self._cancel_evacuation.is_set():
+                return False
             if self.mode == AUTO_MODE:
                 return True
             if self.mode == 'estop':

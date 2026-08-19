@@ -17,7 +17,19 @@ def test_adaptive_navigation_trees_do_not_run_motion_recoveries() -> None:
     for planner in ('navfn', 'smac2d'):
         root = _root(f'navigate_no_recovery_{planner}.xml')
 
-        assert _tags(root).isdisjoint({'Spin', 'BackUp', 'Wait'})
+        assert _tags(root).isdisjoint({'Spin', 'BackUp'})
+
+
+def test_planner_failure_waits_for_refreshed_global_costmap() -> None:
+    for planner in ('navfn', 'smac2d'):
+        root = _root(f'navigate_no_recovery_{planner}.xml')
+        planner_recovery = root.find(
+            './/RecoveryNode[@name="ComputePathToPose"]/Sequence')
+
+        assert planner_recovery is not None
+        assert [child.tag for child in planner_recovery] == [
+            'WouldAPlannerRecoveryHelp', 'ClearEntireCostmap', 'Wait']
+        assert planner_recovery.find('Wait').attrib['wait_duration'] == '1.1'
 
 
 def test_smac_tree_selects_smac_planner() -> None:
@@ -26,9 +38,21 @@ def test_smac_tree_selects_smac_planner() -> None:
 
     assert selector is not None
     assert selector.attrib['default_planner'] == 'Smac2D'
+    assert root.find('.//RateController').attrib['hz'] == '1.0'
+
+
+def test_stalled_follow_path_refreshes_costmap_once_before_adaptive_recovery() -> None:
+    for planner in ('navfn', 'smac2d'):
+        root = _root(f'navigate_no_recovery_{planner}.xml')
+        follow_recovery = root.find('.//RecoveryNode[@name="FollowPath"]')
+
+        assert follow_recovery is not None
+        assert follow_recovery.attrib['number_of_retries'] == '1'
 
 
 def test_final_fallback_retains_existing_motion_recoveries() -> None:
     root = _root('navigate_recovery_smac2d.xml')
 
     assert {'Spin', 'BackUp', 'Wait'} <= _tags(root)
+    waits = root.findall('.//Wait')
+    assert {wait.attrib['wait_duration'] for wait in waits} == {'0.3', '1.1'}

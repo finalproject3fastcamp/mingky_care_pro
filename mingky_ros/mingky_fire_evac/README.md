@@ -114,6 +114,9 @@ ros2 run mingky_fire_evac fire_evac_node --ros-args \
 5. 도착(또는 실패) 시 `/fire_evac/active`를 다시 `false`로 바꾸되 화재 경보는 유지한다.
 6. 운영자가 현장 안전을 확인하고 `fire_evac/reset_alarm`을 호출해야 새 화재를 감지한다.
 
+이동만 즉시 중단해야 하면 `fire_evac/cancel`을 호출한다. 진행 중인 대피 목표와
+적응형 복구를 취소하지만, 확인된 화재 경보는 안전상 그대로 유지한다.
+
 ## 테스트
 
 카메라 앞에 실제로 불을 갖다 대지 않고 Nav2 이동 로직만 검증하고 싶을 때:
@@ -123,6 +126,12 @@ ros2 service call fire_evac/trigger_test std_srvs/srv/Trigger
 ```
 
 감지 없이 바로 대피 이동을 시작한다.
+
+진행 중인 대피 이동을 중단한다(화재 경보는 유지):
+
+```bash
+ros2 service call fire_evac/cancel std_srvs/srv/Trigger
+```
 
 대피가 끝난 뒤 현장 안전을 확인하고 경보를 초기화한다:
 

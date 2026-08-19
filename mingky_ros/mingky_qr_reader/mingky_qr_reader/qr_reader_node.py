@@ -56,6 +56,8 @@ class QrReaderNode(Node):
         self.declare_parameter("preview_max_width", 640)
         self.declare_parameter("preview_jpeg_quality", 60)
         self.declare_parameter("preview_max_fps", 10.0)
+        # 화재 감지 등 공유 소비자에는 QR 디코드 주기와 별도로 낮은 FPS만 보낸다.
+        self.declare_parameter("image_publish_max_fps", 3.0)
         # arming 폴링 주기. 백엔드에 GET /robots/<id>/arming 을 주기로 던져
         # 의료진이 이 로봇을 활성화했는지 확인한다. armed 가 아니면 QR 을
         # 디코드/전송하지 않는다.
@@ -77,6 +79,10 @@ class QrReaderNode(Node):
         self.debounce_seconds = float(self.get_parameter("debounce_seconds").value)
         self.http_timeout = float(self.get_parameter("http_timeout_seconds").value)
         fps = float(self.get_parameter("fps").value)
+        image_publish_max_fps = max(
+            0.1, float(self.get_parameter("image_publish_max_fps").value))
+        self._image_publish_min_interval = 1.0 / image_publish_max_fps
+        self._last_image_publish_at = 0.0
         self.arming_poll_seconds = float(
             self.get_parameter("arming_poll_seconds").value)
         self.arming_fail_disarm_after = int(
@@ -265,6 +271,10 @@ class QrReaderNode(Node):
             return
 
     def _publish_compressed(self, frame) -> None:
+        now = time.monotonic()
+        if now - self._last_image_publish_at < self._image_publish_min_interval:
+            return
+        self._last_image_publish_at = now
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             return

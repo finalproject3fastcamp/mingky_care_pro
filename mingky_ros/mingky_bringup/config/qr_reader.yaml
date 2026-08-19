@@ -1,6 +1,7 @@
 qr_reader_node:
   ros__parameters:
-    fps: 10.0
+    fps: 5.0
+    image_publish_max_fps: 3.0
     debounce_seconds: 5.0
     http_timeout_seconds: 3.0
     usb_device_index: 0
