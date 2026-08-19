@@ -15,6 +15,7 @@ from mingky_navigation_manager.navigation_manager_node import (
     SAFETY_ERROR,
 )
 from mingky_smart_recovery.selector import EscapeCandidate
+from nav2_msgs.action import ComputePathToPose
 from nav_msgs.msg import Path
 import pytest
 import rclpy
@@ -520,6 +521,28 @@ def test_recovery_has_no_attempt_limit(adaptive_manager):
     assert node._test_context['recovery_attempt'] == 100
     assert node._recovery_retry_timer is not None
     assert not any(item['status'] == 'failed' for item in published)
+
+
+def test_goal_occupied_stops_after_costmap_refresh(adaptive_manager):
+    node, published = adaptive_manager
+    node._on_goto_pose(_pose('blocked_target'))
+
+    node._on_goal_result(
+        ImmediateFuture(SimpleNamespace(
+            status=GoalStatus.STATUS_ABORTED,
+            result=SimpleNamespace(
+                error_code=ComputePathToPose.Result.GOAL_OCCUPIED),
+        )),
+        node._generation,
+    )
+
+    assert node._active is False
+    assert node.path_planner.sent == []
+    assert node._recovery_retry_timer is None
+    assert published[-1]['status'] == 'failed'
+    assert published[-1]['error_code'] == (
+        ComputePathToPose.Result.GOAL_OCCUPIED)
+    assert 'costmap' in published[-1]['message']
 
 
 def test_emergency_cancels_scheduled_recovery_retry(adaptive_manager):

@@ -13,6 +13,7 @@ import {
   type WaypointSet,
   type WaypointValue,
 } from '../lib/api'
+import { listEvents } from '../lib/eventsApi'
 import { usePolling } from '../lib/usePolling'
 import { isMobile } from '../types/monitoring'
 import { useRobotMode } from '../lib/useRobotMode'
@@ -31,9 +32,11 @@ export function WaypointDashboard() {
   const [newName, setNewName] = useState('')
   const [checkResult, setCheckResult] = useState<WaypointCheckResult | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [testAlert, setTestAlert] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [settled, setSettled] = useState(true)
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handledTestEvent = useRef<string | null>(null)
 
   const robotList = useMemo(
     // isMobile 이 타입 가드라 걸러진 배열이 MobileRobot[] 이 된다.
@@ -65,6 +68,16 @@ export function WaypointDashboard() {
   const selectedRobot = robotList.find((robot) => robot.robot_id === selectedRobotId) ?? null
   const teleop = useTeleopSocket(selectedRobotId)
   const mode = useRobotMode(selectedRobotId, POLL_MS)
+  const waypointEvents = usePolling(
+    async (signal) => (
+      await listEvents(
+        { robot_id: selectedRobotId ?? undefined, limit: 20 },
+        { signal },
+      )
+    ).items,
+    POLL_MS,
+    selectedRobotId,
+  )
   const selected = drafts[selectedName] ?? EMPTY
   const activeSession = selectedRobot?.active_session_id != null
 
@@ -113,6 +126,43 @@ export function WaypointDashboard() {
       && selectedRobot?.system_state === 'active'
       && !selectedRobot.localization_active,
   )
+
+  useEffect(() => {
+    handledTestEvent.current = null
+    setTestAlert(null)
+  }, [selectedRobotId])
+
+  useEffect(() => {
+    const latest = waypointEvents.data?.find((event) =>
+      event.event_code === 'waypoint.test_started'
+      || event.event_code === 'waypoint.test_succeeded'
+      || event.event_code === 'waypoint.test_failed')
+    if (!latest || latest.event_id === handledTestEvent.current) return
+    handledTestEvent.current = latest.event_id
+    if (Date.now() - Date.parse(latest.occurred_at) > 120_000) return
+
+    if (latest.event_code === 'waypoint.test_started') {
+      setTestAlert(null)
+      return
+    }
+    if (latest.event_code === 'waypoint.test_succeeded') {
+      setTestAlert(null)
+      setNotice(`${String(latest.payload.waypoint_name ?? 'Waypoint')} 시험 주행을 완료했습니다.`)
+      return
+    }
+    if (latest.payload.reason === 'goal_occupied'
+        || Number(latest.payload.error_code) === 206) {
+      setTestAlert(
+        `${String(latest.payload.waypoint_name ?? 'Waypoint')} 목표 위치가 `
+        + 'costmap 갱신 후에도 장애물로 확인됐습니다. 주변을 비우거나 좌표를 다시 측정하세요.',
+      )
+    } else {
+      setTestAlert(
+        `${String(latest.payload.waypoint_name ?? 'Waypoint')} 시험 주행에 실패했습니다. `
+        + `오류 코드 ${String(latest.payload.error_code ?? '?')}`,
+      )
+    }
+  }, [waypointEvents.data])
 
   function updateSelected(field: keyof WaypointValue, value: number) {
     if (!selectedName || !Number.isFinite(value)) return
@@ -287,6 +337,9 @@ export function WaypointDashboard() {
         <div className="waypoint-safety-banner" role="alert">
           이 로봇은 환자 안내 중입니다. 조회와 편집만 가능하며 조작·시험 주행은 차단됩니다.
         </div>
+      )}
+      {testAlert && (
+        <div className="waypoint-safety-banner" role="alert">{testAlert}</div>
       )}
       {notice && <div className="waypoint-notice" role="status">{notice}</div>}
 

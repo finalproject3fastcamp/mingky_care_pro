@@ -47,7 +47,15 @@ export function messageFor(code: string, payload: Record<string, unknown>): stri
     case 'nav.goal_succeeded':
       return `${p.visit_name ?? '목적지'} 도착`
     case 'nav.goal_aborted':
+      if (p.reason === 'goal_occupied' || Number(p.error_code) === 206) {
+        return `${p.visit_name ?? '목적지'} 목표 위치가 장애물로 막혀 이동을 중단했습니다.`
+      }
       return `${p.visit_name ?? '목적지'} 이동 실패 (코드 ${p.error_code ?? '?'})`
+    case 'nav.waiting_spot_failed':
+      if (p.reason === 'goal_occupied' || Number(p.error_code) === 206) {
+        return `${p.visit_name ?? '목적지'} 대기 위치가 장애물로 막혀 있습니다.`
+      }
+      return `${p.visit_name ?? '목적지'} 대기 위치 이동에 실패했습니다.`
     case 'nav.stuck':
       return '경로 이탈 감지'
     case 'dock.return_started':
@@ -55,12 +63,18 @@ export function messageFor(code: string, payload: Record<string, unknown>): stri
     case 'dock.return_succeeded':
       return `${p.station_name ?? '충전소'} 복귀 완료`
     case 'dock.return_failed':
+      if (p.reason === 'goal_occupied' || Number(p.error_code) === 206) {
+        return `${p.station_name ?? '충전소'} 진입 위치가 장애물로 막혀 있습니다.`
+      }
       return `${p.station_name ?? '충전소'} 복귀 실패 (코드 ${p.error_code ?? '?'})`
     case 'waypoint.test_started':
       return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 시작`
     case 'waypoint.test_succeeded':
       return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 완료`
     case 'waypoint.test_failed':
+      if (p.reason === 'goal_occupied' || Number(p.error_code) === 206) {
+        return `${p.waypoint_name ?? 'Waypoint'} 목표 위치가 장애물로 막혀 시험 주행을 중단했습니다.`
+      }
       return `${p.waypoint_name ?? 'Waypoint'} 시험 주행 실패 (코드 ${p.error_code ?? '?'})`
     case 'session.started':
       return `안내 시작: ${p.patient_id ?? ''}`

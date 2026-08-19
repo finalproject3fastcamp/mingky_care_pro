@@ -750,10 +750,17 @@ class GuideManager(Node):
                     GuideState.ROBOT_PAUSED if self._emergency_engaged
                     else GuideState.ROBOT_BATTERY_LOW if self._battery_alarm
                     else GuideState.ROBOT_IDLE)
-            self.events.publish('waypoint.test_failed', {
+            payload = {
                 'waypoint_name': name,
                 'error_code': int(result.get('error_code', -4)),
-            })
+            }
+            if payload['error_code'] == ComputePathToPose.Result.GOAL_OCCUPIED:
+                payload.update({
+                    'reason': 'goal_occupied',
+                    'message': str(result.get('message') or
+                                   'costmap 갱신 후에도 목표 위치가 막혀 있습니다.'),
+                })
+            self.events.publish('waypoint.test_failed', payload)
 
     # ------------------------------------------------------------------ 세션
 
@@ -1450,15 +1457,18 @@ class GuideManager(Node):
         # 확인할 때까지 완료 QR 스캔과 자동 진행을 열지 않는다.
         self.robot_state = GuideState.ROBOT_PAUSED
         self.session_state = GuideState.SESSION_ARRIVED
+        payload = {
+            'visit_name': visit_name,
+            'waypoint_name': waypoint_name,
+            'error_code': int(error_code),
+        }
+        if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+            payload.update({
+                'reason': 'goal_occupied',
+                'message': 'costmap 갱신 후에도 대기 위치가 막혀 있습니다.',
+            })
         self.events.publish(
-            'nav.waiting_spot_failed',
-            {
-                'visit_name': visit_name,
-                'waypoint_name': waypoint_name,
-                'error_code': int(error_code),
-            },
-            self.session_id,
-        )
+            'nav.waiting_spot_failed', payload, self.session_id)
         self.get_logger().error(
             f'waiting spot 이동 실패; 운영자 확인이 필요합니다: {visit_name}')
 
@@ -1510,6 +1520,8 @@ class GuideManager(Node):
 
     def _dock_failed(
             self, waypoint_name: str, error_code: int, *, retryable: bool) -> None:
+        if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+            retryable = False
         dock_active = (
             self._dock_reason is not None
             and (self._dock_reason != 'battery' or self._battery_alarm))
@@ -1527,9 +1539,16 @@ class GuideManager(Node):
             self._dock_retry_timer = self.create_timer(
                 self.dock_retry_delay, self._retry_dock)
             return
-        self.events.publish(
-            'dock.return_failed',
-            {'station_name': waypoint_name, 'error_code': int(error_code)})
+        payload = {
+            'station_name': waypoint_name,
+            'error_code': int(error_code),
+        }
+        if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+            payload.update({
+                'reason': 'goal_occupied',
+                'message': 'costmap 갱신 후에도 충전소 진입 위치가 막혀 있습니다.',
+            })
+        self.events.publish('dock.return_failed', payload)
         failed_reason = self._dock_reason
         self._dock_reason = None
         self._dock_pending = False
@@ -1705,7 +1724,10 @@ class GuideManager(Node):
         self._active_nav_result_future = None
         self._active_nav_context = None
         try:
-            status = future.result().status
+            wrapped = future.result()
+            status = wrapped.status
+            nav_result = getattr(wrapped, 'result', None)
+            nav_error_code = int(getattr(nav_result, 'error_code', 0))
         except Exception as exc:  # noqa: BLE001
             self._goal_failed(
                 waypoint_name, is_dock, session_id, -4,
@@ -1761,6 +1783,15 @@ class GuideManager(Node):
                     {'reason': 'nav_aborted_while_waiting', 'source': 'nav2'},
                     session_id,
                 )
+                return
+            if (status == GoalStatus.STATUS_ABORTED
+                    and nav_error_code
+                    == ComputePathToPose.Result.GOAL_OCCUPIED):
+                self._goal_failed(
+                    waypoint_name, is_dock, session_id, nav_error_code,
+                    '전역 costmap을 갱신한 뒤에도 안내 목표가 '
+                    '장애물 셀로 확인됐습니다.',
+                    is_waiting=is_waiting)
                 return
             adaptive_dock = is_dock and recovery_attempt == 0
             if (not is_waiting and status == 6
@@ -2098,12 +2129,18 @@ class GuideManager(Node):
         else:
             self.robot_state = GuideState.ROBOT_IDLE
             self.session_state = GuideState.SESSION_CONFIRMED
+            payload = {
+                'visit_name': self._visit_name_for_waypoint(waypoint_name),
+                'error_code': int(error_code),
+            }
+            if error_code == ComputePathToPose.Result.GOAL_OCCUPIED:
+                payload.update({
+                    'reason': 'goal_occupied',
+                    'message': message,
+                })
             self.events.publish(
                 'nav.goal_aborted',
-                {
-                    'visit_name': self._visit_name_for_waypoint(waypoint_name),
-                    'error_code': int(error_code),
-                },
+                payload,
                 session_id)
 
     # ------------------------------------------------------------------ 발행

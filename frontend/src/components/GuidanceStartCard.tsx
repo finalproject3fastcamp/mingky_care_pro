@@ -77,7 +77,12 @@ export function GuidanceStartCard({ session, events, mode, robotConnected }: Pro
       const reason = String(latestResult.payload.reason ?? '')
       setError(REJECTION_MESSAGE[reason] ?? `로봇이 안내 시작을 거부했습니다: ${reason}`)
     } else if (latestResult.event_code === 'nav.goal_aborted') {
-      setError('첫 목적지로 출발하지 못했습니다. 로봇 상태와 Waypoint를 확인하세요.')
+      setError(
+        latestResult.payload.reason === 'goal_occupied'
+          || Number(latestResult.payload.error_code) === 206
+          ? '목표 위치가 장애물로 막혀 있습니다. 주변을 비운 뒤 안내를 다시 시작하세요.'
+          : '첫 목적지로 출발하지 못했습니다. 로봇 상태와 Waypoint를 확인하세요.',
+      )
     } else {
       setError(null)
     }

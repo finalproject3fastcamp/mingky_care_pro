@@ -741,12 +741,22 @@ class NavigationManager(Node):
         self._goal_handle = None
         self._goal_result_future = None
         try:
-            status = int(future.result().status)
+            wrapped = future.result()
+            status = int(wrapped.status)
+            nav_result = getattr(wrapped, 'result', None)
+            nav_error_code = int(getattr(nav_result, 'error_code', 0))
         except Exception as exc:  # noqa: BLE001
             self._finish('failed', -4, f'결과 수신 중 예외: {exc}')
             return
         if status == GoalStatus.STATUS_SUCCEEDED:
             self._finish('succeeded', 0, 'Waypoint 시험 주행에 도착했습니다.')
+            return
+        if (status == GoalStatus.STATUS_ABORTED
+                and nav_error_code == ComputePathToPose.Result.GOAL_OCCUPIED):
+            self._finish(
+                'failed', nav_error_code,
+                '전역 costmap을 갱신한 뒤에도 Waypoint 목표가 '
+                '장애물 셀로 확인됐습니다.')
             return
         context = self._test_context
         if (status == GoalStatus.STATUS_ABORTED
