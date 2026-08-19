@@ -145,8 +145,8 @@ const LOOK: Look = {
    * 라이다·경로의 모양. 둘 다 화면 픽셀 기준이라 얼마나 당기든 굵기가 같다 —
    * 실제 치수로 잡으면 멀리서 볼 때 사라져 판단을 못 한다.
    */
-  scanSize: 1,
-  scanOpacity: 0.27,
+  scanSize: 2.2,
+  scanOpacity: 0.68,
   scanColor: '#f94848',
   planWidth: 2.6,
   planOpacity: 0.71,
@@ -372,10 +372,9 @@ export function HospitalMap3D({
     }
     // 라이다는 화면 기준 크기다. 얼마나 당기든 벽선이 또렷해야 한다.
     const scanPts = makePoints(MAX_SCAN, LOOK.scanColor, LOOK.scanSize, 0.05, 2, false)
-    // 파티클은 실제 크기(1.4 cm)다. 수백 개가 한자리에 모였을 때 화면 기준
-    // 크기면 초록 덩어리가 되어 로봇을 덮어 버리는데, 실제 크기면 멀리서
-    // 저절로 작아져 모였을 때는 옅은 무리로, 퍼졌을 때는 넓은 안개로 읽힌다.
-    const particlePts = makePoints(MAX_PARTICLES, COLOR.particles, 0.014, 0.02, 1, true)
+    // 파티클은 화면 픽셀 크기로 유지한다. 실제 크기를 사용하면 전체 지도를
+    // 보는 기본 시점에서 거의 사라져 위치추정 분포를 판단할 수 없다.
+    const particlePts = makePoints(MAX_PARTICLES, COLOR.particles, 2.4, 0.62, 1, false)
 
     // 경로는 굵은 선이라야 읽힌다.
     // three.js 의 기본 선(THREE.Line)은 굵기 지정이 대부분의 브라우저에서

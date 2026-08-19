@@ -148,12 +148,12 @@ export function RobotMap({
       ctx.restore()
     }
 
-    // 파티클 — 퍼짐이 한눈에 보여야 하므로 작고 흐리게 많이.
+    // 파티클 — 퍼짐과 수렴 상태를 한눈에 확인할 수 있도록 선명하게 표시한다.
     if (visible.particles && particles) {
-      ctx.fillStyle = 'rgba(16, 185, 129, 0.55)'
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.75)'
       for (const [x, y] of particles) {
         const [px, py] = toPx(x, y)
-        ctx.fillRect(px - 1, py - 1, 2.5, 2.5)
+        ctx.fillRect(px - 2, py - 2, 4, 4)
       }
     }
 
@@ -185,12 +185,12 @@ export function RobotMap({
 
     // 라이다 — 로봇 기준 극좌표를 pose 로 회전·평행이동해 지도에 얹는다.
     if (visible.scan && scan) {
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.75)'
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.9)'
       for (const [angle, range] of scan) {
         const wx = pose.x + range * Math.cos(pose.yaw + angle)
         const wy = pose.y + range * Math.sin(pose.yaw + angle)
         const [px, py] = toPx(wx, wy)
-        ctx.fillRect(px - 0.75, py - 0.75, 1.5, 1.5)
+        ctx.fillRect(px - 1.5, py - 1.5, 3, 3)
       }
     }
 
