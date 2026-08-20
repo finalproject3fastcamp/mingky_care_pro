@@ -364,6 +364,8 @@ export function WaypointDashboard() {
             recoveryPlan={teleop.recoveryPlan}
             waypoints={markers}
             onSelectWaypoint={setSelectedName}
+            robotId={selectedRobotId}
+            returning={selectedRobot?.returning_to_dock ?? false}
           />
         </section>
 
