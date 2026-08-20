@@ -286,6 +286,14 @@ const FACING = 0
 /** 추종 상태를 받아 오는 주기. 뒤쪽 카메라 화면과 같은 값이다. */
 const QR_POLL_MS = 500
 
+/**
+ * 복귀 예고가 빗나갔다고 인정하기까지 기다리는 시간.
+ *
+ * `guide_robot_state` 가 오는 주기(3초)와 같게 둔다. 그보다 짧으면 상태가
+ * 아직 안 왔을 뿐인데 틀렸다고 말하고, 길면 틀린 채로 오래 서 있는다.
+ */
+const WAIT_OVERDUE_SEC = 3
+
 /** 박동 한 주기(ms). 2D 지도에서 쓰던 1.5초와 같다. */
 const PULSE_MS = 1500
 
@@ -1155,31 +1163,46 @@ export function HospitalMap3D({
    * 본다. 그래서 시작은 빠른 쪽에서 잡고, 느린 쪽은 보여줄지 말지만 정한다.
    */
   const waitStartedAt = useRef<number | null>(null)
-  const [waitLeft, setWaitLeft] = useState<number | null>(null)
+  const [waitSec, setWaitSec] = useState<number | null>(null)
 
   useEffect(() => {
     if (mapState !== 'waiting') {
       // 환자가 돌아오면 로봇도 `_patient_wait_started_at` 을 0 으로 되돌린다.
       // 짧게 여러 번 놓친 것을 합산하면 잘 따라오는데도 복귀해 버린다.
       waitStartedAt.current = null
-      setWaitLeft(null)
+      setWaitSec(null)
       return
     }
     if (waitStartedAt.current === null) waitStartedAt.current = performance.now()
     if (!paused) {
       // 로봇이 시계를 안 돌리는 경우다. 세지 않는다.
-      setWaitLeft(null)
+      setWaitSec(null)
       return
     }
     const startedAt = waitStartedAt.current
+    let id = 0
     const tick = () => {
-      const left = waitLimitSec - (performance.now() - startedAt) / 1000
-      setWaitLeft(Math.max(0, left))
+      const sec = (performance.now() - startedAt) / 1000
+      setWaitSec(sec)
+      // 시간이 지났는데도 상태가 그대로면 더 셀 이유가 없다.
+      if (sec > waitLimitSec + WAIT_OVERDUE_SEC) window.clearInterval(id)
     }
     tick()
-    const id = window.setInterval(tick, 250)
+    id = window.setInterval(tick, 250)
     return () => window.clearInterval(id)
   }, [mapState, paused, waitLimitSec])
+
+  /**
+   * `paused` 는 **"시계가 돈다" 보다 넓다.** 노드를 띄워 재 보니, 이미 멈춰
+   * 있던 로봇이 목표 없이 서 있는 상태에서 환자를 놓치면 시계는 안 도는데
+   * `paused` 는 그대로 남아 있었다.
+   *
+   * 그 조합에서 화면만 세면 막대가 다 비고도 로봇이 안 간다. 그래서 시간이
+   * 지나도 상태가 안 바뀌면 **화면이 스스로 말을 바꾼다.** 예고한 일이 안
+   * 일어났을 때 조용히 틀린 채로 있는 것보다 낫다.
+   */
+  const waitLeft = waitSec === null ? null : waitLimitSec - waitSec
+  const waitOverdue = waitLeft !== null && waitLeft <= -WAIT_OVERDUE_SEC
 
   /**
    * 무슨 일이 있었는지 남긴다.
@@ -1422,11 +1445,17 @@ export function HospitalMap3D({
           */}
           {waitLeft !== null && (
             <span className="map3d__wait">
-              <span className="map3d__wait-bar" aria-hidden="true">
-                <i style={{ width: `${(waitLeft / waitLimitSec) * 100}%` }} />
-              </span>
+              {!waitOverdue && (
+                <span className="map3d__wait-bar" aria-hidden="true">
+                  <i style={{ width: `${Math.max(0, waitLeft / waitLimitSec) * 100}%` }} />
+                </span>
+              )}
               <b>
-                {waitLeft <= 1 ? '복귀 준비' : `복귀까지 ${Math.ceil(waitLeft)}초`}
+                {waitOverdue
+                  ? '복귀 시간 지남'
+                  : waitLeft <= 1
+                    ? '복귀 준비'
+                    : `복귀까지 ${Math.ceil(waitLeft)}초`}
               </b>
             </span>
           )}
