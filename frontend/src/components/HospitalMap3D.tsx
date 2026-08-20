@@ -98,6 +98,16 @@ export interface HospitalMap3DProps extends DiagLayers {
    * 이 저장소의 방식과도 맞는다.
    */
   robotId?: string | null
+  /**
+   * 지도 위 카메라 창이 어느 쪽을 보여줄지. **화면 단계를 따라간다.**
+   *
+   * QR 을 대는 동안은 앞쪽, 안내가 시작되면 뒤쪽이다. 원래 두 화면이 따로
+   * 하던 일을 이 창 하나가 이어받는다 — 영상이 두 곳에 뜨면 보는 사람이
+   * 어느 쪽을 봐야 하는지 알 수 없다.
+   *
+   * `null` 이면 창을 띄우지 않는다(보여줄 카메라가 없는 화면).
+   */
+  camera?: 'front' | 'rear' | null
 }
 
 type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
@@ -314,6 +324,7 @@ export function HospitalMap3D({
   follow = null,
   returning = false,
   robotId = null,
+  camera = 'rear',
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -325,15 +336,12 @@ export function HospitalMap3D({
   const [failed, setFailed] = useState(false)
   const [placing, setPlacing] = useState(false)
   /**
-   * 뒤쪽 카메라 창은 **꺼진 채로 시작한다.**
+   * 카메라 창은 **켜진 채로 시작한다.**
    *
-   * 시연에서는 켜 두는 쪽이 낫다 — 원인과 결과가 한 화면에서 이어진다.
-   * 그런데 의료진 화면에는 `GuidanceRearCamera` 가 이미 같은 영상을 받고
-   * 있어서, 켠 채로 두면 같은 카메라에 두 명이 붙는다. 영상 서버가 한
-   * 명만 받는다면 **팀이 쓰던 화면이 깨진다.** 확인되기 전까지는 눌러서
-   * 켜는 쪽이 안전하다.
+   * 이 창이 이제 영상을 보여주는 **유일한 자리**다. 지도 아래에 있던 카드를
+   * 걷어냈으므로 꺼 두면 영상을 볼 방법이 없다.
    */
-  const [camOn, setCamOn] = useState(false)
+  const [camOn, setCamOn] = useState(true)
   const [drag, setDrag] = useState<{ u: number; v: number } | null>(null)
   const [visible, setVisible] = useState<Record<LayerKey, boolean>>({
     scan: true,
@@ -1036,9 +1044,9 @@ export function HospitalMap3D({
       h.setRingPosition(m.u, -m.v)
     }
     h.robot.visible = !!pose
-    // 박동은 고른 로봇이거나 비상정지일 때만. 늘 뛰면 아무것도 알리지 못한다.
-    h.pulse.visible = !!pose && (selected || estop)
-    h.pulse.material.color.setHex(estop ? COLOR.estop : COLOR.selected)
+    // 박동은 여기서 건드리지 않는다. 위치는 초당 여러 번 들어오는데 그때마다
+    // 색을 칠하면, 이탈로 노랗게 바꿔 둔 것이 다음 위치 갱신에 초록으로
+    // 덮인다. 박동은 아래 한 곳에서만 정한다.
     for (const r of h.robotMats) {
       if (estop) r.m.color.setHex(r.estop)
       else r.m.color.copy(r.base)
@@ -1070,20 +1078,38 @@ export function HospitalMap3D({
     return 'idle'
   }, [estop, returning, pose, followNow?.follow_state, followNow?.follow_source])
 
+  /**
+   * 박동을 정하는 **유일한 곳**.
+   *
+   * 우선순위는 **비상정지 > 환자 이탈 > 선택됨** 이다. 두 곳에서 색을 칠하면
+   * 위치가 갱신될 때마다 낮은 우선순위가 높은 것을 덮는다.
+   *
+   * | 무엇 | 색 | 주기 |
+   * | --- | --- | --- |
+   * | 비상정지 | 빨강 | 0.5초 (빠름) |
+   * | 환자 이탈 | 노랑 | 2초 (느림) |
+   * | 고른 로봇 | 초록 | 1.5초 (평상시) |
+   *
+   * 이탈은 **고르지 않은 로봇에서도** 박동한다. 고르지 않았다고 놓친 것을
+   * 안 알리면, 두 대를 볼 때 한 대의 사고를 통째로 놓친다.
+   */
   useEffect(() => {
     const h = handles.current
     if (!h) return
-    const info = MAP_STATE[mapState]
-    const tone =
+    const beat =
       mapState === 'estop'
-        ? COLOR.estop
-        : info.tone === 'wait'
-          ? COLOR.wait
-          : COLOR.selected
-    h.setPulse(info.pulseMs, tone)
-    h.setRing(info.ring && !!pose)
+        ? { ms: MAP_STATE.estop.pulseMs, color: COLOR.estop }
+        : mapState === 'waiting'
+          ? { ms: MAP_STATE.waiting.pulseMs, color: COLOR.wait }
+          : selected
+            ? { ms: PULSE_MS, color: COLOR.selected }
+            : null
+
+    h.pulse.visible = !!pose && beat !== null
+    if (beat) h.setPulse(beat.ms, beat.color)
+    h.setRing(MAP_STATE[mapState].ring && !!pose)
     h.invalidate()
-  }, [mapState, pose])
+  }, [mapState, pose, selected])
 
   /**
    * 무슨 일이 있었는지 남긴다.
@@ -1352,14 +1378,14 @@ export function HospitalMap3D({
             {placing ? '바닥을 클릭하세요' : '위치 지정'}
           </button>
         )}
-        {robotId && (
+        {robotId && camera && (
           <button
             type="button"
             className={`robot-map__toggle${camOn ? '' : ' off'}`}
             onClick={() => setCamOn((v) => !v)}
-            title="로봇 뒤쪽 카메라를 지도 위에 띄웁니다. 끌어서 옮길 수 있습니다"
+            title="로봇 카메라를 지도 위에 띄웁니다. 끌어서 옮길 수 있습니다"
           >
-            뒤 카메라
+            카메라
           </button>
         )}
         <button
@@ -1413,9 +1439,10 @@ export function HospitalMap3D({
       >
         <div ref={hostRef} className="map3d__canvas" />
         <div ref={labelHostRef} className="map3d__signs" />
-        {camOn && robotId && (
+        {camOn && robotId && camera && (
           <MapRearCam
             robotId={robotId}
+            facing={camera}
             tone={MAP_STATE[mapState].tone}
             label={sourceText(followNow?.follow_source)}
           />

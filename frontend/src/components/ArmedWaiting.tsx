@@ -5,8 +5,13 @@ import type { MobileRobot } from '../types/monitoring'
 
 interface Props {
   robot: MobileRobot
-  /** 선택한 로봇의 전방 QR 카메라 MJPEG 경로. */
-  cameraStreamUrl: string
+  /**
+   * 선택한 로봇의 전방 QR 카메라 MJPEG 경로.
+   *
+   * 안 넘기면 카메라를 그리지 않는다. 영상을 지도 위 카메라 창 한 곳에서만
+   * 보여주기로 하면서 열어 둔 길이다.
+   */
+  cameraStreamUrl?: string
   onDisarmed?: () => void
 }
 
@@ -50,11 +55,13 @@ export function ArmedWaiting({ robot, cameraStreamUrl, onDisarmed }: Props) {
         </button>
       </div>
       {error && <p className="picker-error">{error}</p>}
-      <img
-        className="camera-stream armed-camera"
-        src={cameraStreamUrl}
-        alt="로봇 전방 카메라 실시간"
-      />
+      {cameraStreamUrl && (
+        <img
+          className="camera-stream armed-camera"
+          src={cameraStreamUrl}
+          alt="로봇 전방 카메라 실시간"
+        />
+      )}
     </div>
   )
 }

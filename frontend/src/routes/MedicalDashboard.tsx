@@ -5,7 +5,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArmedWaiting } from '../components/ArmedWaiting'
 import { GuidanceCancelCard } from '../components/GuidanceCancelCard'
 import { GuidanceStartCard } from '../components/GuidanceStartCard'
-import { GuidanceRearCamera } from '../components/GuidanceRearCamera'
 import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -279,6 +278,8 @@ export function MedicalDashboard() {
                   : ' 관제 서버와의 연결도 끊겨 있습니다.'}
               </p>
             )}
+            {/* 카메라는 지도 위 창 한 곳에서만 보여준다. QR 을 대는 동안은
+                앞쪽, 안내가 시작되면 뒤쪽으로 저절로 바뀐다. */}
             <div className="control-deck__map-shell">
               <LazyHospitalMap3D
                 pose={teleop.pose}
@@ -292,6 +293,7 @@ export function MedicalDashboard() {
                 selected
                 robotId={selectedRobotId}
                 returning={selectedRobot?.returning_to_dock ?? false}
+                camera={activeSession ? 'rear' : 'front'}
               />
             </div>
             <aside className="control-deck__rail" aria-label="로봇 주행 제어">
@@ -375,11 +377,10 @@ export function MedicalDashboard() {
           forecast={forecast.data ?? null}
         />
       ) : (
-        // 스캔 대기 순간엔 카메라가 카드 안에 들어가 있어야 "여기에 QR 을
-        // 대세요" 안내와 시선이 한 곳에 모인다.
+        // 카메라는 넘기지 않는다. 영상은 지도 위 창 한 곳에서만 보여주기로
+        // 했고, 그 창이 이 단계에서 앞쪽 카메라를 띄운다.
         <ArmedWaiting
           robot={selectedRobot}
-          cameraStreamUrl={`/camera/${encodeURIComponent(selectedRobot.robot_id)}/front/stream`}
           onDisarmed={handleDisarmed}
         />
       )}
@@ -442,9 +443,6 @@ function SessionView({
         session={session}
         robotConnected={robotConnected}
       />
-      {derivedState === '안내중' && (
-        <GuidanceRearCamera robotId={session.robot_id} />
-      )}
       <ProgressStepper
         steps={session.steps}
         currentStepOrder={session.current_step_order}

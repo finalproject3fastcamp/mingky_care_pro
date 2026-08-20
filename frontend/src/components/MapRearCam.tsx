@@ -1,5 +1,5 @@
 /**
- * 지도 위에 떠 있는 뒤쪽 카메라 창.
+ * 지도 위에 떠 있는 카메라 창.
  *
  * 지도는 위, 카메라는 아래라 둘을 같이 보려면 화면을 굴려야 했다. 시연
  * 중에 스크롤하면 보는 사람의 흐름이 끊긴다. 그래서 지도 위에 얹고 원하는
@@ -26,6 +26,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface Props {
   robotId: string
+  /**
+   * 어느 카메라를 보여줄지. **화면 단계를 따라간다.**
+   *
+   * QR 을 대는 동안은 앞쪽을, 안내가 시작되면 뒤쪽을 본다. 원래 두 화면이
+   * 따로 하던 일을 이 창 하나가 이어받는다 — 영상이 두 곳에 뜨면 보는 사람이
+   * 어느 쪽을 봐야 하는지 알 수 없다.
+   */
+  facing: 'front' | 'rear'
   /** 지금 추종 상태. 제목줄 점 색으로 쓴다 */
   tone: string
   /** `follow_source` 를 사람 말로 옮긴 것 */
@@ -46,7 +54,7 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v))
 }
 
-export function MapRearCam({ robotId, tone, label }: Props) {
+export function MapRearCam({ robotId, facing, tone, label }: Props) {
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [place, setPlace] = useState<Placed | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -119,6 +127,12 @@ export function MapRearCam({ robotId, tone, label }: Props) {
     return () => ro.disconnect()
   }, [fit])
 
+  // 카메라가 바뀌면 실패 표시를 지운다. 앞쪽 송출이 끝났다고(arming 소비)
+  // 뒤쪽까지 '불러오지 못했습니다' 로 남아 있으면 안 된다.
+  useEffect(() => {
+    setFailed(false)
+  }, [facing])
+
   const drag = useRef<{ dx: number; dy: number } | null>(null)
   const grow = useRef<{ x: number; w: number } | null>(null)
 
@@ -173,7 +187,7 @@ export function MapRearCam({ robotId, tone, label }: Props) {
         }}
       >
         <span className="map3d__cam-grab" aria-hidden="true" />
-        <span className="map3d__cam-title">뒤쪽 카메라</span>
+        <span className="map3d__cam-title">{facing === 'front' ? '앞쪽 카메라' : '뒤쪽 카메라'}</span>
         <span className={`map3d__cam-src map3d__cam-src--${tone}`}>{label}</span>
         <button
           type="button"
@@ -201,10 +215,10 @@ export function MapRearCam({ robotId, tone, label }: Props) {
           </div>
         ) : (
           <img
-            key={streamKey}
+            key={`${facing}-${streamKey}`}
             className="map3d__cam-view"
-            src={`/camera/${encodeURIComponent(robotId)}/rear/stream`}
-            alt="로봇 뒤쪽 카메라"
+            src={`/camera/${encodeURIComponent(robotId)}/${facing}/stream`}
+            alt={facing === 'front' ? '로봇 앞쪽 카메라' : '로봇 뒤쪽 카메라'}
             onError={() => setFailed(true)}
           />
         ))}
