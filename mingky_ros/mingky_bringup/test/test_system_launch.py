@@ -280,6 +280,17 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     assert follower_params['partial_bbox_conf_threshold'] == (
         '$(var patient_follow_partial_bbox_conf_threshold)')
 
+    unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
+    assert (
+        'MINGKY_PATIENT_FOLLOW_PARTIAL_BBOX_CONF_THRESHOLD:-0.70'
+        in unit
+    )
+    assert (
+        'MINGKY_PATIENT_FOLLOW_PARTIAL_BBOX_CONF_THRESHOLD=0.70'
+        in env_example
+    )
+
     guide = next(
         item for item in root.findall('node')
         if item.get('name') == 'guide_manager'
