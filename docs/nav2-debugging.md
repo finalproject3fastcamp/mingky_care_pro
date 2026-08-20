@@ -152,7 +152,7 @@ waypoint 최소 간격  0.127 m
 | `required_movement_radius` | 0.5 | **0.10** | 실제 이동이 0.15~0.26m 다. **정상 주행이 끼임으로 판정된다** |
 | `lookahead_dist` | 0.6 | **0.25** | 맵 폭의 30%. 카롯이 코너 너머에 놓인다 |
 | `max_lookahead_dist` | 0.9 | **0.40** | 맵 폭의 45% |
-| `xy_goal_tolerance` | 0.25 | **0.07** | 목적지를 구분하면서 중심 7cm 이내를 도착으로 인정한다 |
+| `xy_goal_tolerance` | 0.25 | **0.04** | 목적지를 구분하면서 중심 4cm 이내를 도착으로 인정한다 |
 | `yaw_goal_tolerance` | 0.25 | **0.174533** | 목표 각도 오차 10도 이내를 도착으로 인정한다 |
 | `amcl update_min_d` | 0.15 | **0.05** | 2m 맵에서 15cm 는 너무 성기다 |
 | `amcl laser_max_range` | 100.0 | **12.0** | RPLIDAR C1 사양에 맞춘다 |
@@ -187,7 +187,7 @@ RPP 는 이 값으로 코스트를 거꾸로 풀어 "장애물까지 거리" 를
 ros2 param set /controller_server FollowPath.cost_scaling_dist 0.2
 ros2 param set /controller_server FollowPath.lookahead_dist 0.25
 ros2 param set /controller_server progress_checker.required_movement_radius 0.1
-ros2 param set /controller_server general_goal_checker.xy_goal_tolerance 0.07
+ros2 param set /controller_server general_goal_checker.xy_goal_tolerance 0.04
 ros2 param set /controller_server general_goal_checker.yaw_goal_tolerance 0.174533
 ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0.10
 ros2 param set /local_costmap/local_costmap  inflation_layer.inflation_radius 0.10

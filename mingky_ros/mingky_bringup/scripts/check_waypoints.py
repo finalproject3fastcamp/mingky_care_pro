@@ -17,7 +17,7 @@
 사용:
     ./check_waypoints.py
     ./check_waypoints.py --map ../map/archive/yun_map.yaml
-    ./check_waypoints.py --tolerance 0.07 --minimum-clearance 0.0 --margin 0.02
+    ./check_waypoints.py --tolerance 0.04 --minimum-clearance 0.0 --margin 0.02
 """
 
 import argparse
@@ -200,7 +200,7 @@ def main() -> int:
                    help="차체-벽 최소 여유 [m]. 이 아래는 차단")
     p.add_argument("--margin", type=float, default=0.02,
                    help="차체-벽 권장 여유 [m]. 이 아래는 경고")
-    p.add_argument("--tolerance", type=float, default=0.07,
+    p.add_argument("--tolerance", type=float, default=0.04,
                    help="xy_goal_tolerance [m]. 간격 검사에 쓴다")
     args = p.parse_args()
 

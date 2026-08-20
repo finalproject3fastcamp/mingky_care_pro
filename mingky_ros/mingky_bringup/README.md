@@ -500,7 +500,7 @@ ros2 run mingky_bringup check_waypoints.py --at 1.30 -1.35
 ros2 run mingky_bringup check_waypoints.py --map <경로>/yun_map.yaml
 
 # 파라미터를 바꿨다면 같이 넘긴다
-ros2 run mingky_bringup check_waypoints.py --tolerance 0.07 \
+ros2 run mingky_bringup check_waypoints.py --tolerance 0.04 \
   --minimum-clearance 0.0 --margin 0.02 --padding 0.01
 ```
 
@@ -521,7 +521,7 @@ waypoint 가 전혀 다른 물리 위치를 가리킵니다. 맵 밖으로 나�
 | --- | --- |
 | 차체-벽 차단 기준 | **0.01 m 미만** |
 | 차체-벽 경고 기준 | **0.08 m 미만** |
-| `_goal` ↔ `_waiting` 간격 | **0.14 m** 이상 (나눌 경우) |
+| `_goal` ↔ `_waiting` 간격 | **0.08 m** 이상 (나눌 경우) |
 | 충전소 | 도킹 지점이 아니라 **앞 0.3 m** |
 
 충전소 접점은 벽에 닿아야 해서 planner 가 구조적으로 도달할 수 없습니다.

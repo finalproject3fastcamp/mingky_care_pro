@@ -70,8 +70,8 @@ def test_smac2d_is_the_primary_global_planner() -> None:
 
     assert 'Smac2D' in planner['planner_plugins']
     assert planner['Smac2D']['plugin'] == 'nav2_smac_planner::SmacPlanner2D'
-    assert planner['GridBased']['tolerance'] == pytest.approx(0.07)
-    assert planner['Smac2D']['tolerance'] == pytest.approx(0.07)
+    assert planner['GridBased']['tolerance'] == pytest.approx(0.04)
+    assert planner['Smac2D']['tolerance'] == pytest.approx(0.04)
     assert planner['expected_planner_frequency'] == pytest.approx(5.0)
 
 

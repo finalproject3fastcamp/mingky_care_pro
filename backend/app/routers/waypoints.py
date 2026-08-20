@@ -40,7 +40,7 @@ class CheckRequest(BaseModel):
     padding: float = Field(default=0.01, ge=0.0, le=1.0)
     minimum_clearance: float = Field(default=0.0, ge=0.0, le=2.0)
     margin: float = Field(default=0.02, ge=0.0, le=2.0)
-    tolerance: float = Field(default=0.07, gt=0.0, le=2.0)
+    tolerance: float = Field(default=0.04, gt=0.0, le=2.0)
 
 
 class CheckItem(BaseModel):

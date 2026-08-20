@@ -47,7 +47,7 @@ def test_check_reports_too_close_pair(monkeypatch):
     configure_files(monkeypatch)
     request = waypoints.CheckRequest(waypoints={
         "first": waypoints.Waypoint(x=0.0, y=0.0, yaw=0.0),
-        "second": waypoints.Waypoint(x=0.1, y=0.0, yaw=0.0),
+        "second": waypoints.Waypoint(x=0.05, y=0.0, yaw=0.0),
     })
 
     result = waypoints.check_waypoints(request)
@@ -64,7 +64,7 @@ def test_check_defaults_match_nav2_and_clearance_policy():
     assert request.padding == 0.01
     assert request.minimum_clearance == 0.0
     assert request.margin == 0.02
-    assert request.tolerance == 0.07
+    assert request.tolerance == 0.04
 
 
 def test_check_does_not_warn_for_comfort_margin_only(monkeypatch):
