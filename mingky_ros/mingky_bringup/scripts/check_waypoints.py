@@ -5,7 +5,7 @@
 
 1. 차체와 벽 사이 거리
    waypoint yaw로 회전한 12x12cm footprint 외곽부터 점유 셀까지 잰다.
-   1cm 미만은 차단하고, 8cm 미만은 경고한다.
+   점유 셀과 겹치면 차단하고, 2cm 미만은 경고한다.
 
 2. waypoint 사이 간격
    두 지점이 xy_goal_tolerance 지름보다 가까우면, 한쪽에 서 있는 상태에서
@@ -17,7 +17,7 @@
 사용:
     ./check_waypoints.py
     ./check_waypoints.py --map ../map/archive/yun_map.yaml
-    ./check_waypoints.py --tolerance 0.07 --minimum-clearance 0.01 --margin 0.08
+    ./check_waypoints.py --tolerance 0.07 --minimum-clearance 0.0 --margin 0.02
 """
 
 import argparse
@@ -196,9 +196,9 @@ def main() -> int:
                    help="로봇 내접 반경 [m] (기본 0.06 = 0.12x0.12 정사각)")
     p.add_argument("--padding", type=float, default=0.01,
                    help="costmap footprint_padding [m]")
-    p.add_argument("--minimum-clearance", type=float, default=0.01,
+    p.add_argument("--minimum-clearance", type=float, default=0.0,
                    help="차체-벽 최소 여유 [m]. 이 아래는 차단")
-    p.add_argument("--margin", type=float, default=0.08,
+    p.add_argument("--margin", type=float, default=0.02,
                    help="차체-벽 권장 여유 [m]. 이 아래는 경고")
     p.add_argument("--tolerance", type=float, default=0.07,
                    help="xy_goal_tolerance [m]. 간격 검사에 쓴다")
@@ -218,7 +218,7 @@ def main() -> int:
     waypoints = yaml.safe_load(wp_yaml.read_text())["waypoints"] or {}
 
     resolution = float(meta["resolution"])
-    blocked = max(args.minimum_clearance, args.padding)
+    blocked = args.minimum_clearance
 
     # --- 찍기 전 확인 모드 ---
     if args.probe or args.at:
@@ -237,7 +237,7 @@ def main() -> int:
         dist = body_clearance(
             point, yaw, args.footprint, cells, resolution)
         print(f"차체-벽 여유 {dist:.3f}m", end="  ")
-        if dist < blocked:
+        if dist <= blocked:
             print(f"✗ 도달 불가 ({blocked:.2f}m 미만). 벽에서 더 떨어지세요.")
         elif dist < args.margin:
             print(f"△ 여유 부족 (권장 {args.margin:.2f}m). 조금 더 떨어지는 게 좋습니다.")
@@ -282,7 +282,7 @@ def main() -> int:
         if not inside:
             verdict, n_outside = "맵 밖", n_outside + 1
             shown = "   ---"
-        elif dist < blocked:
+        elif dist <= blocked:
             verdict, n_blocked = "도달 불가", n_blocked + 1
             shown = f"{dist:6.3f}m"
         elif dist < args.margin:

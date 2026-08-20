@@ -38,8 +38,8 @@ class CheckRequest(BaseModel):
     waypoints: dict[str, Waypoint]
     footprint: float = Field(default=0.06, ge=0.0, le=1.0)
     padding: float = Field(default=0.01, ge=0.0, le=1.0)
-    minimum_clearance: float = Field(default=0.01, ge=0.0, le=2.0)
-    margin: float = Field(default=0.08, ge=0.0, le=2.0)
+    minimum_clearance: float = Field(default=0.0, ge=0.0, le=2.0)
+    margin: float = Field(default=0.02, ge=0.0, le=2.0)
     tolerance: float = Field(default=0.07, gt=0.0, le=2.0)
 
 
@@ -147,9 +147,11 @@ def _body_clearance(
 
 def check_waypoints(request: CheckRequest) -> CheckResponse:
     occupied, (x0, x1, y0, y1), resolution = _occupied_map()
-    # Nav2 padding 1cm를 기본 하한으로 삼아 실제 costmap 충돌을 통과시키는
-    # 구성은 허용하지 않되, 그 밖의 좁은 지점은 경고 상태로 시험할 수 있다.
-    blocked = max(request.minimum_clearance, request.padding)
+    # 이 검사는 정적 맵 위의 좌표를 운영자에게 설명하기 위한 표시다. Nav2의
+    # footprint_padding까지 여기서 다시 차단하면 실제로 주행 가능한 좌표도
+    # 과도하게 빨갛게 보인다. 차체가 점유 셀에 닿은 경우만 차단하고, 가까운
+    # 지점은 경고 상태로 남겨 실제 Nav2가 최종 충돌 검사를 수행하게 한다.
+    blocked = request.minimum_clearance
     rows: list[tuple[str, tuple[float, float], bool]] = []
     items = []
 
@@ -173,15 +175,15 @@ def check_waypoints(request: CheckRequest) -> CheckResponse:
             occupied,
             resolution,
         )
-        if clearance < blocked:
+        if clearance <= blocked:
             status, message = (
                 "blocked",
-                "차체와 벽 사이 여유가 1cm 미만입니다.",
+                "정적 지도에서 차체와 벽이 겹칩니다.",
             )
         elif clearance < request.margin:
             status, message = (
                 "warning",
-                "차체와 벽 사이 여유가 8cm 미만입니다.",
+                "차체와 벽 사이 여유가 2cm 미만입니다.",
             )
         else:
             status, message = "ok", "차체와 벽 사이 여유가 충분합니다."
