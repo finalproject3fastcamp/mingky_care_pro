@@ -123,6 +123,7 @@ class GuideManager(Node):
         # 환자 거리 관측은 옵션이며, 통합 launch에서 노드와 함께 켠다.
         self.declare_parameter('patient_follow_enabled', False)
         self.declare_parameter('patient_follow_timeout_sec', 2.0)
+        self.declare_parameter('patient_follow_wait_limit_sec', 20.0)
 
         self.robot_id = self.get_parameter('robot_id').value
         configured_dock = self.get_parameter('charging_waypoint').value.strip()
@@ -217,6 +218,10 @@ class GuideManager(Node):
             0.5,
             float(self.get_parameter('patient_follow_timeout_sec').value),
         )
+        self.patient_follow_wait_limit_sec = max(
+            0.5,
+            float(self.get_parameter('patient_follow_wait_limit_sec').value),
+        )
 
         self.events = EventPublisher(
             self, self.robot_id, self.get_parameter('event_codes_file').value)
@@ -263,6 +268,7 @@ class GuideManager(Node):
         self._low_obstacle_confirmed_count = 0
         self._patient_follow_state = 'inactive'
         self._patient_follow_last_at = 0.0
+        self._patient_wait_started_at = 0.0
         self._patient_wait_context = None
         self._patient_wait_cancel_pending = False
         self._patient_resume_pending = False
@@ -600,6 +606,25 @@ class GuideManager(Node):
             return
 
         active_session_id = self.session_id
+        self.events.publish(
+            'session.ended', {'end_reason': reason}, active_session_id)
+
+        if reason == 'aborted':
+            self.get_logger().info(
+                f'의료진 요청으로 안내 세션 {active_session_id} 취소; '
+                '충전소로 복귀합니다.')
+            self._end_active_session(
+                active_session_id, dock_reason='guidance_canceled')
+        else:
+            self.get_logger().error(
+                f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
+            self._end_active_session(active_session_id)
+
+    def _end_active_session(
+            self, active_session_id: int, *, dock_reason: str | None = None) -> None:
+        """현재 안내를 끝내고 늦게 도착하는 주행 콜백을 무효화한다."""
+        if active_session_id <= 0 or active_session_id != self.session_id:
+            return
         self._nav_generation += 1
         self._cancel_low_obstacle_operation()
         self._cancel_patient_wait_state()
@@ -607,8 +632,6 @@ class GuideManager(Node):
         self._cancel_adaptive_retry()
         self._cancel_dock_retry()
         self.navigation_cancel_pub.publish(Bool(data=True))
-        self.events.publish(
-            'session.ended', {'end_reason': reason}, active_session_id)
 
         self.session_id = 0
         self.session_state = GuideState.SESSION_NONE
@@ -617,15 +640,10 @@ class GuideManager(Node):
         self.previous_visit = ''
         self.current_visit = ''
         self.session_visits = []
-        if reason == 'aborted':
-            self.get_logger().info(
-                f'의료진 요청으로 안내 세션 {active_session_id} 취소; '
-                '충전소로 복귀합니다.')
-            self._request_dock_return('guidance_canceled')
+        if dock_reason is not None:
+            self._request_dock_return(dock_reason)
         else:
             self.robot_state = GuideState.ROBOT_PAUSED
-            self.get_logger().error(
-                f'장기 장애로 안내 세션 {active_session_id} 취소 ({reason})')
 
     def _on_fire_evacuation(self, request, response):
         """화재 대피가 안내 상태와 기존 Nav2 콜백을 안전하게 선점하게 한다."""
@@ -1027,20 +1045,48 @@ class GuideManager(Node):
                 reason='patient_distance', distance=distance, source=source)
         elif state in ('normal', 'slow'):
             self._resume_for_patient(source=source)
+        else:
+            self._patient_wait_started_at = 0.0
 
     def _check_patient_follow_timeout(self) -> None:
         if (not self.patient_follow_enabled
                 or self.session_state != GuideState.SESSION_GUIDING
                 or self.session_id <= 0):
+            self._patient_wait_started_at = 0.0
             return
         now = time.monotonic()
-        if (self._patient_follow_last_at > 0.0
-                and now - self._patient_follow_last_at
-                <= self.patient_follow_timeout_sec):
+        follow_state_fresh = (
+            self._patient_follow_last_at > 0.0
+            and now - self._patient_follow_last_at
+            <= self.patient_follow_timeout_sec
+        )
+        if not follow_state_fresh:
+            self._patient_follow_state = 'waiting'
+            self._pause_for_patient(
+                reason='sensor_timeout', distance=None, source='watchdog')
+
+        if self._patient_follow_state != 'waiting':
+            self._patient_wait_started_at = 0.0
             return
-        self._patient_follow_state = 'waiting'
-        self._pause_for_patient(
-            reason='sensor_timeout', distance=None, source='watchdog')
+        if self._patient_wait_started_at <= 0.0:
+            return
+        if now - self._patient_wait_started_at < self.patient_follow_wait_limit_sec:
+            return
+
+        active_session_id = self.session_id
+        waited_sec = now - self._patient_wait_started_at
+        self.get_logger().warn(
+            f'환자를 {waited_sec:.1f}초 동안 확인하지 못해 안내 세션 '
+            f'{active_session_id}을 종료하고 충전소로 복귀합니다.')
+        self.events.publish(
+            'session.ended',
+            {'end_reason': 'aborted', 'source': 'patient_wait_timeout'},
+            active_session_id,
+        )
+        self._end_active_session(
+            active_session_id,
+            dock_reason='patient_wait_timeout',
+        )
 
     def _pause_for_patient(
             self, *, reason: str, distance: float | None,
@@ -1051,11 +1097,15 @@ class GuideManager(Node):
                 or self._fire_evacuating):
             return
         if self._patient_wait_context is not None:
+            if self._patient_wait_started_at <= 0.0:
+                self._patient_wait_started_at = time.monotonic()
             self.robot_state = GuideState.ROBOT_PAUSED
             return
         context = self._active_nav_context
         if context is None or context['is_dock'] or context['is_waiting']:
             return
+        if self._patient_wait_started_at <= 0.0:
+            self._patient_wait_started_at = time.monotonic()
         handle = self._active_nav_goal_handle
         result_future = self._active_nav_result_future
         self.robot_state = GuideState.ROBOT_PAUSED
@@ -1124,6 +1174,7 @@ class GuideManager(Node):
             self._resume_for_patient(source='patient_returned')
 
     def _resume_for_patient(self, *, source: str) -> None:
+        self._patient_wait_started_at = 0.0
         context = self._patient_wait_context
         if context is None:
             # 목표 수락 전 대기 요청이 풀린 경우 기존 목표를 계속한다.
@@ -1161,6 +1212,7 @@ class GuideManager(Node):
     def _cancel_patient_wait_state(self) -> None:
         self._patient_follow_state = 'inactive'
         self._patient_follow_last_at = 0.0
+        self._patient_wait_started_at = 0.0
         self._patient_wait_context = None
         self._patient_wait_cancel_pending = False
         self._patient_resume_pending = False

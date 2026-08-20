@@ -75,6 +75,7 @@ def manager():
     node = GuideManager(parameter_overrides=[
         Parameter('patient_follow_enabled', value=True),
         Parameter('patient_follow_timeout_sec', value=0.5),
+        Parameter('patient_follow_wait_limit_sec', value=0.5),
         Parameter('use_arrival_chime', value=False),
     ])
     node.nav = FakeNav()
@@ -124,6 +125,7 @@ def test_waiting_cancels_goal_then_patient_return_resends_it(manager) -> None:
     node._on_patient_follow_state(_state('waiting'))
 
     assert handle.cancelled == 1
+    assert node._patient_wait_started_at > 0.0
     assert node.robot_state == GuideState.ROBOT_PAUSED
     assert node._patient_wait_context['waypoint_name'] == 'xray_room_goal'
     assert events[-1][0] == 'patient.follow_wait_started'
@@ -136,7 +138,30 @@ def test_waiting_cancels_goal_then_patient_return_resends_it(manager) -> None:
     assert len(node.nav.sent) == 1
     assert node.robot_state == GuideState.ROBOT_MOVING
     assert node._patient_wait_context is None
+    assert node._patient_wait_started_at == 0.0
     assert events[-1][0] == 'patient.follow_wait_ended'
+
+
+def test_waiting_limit_ends_session_and_returns_to_dock(manager) -> None:
+    node, events = manager
+    now = time.monotonic()
+    node._patient_follow_state = 'waiting'
+    node._patient_follow_last_at = now
+    node._patient_wait_started_at = (
+        now - node.patient_follow_wait_limit_sec - 0.1)
+    dock_reasons = []
+    node._request_dock_return = dock_reasons.append
+
+    node._check_patient_follow_timeout()
+
+    assert node.session_id == 0
+    assert node.session_state == GuideState.SESSION_NONE
+    assert dock_reasons == ['patient_wait_timeout']
+    assert events[-1] == (
+        'session.ended',
+        {'end_reason': 'aborted', 'source': 'patient_wait_timeout'},
+        42,
+    )
 
 
 def test_mismatched_session_cannot_pause_current_guidance(manager) -> None:
@@ -147,6 +172,18 @@ def test_mismatched_session_cannot_pause_current_guidance(manager) -> None:
 
     assert handle.cancelled == 0
     assert node.robot_state == GuideState.ROBOT_MOVING
+    assert events == []
+
+
+def test_waiting_spot_navigation_does_not_start_patient_wait_limit(manager) -> None:
+    node, events = manager
+    handle, context = _active_goal(node)
+    context['is_waiting'] = True
+
+    node._on_patient_follow_state(_state('waiting'))
+
+    assert handle.cancelled == 0
+    assert node._patient_wait_started_at == 0.0
     assert events == []
 
 
