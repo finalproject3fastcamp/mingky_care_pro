@@ -468,7 +468,15 @@ async def subscribe() -> AsyncIterator[str]:
                 data = await asyncio.wait_for(q.get(), timeout=20)
                 yield f"data: {data}\n\n"
             except asyncio.TimeoutError:
-                yield ": keep-alive\n\n"
+                # **주석(`: keep-alive`)이 아니라 진짜 이벤트여야 한다.**
+                # EventSource 는 주석을 소비자에게 넘기지 않으므로, 주석으로는
+                # 화면이 "소식이 끊겼다" 를 판단할 수 없다.
+                #
+                # 그 판단이 필요한 이유는 vite 프록시다. 백엔드가 죽어도 프록시가
+                # 클라이언트 소켓을 붙잡고 있어서 브라우저는 스트림이 열린 줄 안다
+                # — onerror 도, EventSource 자동 재연결도 오지 않는다. 화면이
+                # 조용히 죽은 채 남는다. 이 핑이 그 유일한 단서다.
+                yield 'data: {"종류":"핑"}\n\n'
     finally:
         _SUBSCRIBERS.discard(q)
 
@@ -716,6 +724,14 @@ async def _run_pack() -> tuple[bool, str]:
                 # 첫 실행은 torch·정책 로드에만 수십 초가 걸린다. 아무 소식이
                 # 없으면 멈춘 것으로 보이므로 로그에 남긴다.
                 _push({"종류": "알림", "글": f"포장 — {ev['단계']}"})
+            elif isinstance(ev.get("진행"), (int, float)):
+                # 에피소드가 도는 동안 화면이 비어 있었다 — 기본 60초를 "로봇
+                # 연결" 에서 멈춘 채 보낸다. 러너는 매초 진행률을 올리고 있으니
+                # 그대로 흘려 준다. 단, 로그가 아니라 **진행 막대로만** 보낸다.
+                # 알림에 초당 한 줄씩 쌓으면 나머지 기록이 다 밀려난다.
+                _push({"종류": "포장진행",
+                       "이름": str(ev.get("단계", "")),
+                       "진행": max(0.0, min(1.0, float(ev["진행"])))})
         await proc.wait()
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
