@@ -458,10 +458,12 @@ ros2 run mingky_bringup check_waypoints.py
 
 두 가지를 검사합니다.
 
-**1. 벽까지 거리** — Nav2 는 로봇 내접 반경 + `footprint_padding` 안쪽 셀을
-통과 불가로 봅니다. 그보다 벽에 가까운 waypoint 는 planner 가 도달할 수
-없는데, NavFn 의 `tolerance` 가 "근처까지만" 경로를 그려주기 때문에
-**에러 없이 조용히 엉뚱한 곳에서 멈춥니다.**
+**1. 차체와 벽 사이 거리** — waypoint의 yaw로 회전한 실제 12×12cm
+footprint 외곽부터 점유 셀까지의 여유를 계산합니다. 정적 지도에서 차체가
+점유 셀과 **겹칠 때만 차단**하고, **0cm 초과 2cm 미만은 경고**합니다.
+관제의 Waypoint Check도 같은 기준을
+사용합니다. 경고 상태는 좁은 위치 시험을 위해 주행할 수 있지만 현장에서
+충돌 여유를 확인해야 합니다.
 
 **2. waypoint 사이 간격** — 두 지점이 `xy_goal_tolerance` 지름보다 가까우면,
 한쪽에 서 있는 상태에서 다른 쪽으로 보내도 이미 도착 조건을 만족해
@@ -477,14 +479,14 @@ ros2 run mingky_bringup check_waypoints.py --probe
 ```
 
 ```
-현재 위치  x=1.300  y=-1.350
-벽까지     0.212m  ○ 좋습니다.
+현재 위치  x=1.300  y=-1.350  yaw=0.000
+차체-벽 여유 0.152m  ○ 좋습니다.
 가장 가까운 기존 waypoint  reception_goal  0.641m  ○
 
 여기서 찍어도 됩니다.
 ```
 
-벽까지 거리와 **이미 찍은 waypoint 와의 간격**을 함께 봅니다.
+차체-벽 여유와 **이미 찍은 waypoint 와의 간격**을 함께 봅니다.
 너무 가까우면 두 지점을 구분하지 못해 로봇이 움직이지 않습니다.
 
 좌표를 직접 넣어 확인할 수도 있습니다.
@@ -498,7 +500,8 @@ ros2 run mingky_bringup check_waypoints.py --at 1.30 -1.35
 ros2 run mingky_bringup check_waypoints.py --map <경로>/yun_map.yaml
 
 # 파라미터를 바꿨다면 같이 넘긴다
-ros2 run mingky_bringup check_waypoints.py --tolerance 0.15 --padding 0.0
+ros2 run mingky_bringup check_waypoints.py --tolerance 0.04 \
+  --minimum-clearance 0.0 --margin 0.02 --padding 0.01
 ```
 
 도달 불가나 맵 밖 waypoint 가 있으면 종료 코드 `1` 을 돌려줍니다.
@@ -516,8 +519,9 @@ waypoint 가 전혀 다른 물리 위치를 가리킵니다. 맵 밖으로 나�
 
 | 항목 | 값 |
 | --- | --- |
-| 벽에서 최소 | **0.15 m** |
-| `_goal` ↔ `_waiting` 간격 | **0.30 m** 이상 (나눌 경우) |
+| 차체-벽 차단 기준 | **0.01 m 미만** |
+| 차체-벽 경고 기준 | **0.08 m 미만** |
+| `_goal` ↔ `_waiting` 간격 | **0.08 m** 이상 (나눌 경우) |
 | 충전소 | 도킹 지점이 아니라 **앞 0.3 m** |
 
 충전소 접점은 벽에 닿아야 해서 planner 가 구조적으로 도달할 수 없습니다.

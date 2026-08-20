@@ -43,8 +43,12 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 
+import { getQrObservation } from '../lib/api'
+import { usePolling } from '../lib/usePolling'
+import { MapRearCam } from './MapRearCam'
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
+import type { QrObservation } from '../types/monitoring'
 import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
@@ -68,6 +72,83 @@ export interface HospitalMap3DProps extends DiagLayers {
   estop?: boolean
   /** 이 로봇을 고른 상태인지. 켜면 초록으로 박동한다. */
   selected?: boolean
+  /**
+   * 환자 추종 상태. 로봇 쪽 `follow_state` 를 그대로 받는다.
+   * 안 넘기면 이 화면은 예전과 똑같이 움직인다.
+   */
+  follow?: Pick<
+    QrObservation,
+    'follow_state' | 'follow_distance' | 'follow_source'
+  > | null
+  /**
+   * 충전소로 돌아가는 중인지.
+   *
+   * `follow_state` 에 없는 상태라(inactive/normal/slow/waiting 뿐) 따로 받는다.
+   *
+   * **환자를 놓쳤다고 저절로 복귀하지는 않는다.** 로봇이 복귀를 시작하는 경우는
+   * 배터리 부족 · 의료진이 안내를 취소 · 안내 완료, 이 셋뿐이다. 환자를 놓치면
+   * 그 자리에서 **무기한 기다린다.**
+   */
+  returning?: boolean
+  /**
+   * 추종 상태를 스스로 받아 올 로봇. `follow` 를 직접 넘기면 그쪽이 이긴다.
+   *
+   * 화면 쪽에서 받아다 넘기게 하면 대시보드마다 같은 폴링을 적어야 한다.
+   * 지도 컴포넌트가 상태 표시와 카메라 제목을 함께 갱신한다.
+   */
+  robotId?: string | null
+  /**
+   * 지도 위 카메라 창이 어느 쪽을 보여줄지. **화면 단계를 따라간다.**
+   *
+   * QR 을 대는 동안은 앞쪽, 안내가 시작되면 뒤쪽이다. 원래 두 화면이 따로
+   * 하던 일을 이 창 하나가 이어받는다 — 영상이 두 곳에 뜨면 보는 사람이
+   * 어느 쪽을 봐야 하는지 알 수 없다.
+   *
+   * `null` 이면 창을 띄우지 않는다(보여줄 카메라가 없는 화면).
+   */
+  camera?: 'front' | 'rear' | null
+}
+
+type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
+
+/**
+ * 화면에 보이는 상태는 여섯 개뿐이다. 세 가지가 각자 한 가지만 맡는다.
+ *
+ * | 무엇 | 뜻 |
+ * | --- | --- |
+ * | 움직임(`pulseMs`) | **얼마나 급한가** — 없음 · 느림(2초) · 빠름(0.5초) 세 단계 |
+ * | 색(`tone`) | **어떤 종류인가** |
+ * | 글자(`text`) | **정확히 무엇인가** |
+ *
+ * 한 요소가 두 가지를 뜻하기 시작하면 보는 사람이 설명을 들어야 알 수 있다.
+ *
+ * 복귀는 박동하지 않는다. **문제가 아니라 진행 중**이기 때문이다. 대신
+ * 고리가 한 번 퍼지며 나타난다 — 박동이 멎는 것만으로는 눈이 못 잡는다.
+ */
+/** `follow_source` 를 사람 말로. 뒤쪽 카메라 창 제목줄에 쓴다. */
+function sourceText(source: string | null | undefined): string {
+  switch (source) {
+    case 'qr': return 'QR 인식'
+    case 'visual': return 'YOLO 추정'
+    case 'partial_near': return '일부만 보임'
+    case 'acquiring': return '시야 확보 중'
+    case 'grace': return '유예'
+    case 'stale': return '놓침'
+    case 'none': return '추적 꺼짐'
+    default: return '확인 중'
+  }
+}
+
+const MAP_STATE: Record<
+  MapState,
+  { text: string; tone: string; pulseMs: number | null; ring: boolean }
+> = {
+  idle: { text: '대기', tone: 'idle', pulseMs: null, ring: false },
+  escort: { text: '안내 중', tone: 'normal', pulseMs: null, ring: false },
+  slow: { text: '감속 중', tone: 'slow', pulseMs: null, ring: false },
+  waiting: { text: '기다리는 중', tone: 'wait', pulseMs: 2000, ring: false },
+  returning: { text: '충전소로 복귀 중', tone: 'wait', pulseMs: null, ring: true },
+  estop: { text: '비상정지', tone: 'alarm', pulseMs: 500, ring: false },
 }
 
 interface LabelHandle {
@@ -125,7 +206,7 @@ const LOOK: Look = {
    * 3D 안이 아니라 캔버스 뒤에 깐다. 3D 안에 넣으면 톤매핑을 타서 지정한
    * 값과 다른 색으로 나온다(밝은 회색을 넣었더니 더 밝게 나왔다).
    */
-  background: '#d5d8dc',
+  background: '#c5cbd1',
   /** 하늘빛·바닥반사 받침 */
   sky: 0x9fb4c6,
   ground: 0xc8ccd0,
@@ -169,6 +250,10 @@ const COLOR = {
   wpOk: 0x2563eb,
   wpWarn: 0xf59e0b,
   wpBad: 0xdc2626,
+  /** 사람을 기다리는 중. 복귀 고리도 같은 색이다 */
+  wait: 0xd9a300,
+  /** 아직 정상이되 벌어지는 중. 정상(초록)과 같은 계열에서 한 칸 옮긴 것 */
+  slow: 0x4f9bb5,
 } as const
 
 /**
@@ -176,6 +261,9 @@ const COLOR = {
  * 모형이 놓인 방향이 지도의 0도와 같을 이유가 없어서 여기서 맞춘다.
  */
 const FACING = 0
+
+/** 추종 상태를 받아 오는 주기. 뒤쪽 카메라 화면과 같은 값이다. */
+const QR_POLL_MS = 500
 
 /** 박동 한 주기(ms). 2D 지도에서 쓰던 1.5초와 같다. */
 const PULSE_MS = 1500
@@ -206,6 +294,16 @@ interface Handles {
   waypoints: THREE.Group
   invalidate: () => void
   resetView: () => void
+  /**
+   * 로봇 뒤에서 로봇이 바라보는 쪽을 본다.
+   * `auto` 면 사람이 최근에 화면을 만졌을 때 스스로 물러난다.
+   */
+  focusRobot: (auto?: boolean) => void
+  /** 박동 주기(ms)와 색. 급한 정도를 나타낸다 */
+  setPulse: (ms: number | null, color: number) => void
+  /** 복귀 고리. 켤 때 한 번 퍼진다 */
+  setRing: (on: boolean) => void
+  setRingPosition: (x: number, z: number) => void
   pick: (clientX: number, clientY: number, atY?: number) => { u: number; v: number } | null
   pickWaypoint: (clientX: number, clientY: number) => string | null
 }
@@ -222,6 +320,10 @@ export function HospitalMap3D({
   onSelectWaypoint,
   estop = false,
   selected = false,
+  follow = null,
+  returning = false,
+  robotId = null,
+  camera = 'rear',
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -232,6 +334,13 @@ export function HospitalMap3D({
   const [robotReady, setRobotReady] = useState(0)
   const [failed, setFailed] = useState(false)
   const [placing, setPlacing] = useState(false)
+  /**
+   * 카메라 창은 **켜진 채로 시작한다.**
+   *
+   * 이 창이 이제 영상을 보여주는 **유일한 자리**다. 지도 아래에 있던 카드를
+   * 걷어냈으므로 꺼 두면 영상을 볼 방법이 없다.
+   */
+  const [camOn, setCamOn] = useState(true)
   const [drag, setDrag] = useState<{ u: number; v: number } | null>(null)
   const [visible, setVisible] = useState<Record<LayerKey, boolean>>({
     scan: true,
@@ -313,6 +422,44 @@ export function HospitalMap3D({
     scene.add(robot)
 
     /**
+     * 발밑 접지 그림자.
+     *
+     * 해 그림자 지도는 건물 전체에 펼쳐 쓰기 때문에 로봇처럼 작은 물체에는
+     * 거의 안 잡힌다. 그런데 사람 눈은 물체가 바닥에 닿았는지를 발밑 그림자로
+     * 판단해서, 없으면 공중에 떠 보인다. 바퀴 밑이 바닥에 정확히 닿아 있는데도
+     * 떠 보인다는 지적을 받았다.
+     *
+     * 해 그림자를 키우는 대신 발밑에 원을 하나 깐다 — 전체 보기처럼 멀리서
+     * 볼 때도 로봇과 같이 작아져서 항상 붙어 있는 것으로 읽힌다.
+     */
+    const contactTex = (() => {
+      const cv = document.createElement('canvas')
+      cv.width = 128
+      cv.height = 128
+      const g = cv.getContext('2d')
+      if (g) {
+        const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64)
+        grad.addColorStop(0, 'rgba(0,0,0,0.40)')
+        grad.addColorStop(0.5, 'rgba(0,0,0,0.16)')
+        grad.addColorStop(1, 'rgba(0,0,0,0)')
+        g.fillStyle = grad
+        g.fillRect(0, 0, 128, 128)
+      }
+      const t = new THREE.CanvasTexture(cv)
+      t.colorSpace = THREE.SRGBColorSpace
+      return t
+    })()
+    const contact = new THREE.Mesh(
+      new THREE.CircleGeometry(0.09, 32),
+      new THREE.MeshBasicMaterial({ map: contactTex, transparent: true, depthWrite: false }),
+    )
+    contact.rotation.x = -Math.PI / 2
+    // 바닥 0mm, 바닥 표시선 1mm, 그림자 2mm, 박동 4mm 순으로 쌓는다.
+    contact.position.y = 0.002
+    contact.renderOrder = 3
+    robot.add(contact)
+
+    /**
      * 로봇 아래에서 번지는 원. 어제 2D 지도에서 쓰던 것과 같은 박동이다 —
      * 1.5초에 한 번, 커지면서 옅어진다. 선택과 비상정지가 같은 움직임이고
      * 색으로만 갈린다.
@@ -333,6 +480,28 @@ export function HospitalMap3D({
     pulse.renderOrder = 4
     pulse.visible = false
     scene.add(pulse)
+
+    // 박동 주기. **급한 정도를 이 값 하나가 나타낸다.**
+    let pulseMs = PULSE_MS
+
+    /**
+     * 복귀 고리. 박동이 아니라 고리다 — 복귀는 문제가 아니라 진행 중이라
+     * 계속 뛰면 안 된다. 대신 나타날 때 한 번만 퍼진다.
+     */
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: COLOR.wait,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.168, 56), ringMat)
+    ring.rotation.x = -Math.PI / 2
+    ring.position.y = 0.003
+    ring.renderOrder = 4
+    ring.visible = false
+    scene.add(ring)
+    let ringStart = 0
 
     // ---- 진단 레이어 ----
     // 미리 자리를 잡아 두고 개수만 바꾼다. 매번 새로 만들면 초당 수십 번
@@ -477,6 +646,31 @@ export function HospitalMap3D({
       dirty = true
     }
     controls.addEventListener('change', invalidate)
+    /**
+     * 사람이 화면을 만진 시각. 자동으로 카메라를 옮길 때 이걸 본다 —
+     * 보는 사람 손에서 화면을 뺏는 건 3D 화면에서 가장 하면 안 되는 짓이다.
+     */
+    // 0 으로 두면 안 된다 — 화면을 연 직후에는 performance.now() 가 작아서
+    // "방금 만졌다"로 잘못 읽히고, 첫 자동 이동이 통째로 무시된다.
+    let lastTouch = Number.NEGATIVE_INFINITY
+    const onGrab = () => {
+      lastTouch = performance.now()
+      // 날아가는 중이었다면 즉시 멈추고 조작권을 돌려준다.
+      flying = false
+      controls.enabled = true
+    }
+    controls.addEventListener('start', onGrab)
+
+    // ---- 카메라 이동 ----
+    // 900ms. 더 빠르면 순간이동처럼 보여 어디로 갔는지 못 따라가고,
+    // 더 느리면 답답하다.
+    const FLY_MS = 900
+    const flyFrom = new THREE.Vector3()
+    const flyTo = new THREE.Vector3()
+    const flyFromTarget = new THREE.Vector3()
+    const flyToTarget = new THREE.Vector3()
+    let flyStart = 0
+    let flying = false
 
     const projected = new THREE.Vector3()
     const syncLabels = (w: number, h: number, show: boolean) => {
@@ -507,11 +701,32 @@ export function HospitalMap3D({
     let raf = 0
     const tick = () => {
       raf = requestAnimationFrame(tick)
+      if (flying) {
+        const t = Math.min(1, (performance.now() - flyStart) / FLY_MS)
+        // 가속했다 감속하는 곡선. 등속으로 밀면 기계가 미는 것처럼 보인다.
+        const e = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2
+        controls.target.lerpVectors(flyFromTarget, flyToTarget, e)
+        camera.position.lerpVectors(flyFrom, flyTo, e)
+        // 아래 루프가 `!moved && !dirty` 로 일찍 빠지므로 직접 켜 줘야 한다.
+        // 안 켜면 카메라 값만 바뀌고 화면은 멈춰 있다.
+        dirty = true
+        if (t >= 1) {
+          flying = false
+          controls.enabled = true
+        }
+      }
       const moved = controls.update()
       // 박동. 1.5초를 한 주기로 커지면서 옅어진다. 처음에 빠르고 끝에서
       // 느려지는 곡선(ease-out)이라야 심장 박동처럼 읽힌다.
+      if (ring.visible && ringStart) {
+        // 0.28 배에서 1.2 배까지 퍼졌다가 1 배로 앉는다. 한 번뿐이다.
+        const t = Math.min(1, (performance.now() - ringStart) / 620)
+        ring.scale.setScalar(t < 0.55 ? 0.28 + (t / 0.55) * 0.92 : 1.2 - ((t - 0.55) / 0.45) * 0.2)
+        dirty = true
+        if (t >= 1) ringStart = 0
+      }
       if (pulse.visible) {
-        const t = (performance.now() % PULSE_MS) / PULSE_MS
+        const t = (performance.now() % pulseMs) / pulseMs
         const e = 1 - (1 - t) ** 3
         pulse.scale.setScalar(0.6 + e * 1.4)
         pulseMat.opacity = 0.55 * (1 - e)
@@ -574,6 +789,103 @@ export function HospitalMap3D({
       invalidate()
     }
 
+    /**
+     * 로봇 뒤에서 **로봇이 바라보는 쪽**을 함께 보는 시점.
+     *
+     * 처음에는 기본 시점 각도를 그대로 두고 거리만 줄였는데, 그러면 거의
+     * 내려다보는 그림이라 로봇이 어느 쪽을 향하는지가 안 읽힌다. 그래서
+     * 방위는 로봇 뒤로 돌리고 고도는 아래 값으로 낮춘다.
+     *
+     * 거리는 **건물 가로폭에 비례**시킨다. 고정 미터값을 쓰면 모형이 바뀔 때
+     * 깨진다 — 실제로 한 번 박아 뒀다가, 그 값이 건물 전체와 비슷해서 당기라고
+     * 했더니 오히려 화면이 멀어지는 일이 있었다.
+     *
+     * 바닥에 딱 맞추는 계산은 쓰지 않는다. 낮은 각도에서는 바닥 사각형의
+     * 앞뒤가 크게 늘어나 카메라가 뒤로 밀리고, **정작 로봇이 작아진다.**
+     *
+     * **로봇이 엉뚱한 쪽을 보고 있으면 `FACING` 이 틀린 것이다.** 지금까지
+     * 위에서만 봐서 티가 안 났을 뿐, 이 각도에서는 바로 드러난다.
+     */
+    const FOCUS_ELEV_DEG = 46
+
+    const focusDistance = () => {
+      if (corners.length < 3) return 0.8
+      const w = Math.max(
+        Math.abs(corners[1].x - corners[0].x),
+        Math.abs(corners[2].z - corners[0].z),
+      )
+      return THREE.MathUtils.clamp(
+        w * 0.22,
+        controls.minDistance + 0.05,
+        controls.maxDistance,
+      )
+    }
+
+    const AUTO_FOCUS_HOLD_MS = 8000
+
+    const focusRobot = (auto = false) => {
+      if (!robot.visible) return
+      if (auto && performance.now() - lastTouch < AUTO_FOCUS_HOLD_MS) return
+      const at = robot.position.clone()
+      at.y = 0.1
+      // 로봇이 바라보는 쪽. `robot.rotation.y` 는 지도 각도에 FACING 을 더한
+      // 값이므로, 여기서 나오는 방향은 **화면에 그려진 로봇이 향한 쪽과 항상
+      // 같다.** 둘 다 같은 값에서 나오기 때문이다. 다만 그것이 **실제 로봇의
+      // 앞**과 같은지는 FACING 이 맞아야 성립하고, FACING 은 아직 실물로
+      // 확인하지 않았다.
+      const forward = new THREE.Vector3(1, 0, 0).applyAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        robot.rotation.y,
+      )
+      const elev = THREE.MathUtils.degToRad(FOCUS_ELEV_DEG)
+      const flat = Math.cos(elev)
+      const viewDir = new THREE.Vector3(
+        -forward.x * flat,
+        Math.sin(elev),
+        -forward.z * flat,
+      )
+      if (viewDir.lengthSq() < 1e-6) viewDir.copy(dir)
+      viewDir.normalize()
+      flyFromTarget.copy(controls.target)
+      flyFrom.copy(camera.position)
+      flyToTarget.copy(at)
+      flyTo.copy(at).addScaledVector(viewDir, focusDistance())
+      flyStart = performance.now()
+      flying = true
+      // 관성(damping)이 켜져 있어 그대로 두면 코드가 옮기는 것과 서로 싸워 떤다.
+      controls.enabled = false
+      invalidate()
+    }
+
+    /**
+     * 회전한 모형의 **실제** 상자를 잰다.
+     *
+     * `Box3.setFromObject` 는 기하의 상자를 통째로 돌린 뒤 그 여덟 귀퉁이에
+     * 다시 상자를 씌운다. 모형이 비스듬히 돌아 있으면 이 상자가 실제 모형보다
+     * 커진다. 그 값으로 바닥에 맞추면 **로봇이 공중에 뜬다.**
+     *
+     * pinky.glb 가 정확히 그 경우다 — 노드에 쿼터니언 회전
+     * (0.653, -0.271, 0.271, 0.653) 이 들어 있어서, 상자 기준으로는 바닥에
+     * 닿았는데 눈으로는 떠 보였다.
+     *
+     * 꼭짓점을 하나씩 재면 정확하다. 모형을 읽을 때 한 번만 하므로 비용은
+     * 문제가 되지 않는다(14만 점, 몇 ms).
+     */
+    const tightBox = (root: THREE.Object3D) => {
+      const v = new THREE.Vector3()
+      const box = new THREE.Box3()
+      root.updateMatrixWorld(true)
+      root.traverse((o) => {
+        const me = o as THREE.Mesh
+        const pos = me.isMesh ? me.geometry?.getAttribute('position') : null
+        if (!pos) return
+        for (let i = 0; i < pos.count; i += 1) {
+          box.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(me.matrixWorld))
+        }
+      })
+      return box
+    }
+
     // ---- 모형 읽기 ----
     const loader = new GLTFLoader()
     loader.setMeshoptDecoder(MeshoptDecoder)
@@ -587,7 +899,8 @@ export function HospitalMap3D({
       model.rotation.x = -Math.PI / 2
       model.updateMatrixWorld(true)
       // 원점을 발밑 한가운데로 옮긴다. 그래야 로봇 좌표를 그대로 얹을 수 있다.
-      const box = new THREE.Box3().setFromObject(model)
+      // 상자를 씌워 재면 이 모형은 실제보다 아래가 커진다 — tightBox 주석 참고.
+      const box = tightBox(model)
       const c = box.getCenter(new THREE.Vector3())
       model.position.set(-c.x, -box.min.y, -c.z)
 
@@ -670,6 +983,17 @@ export function HospitalMap3D({
       waypoints: wpGroup,
       invalidate,
       resetView,
+      focusRobot,
+      setPulse: (ms, color) => {
+        pulseMs = ms ?? PULSE_MS
+        pulseMat.color.setHex(color)
+      },
+      setRing: (on) => {
+        if (on && !ring.visible) ringStart = performance.now()
+        ring.visible = on
+        invalidate()
+      },
+      setRingPosition: (x, z) => ring.position.set(x, 0.003, z),
       pick,
       pickWaypoint,
     }
@@ -684,6 +1008,7 @@ export function HospitalMap3D({
       cancelAnimationFrame(raf)
       ro.disconnect()
       controls.removeEventListener('change', invalidate)
+      controls.removeEventListener('start', onGrab)
       controls.dispose()
       for (const l of labelsRef.current) l.el.remove()
       labelsRef.current = []
@@ -694,6 +1019,9 @@ export function HospitalMap3D({
         if (Array.isArray(mat)) mat.forEach((x) => x.dispose())
         else if (mat) (mat as THREE.Material).dispose()
       })
+      // 재질을 버려도 텍스처는 같이 안 버려진다. 위 traverse 가 재질까지만
+      // 치우므로 손으로 만든 텍스처는 여기서 따로 버린다.
+      contactTex.dispose()
       envTex.dispose()
       pmrem.dispose()
       renderer.dispose()
@@ -712,17 +1040,141 @@ export function HospitalMap3D({
       h.robot.rotation.y = mapYawToModel(pose.yaw) + FACING
       h.robot.visible = true
       h.pulse.position.set(m.u, 0.004, -m.v)
+      h.setRingPosition(m.u, -m.v)
     }
     h.robot.visible = !!pose
-    // 박동은 고른 로봇이거나 비상정지일 때만. 늘 뛰면 아무것도 알리지 못한다.
-    h.pulse.visible = !!pose && (selected || estop)
-    h.pulse.material.color.setHex(estop ? COLOR.estop : COLOR.selected)
+    // 박동은 여기서 건드리지 않는다. 위치는 초당 여러 번 들어오는데 그때마다
+    // 색을 칠하면, 이탈로 노랗게 바꿔 둔 것이 다음 위치 갱신에 초록으로
+    // 덮인다. 박동은 아래 한 곳에서만 정한다.
     for (const r of h.robotMats) {
       if (estop) r.m.color.setHex(r.estop)
       else r.m.color.copy(r.base)
     }
     h.invalidate()
   }, [pose, estop, selected, robotReady])
+
+  // ------------------------------------------------------------- 추종 상태
+  /**
+   * 유예(`grace`)는 **놓친 게 아니다.** 카메라는 정상 동작 중에도 한두 프레임씩
+   * 인식을 놓치는데, 그때마다 노란불을 켜면 잘 돌아가는 중에도 고장난 것처럼
+   * 보인다. 로봇 쪽이 이미 `follow_source` 로 유예를 구분해 주므로 그냥 넘긴다.
+   */
+  // 넘겨받은 값이 있으면 그것만 쓴다. 없을 때만 스스로 받아 온다.
+  const observed = usePolling(
+    (signal) => (robotId && !follow ? getQrObservation(robotId, { signal }) : Promise.resolve(null)),
+    QR_POLL_MS,
+    robotId ?? null,
+  )
+  // 요청이 실패했는데 마지막 성공값을 계속 보여주면 끊긴 추적을 정상으로
+  // 오인할 수 있다. 명시적으로 넘겨받은 값이 없을 때는 오류 즉시 비운다.
+  const followNow = follow ?? (observed.error ? null : observed.data)
+
+  const mapState: MapState = useMemo(() => {
+    if (estop) return 'estop'
+    if (returning) return 'returning'
+    if (!pose) return 'idle'
+    if (followNow?.follow_state === 'waiting' && followNow.follow_source !== 'grace') return 'waiting'
+    if (followNow?.follow_state === 'slow') return 'slow'
+    if (followNow?.follow_state === 'normal') return 'escort'
+    return 'idle'
+  }, [estop, returning, pose, followNow?.follow_state, followNow?.follow_source])
+
+  /**
+   * 박동을 정하는 **유일한 곳**.
+   *
+   * 우선순위는 **비상정지 > 환자 이탈 > 선택됨** 이다. 두 곳에서 색을 칠하면
+   * 위치가 갱신될 때마다 낮은 우선순위가 높은 것을 덮는다.
+   *
+   * | 무엇 | 색 | 주기 |
+   * | --- | --- | --- |
+   * | 비상정지 | 빨강 | 0.5초 (빠름) |
+   * | 환자 이탈 | 노랑 | 2초 (느림) |
+   * | 고른 로봇 | 초록 | 1.5초 (평상시) |
+   *
+   * 이탈은 **고르지 않은 로봇에서도** 박동한다. 고르지 않았다고 놓친 것을
+   * 안 알리면, 두 대를 볼 때 한 대의 사고를 통째로 놓친다.
+   */
+  useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const beat =
+      mapState === 'estop'
+        ? { ms: MAP_STATE.estop.pulseMs, color: COLOR.estop }
+        : mapState === 'waiting'
+          ? { ms: MAP_STATE.waiting.pulseMs, color: COLOR.wait }
+          : selected
+            ? { ms: PULSE_MS, color: COLOR.selected }
+            : null
+
+    h.pulse.visible = !!pose && beat !== null
+    if (beat) h.setPulse(beat.ms, beat.color)
+    h.setRing(MAP_STATE[mapState].ring && !!pose)
+    h.invalidate()
+  }, [mapState, pose, selected])
+
+  /**
+   * 무슨 일이 있었는지 남긴다.
+   *
+   * 보는 사람은 화면을 계속 보고 있지 않는다. 잠깐 다른 데를 본 사이에
+   * 이탈이 났다 복귀까지 끝나면 아무것도 못 본 것이 된다. **지나간 일이
+   * 남아 있어야 놓쳐도 따라잡을 수 있다.**
+   *
+   * 지도 위에 겹쳐 놓는다 — 지도 아래에 줄을 더하면 이 컴포넌트가 높아져서
+   * 팀이 짜 둔 화면 배치가 밀린다.
+   */
+  const prevState = useRef<MapState>('idle')
+  const [log, setLog] = useState<{ id: number; at: string; text: string; tone: string }[]>([])
+
+  useEffect(() => {
+    const from = prevState.current
+    prevState.current = mapState
+    if (from === mapState) return
+    const text =
+      mapState === 'escort'
+        ? from === 'slow'
+          ? '환자가 따라붙어 정상 속도로'
+          : '안내 시작'
+        : mapState === 'slow'
+          ? '환자가 멀어져 감속'
+          : mapState === 'waiting'
+            ? '경로이탈 — 그 자리에서 대기'
+            : mapState === 'returning'
+              // 사유는 화면까지 오지 않는다. 로봇 쪽 복귀 사유는 battery /
+              // guidance_canceled / session_completed 셋인데 밖으로는
+              // returning_to_dock 참·거짓만 나온다. 짐작해 적으면 틀린 말이
+              // 화면에 남으므로 사실만 적는다.
+              ? '충전소로 복귀 시작'
+              : mapState === 'estop'
+                ? '비상정지'
+                : from === 'returning'
+                  ? '충전소 복귀 완료'
+                  : '안내 종료'
+    const now = new Date()
+    setLog((rows) =>
+      [
+        {
+          id: now.getTime(),
+          at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`,
+          text,
+          tone: MAP_STATE[mapState].tone,
+        },
+        ...rows,
+        // 네 줄이면 충분하다. 더 쌓이면 아무도 안 본다.
+      ].slice(0, 4),
+    )
+  }, [mapState])
+
+  /**
+   * 환자를 놓친 순간 그쪽으로 화면을 당긴다. 시연에서는 이게 박동보다 세다 —
+   * 화면이 들어가면 모든 눈이 그쪽으로 간다.
+   *
+   * 다만 **보는 사람이 화면을 만지는 중이면 하지 않는다.** 손에서 화면을
+   * 뺏기지 않는 것이 자동으로 맞춰 주는 것보다 중요하다.
+   */
+  useEffect(() => {
+    if (mapState !== 'waiting') return
+    handles.current?.focusRobot(true)
+  }, [mapState])
 
   useEffect(() => {
     const h = handles.current
@@ -877,6 +1329,20 @@ export function HospitalMap3D({
     <section className="robot-map map3d">
       <header className="robot-map__header">
         <span className="robot-map__label">위치 · 로컬라이제이션</span>
+        {/*
+          색만으로는 구분하지 않는다. 화면을 비스듬히 보거나 조명이 다르면
+          색이 틀어지므로 상태 이름을 항상 같이 적는다.
+        */}
+        <span className={`map3d__state map3d__state--${MAP_STATE[mapState].tone}`}>
+          <i aria-hidden="true" />
+          {MAP_STATE[mapState].text}
+          {/* 거리는 실제로 환자를 잡고 있을 때만 쓴다. 놓친 뒤에도 마지막
+              숫자가 남아 있으면 아직 보고 있는 것으로 잘못 읽힌다. */}
+          {typeof followNow?.follow_distance === 'number' &&
+            (mapState === 'escort' || mapState === 'slow') && (
+              <b>{followNow.follow_distance.toFixed(2)} m</b>
+            )}
+        </span>
         {pose ? (
           <span className="robot-map__coord">
             x {pose.x.toFixed(2)} · y {pose.y.toFixed(2)} ·{' '}
@@ -913,6 +1379,25 @@ export function HospitalMap3D({
             {placing ? '바닥을 클릭하세요' : '위치 지정'}
           </button>
         )}
+        {robotId && camera && (
+          <button
+            type="button"
+            className={`robot-map__toggle${camOn ? '' : ' off'}`}
+            onClick={() => setCamOn((v) => !v)}
+            title="로봇 카메라를 지도 위에 띄웁니다. 끌어서 옮길 수 있습니다"
+          >
+            카메라
+          </button>
+        )}
+        <button
+          type="button"
+          className="map3d__reset"
+          onClick={() => handles.current?.focusRobot()}
+          disabled={!pose}
+          title="보는 각도는 그대로 두고 로봇 쪽으로 당깁니다"
+        >
+          로봇 보기
+        </button>
         <button type="button" className="map3d__reset" onClick={() => handles.current?.resetView()}>
           시점 초기화
         </button>
@@ -955,6 +1440,25 @@ export function HospitalMap3D({
       >
         <div ref={hostRef} className="map3d__canvas" />
         <div ref={labelHostRef} className="map3d__signs" />
+        {camOn && robotId && camera && (
+          <MapRearCam
+            robotId={robotId}
+            facing={camera}
+            tone={MAP_STATE[mapState].tone}
+            label={sourceText(followNow?.follow_source)}
+          />
+        )}
+        {log.length > 0 && (
+          <ul className="map3d__log">
+            {log.map((row) => (
+              <li key={row.id} className={`map3d__log-row map3d__log-row--${row.tone}`}>
+                <time>{row.at}</time>
+                <i aria-hidden="true" />
+                <span>{row.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         {!ready && !failed && <p className="map3d__loading">3D 지도를 불러오는 중…</p>}
         {failed && <p className="map3d__loading">3D 지도를 불러오지 못했습니다.</p>}
       </div>

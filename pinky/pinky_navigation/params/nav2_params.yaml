@@ -228,8 +228,8 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
-      xy_goal_tolerance: 0.10                    # [m] 판정 원 지름 0.20m. 맵이 4.80x3.68m 라 0.25(지름 0.50m)면 목적지를 구분하지 못한다
-      yaw_goal_tolerance: 0.25                   # [rad] 목표 각도 오차 약 14도 이내면 올바르게 본 것으로 인정
+      xy_goal_tolerance: 0.04                    # [m] 목표 중심 4cm 이내를 도착으로 인정한다
+      yaw_goal_tolerance: 0.174533               # [rad] 목표 각도 오차 10도 이내를 도착으로 인정한다
 
     # ==========================================================
     # 4. 주행 진척도 검사 (Progress Checker)
@@ -343,13 +343,14 @@ planner_server:
     costmap_update_timeout: 1.0
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
-      # 요청 지점에 도달할 수 없으면 가까운 지점을 성공으로 돌려주지 않는다.
-      tolerance: 0.0
+      # 동적 장애물이 정확한 목표 셀을 잠시 덮어도 Controller의 4cm 도착
+      # 허용범위 안에서 접근 가능한 셀을 찾아 우회 경로를 만들 수 있게 한다.
+      tolerance: 0.04
       use_astar: false
       allow_unknown: true
     Smac2D:
       plugin: "nav2_smac_planner::SmacPlanner2D"
-      tolerance: 0.0
+      tolerance: 0.04
       allow_unknown: true
       max_planning_time: 2.0
       cost_travel_multiplier: 2.0

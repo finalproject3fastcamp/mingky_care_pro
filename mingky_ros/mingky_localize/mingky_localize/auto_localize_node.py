@@ -325,6 +325,11 @@ class AutoLocalizeNode(Node):
         self.mode = msg.data
 
     def _on_particles(self, msg: ParticleCloud):
+        # 위치 재탐색을 실행할 때만 AMCL 인수 확인에 particle 배열이 필요하다.
+        # 평상시에는 최대 2,000개 pose를 Python tuple로 계속 복사하지 않는다.
+        # _reserve_run()이 먼저 _busy를 세우므로 실행 중 첫 갱신은 놓치지 않는다.
+        if not self._busy:
+            return
         self._particles = [
             (p.pose.position.x, p.pose.position.y,
              _quat_to_yaw(p.pose.orientation.z, p.pose.orientation.w))

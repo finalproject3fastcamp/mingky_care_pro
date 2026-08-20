@@ -64,6 +64,8 @@ def _rear_camera_actions(context):
         launch_arguments={
             'calibration_file': calibration_file,
             'qr_size': LaunchConfiguration('qr_size'),
+            'process_only_while_guiding': LaunchConfiguration(
+                'qr_process_only_while_guiding'),
         }.items(),
     )
     return [rear_camera, qr_distance]
@@ -79,6 +81,8 @@ def _rear_stream_action() -> Node:
             'image_topic': '/rear_camera/image_raw',
             'compressed_topic': LaunchConfiguration(
                 'tracking_compressed_topic'),
+            'compressed_enable_topic': LaunchConfiguration(
+                'tracking_compressed_enable_topic'),
             'compressed_jpeg_quality': LaunchConfiguration(
                 'tracking_jpeg_quality'),
             'port': LaunchConfiguration('rear_preview_port'),
@@ -121,6 +125,11 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument('start_qr_distance', default_value='true'),
         DeclareLaunchArgument(
+            'qr_process_only_while_guiding',
+            default_value='false',
+            description='안내 중에만 후방 QR 계산을 수행',
+        ),
+        DeclareLaunchArgument(
             'qr_size', default_value='0.028',
             description='Printed QR symbol side length in metres',
         ),
@@ -143,6 +152,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             'tracking_compressed_topic',
             default_value='/rear_camera/tracking/image_raw/compressed',
+        ),
+        DeclareLaunchArgument(
+            'tracking_compressed_enable_topic',
+            default_value='',
+            description='비우면 추적용 compressed 영상을 항상 제공',
         ),
         DeclareLaunchArgument('tracking_jpeg_quality', default_value='70'),
         GroupAction(

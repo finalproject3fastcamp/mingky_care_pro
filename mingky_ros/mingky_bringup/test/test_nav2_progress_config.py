@@ -70,9 +70,25 @@ def test_smac2d_is_the_primary_global_planner() -> None:
 
     assert 'Smac2D' in planner['planner_plugins']
     assert planner['Smac2D']['plugin'] == 'nav2_smac_planner::SmacPlanner2D'
-    assert planner['GridBased']['tolerance'] == 0.0
-    assert planner['Smac2D']['tolerance'] == 0.0
+    assert planner['GridBased']['tolerance'] == pytest.approx(0.04)
+    assert planner['Smac2D']['tolerance'] == pytest.approx(0.04)
     assert planner['expected_planner_frequency'] == pytest.approx(5.0)
+
+
+def test_planner_and_controller_share_the_same_goal_tolerance() -> None:
+    with NAV2_PARAMS.open(encoding='utf-8') as stream:
+        params = yaml.safe_load(stream)
+
+    planner = params['planner_server']['ros__parameters']
+    goal_checker = params['controller_server']['ros__parameters'][
+        'general_goal_checker']
+
+    assert planner['GridBased']['tolerance'] == pytest.approx(
+        goal_checker['xy_goal_tolerance'])
+    assert planner['Smac2D']['tolerance'] == pytest.approx(
+        goal_checker['xy_goal_tolerance'])
+    assert goal_checker['yaw_goal_tolerance'] == pytest.approx(
+        0.174533, abs=1e-6)
 
 
 def test_bt_action_ack_timeout_tolerates_loaded_robot() -> None:

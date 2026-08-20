@@ -1,6 +1,10 @@
 """손님 잠금(target_lock) 정책 테스트."""
 
-from mingky_person_follow.target_lock import bbox_center_distance, pick_target
+from mingky_person_follow.target_lock import (
+    bbox_center_distance,
+    bbox_iou,
+    pick_target,
+)
 
 
 def _det(cls: str, x: float, y: float, w: float = 100.0, h: float = 200.0):
@@ -46,6 +50,13 @@ def test_bbox_center_distance() -> None:
     assert bbox_center_distance(a, b) == 5.0
 
 
+def test_bbox_iou_for_same_and_separate_boxes() -> None:
+    box = _det('p001', 100, 100)
+
+    assert bbox_iou(box, box) == 1.0
+    assert bbox_iou(box, _det('p002', 400, 400)) == 0.0
+
+
 def test_reacquire_keeps_verified_class_without_old_position() -> None:
     detections = [_det('p001', 320, 240), _det('p002', 500, 240)]
 
@@ -58,3 +69,76 @@ def test_reacquire_keeps_verified_class_without_old_position() -> None:
     )
 
     assert target['cls'] == 'p002'
+
+
+def test_required_class_loses_to_stronger_overlapping_class() -> None:
+    detections = [
+        {**_det('p003', 320, 240), 'conf': 0.70},
+        {**_det('p001', 320, 240), 'conf': 0.84},
+    ]
+
+    target = pick_target(
+        detections,
+        None,
+        screen_center=(320.0, 240.0),
+        max_jump_px=200.0,
+        required_class='p003',
+        min_confidence=0.55,
+        class_overlap_iou=0.5,
+        class_confidence_margin=0.15,
+    )
+
+    assert target is None
+
+
+def test_required_class_wins_with_clear_confidence_margin() -> None:
+    detections = [
+        {**_det('p003', 320, 240), 'conf': 0.82},
+        {**_det('p001', 320, 240), 'conf': 0.41},
+    ]
+
+    target = pick_target(
+        detections,
+        None,
+        screen_center=(320.0, 240.0),
+        max_jump_px=200.0,
+        required_class='p003',
+        min_confidence=0.55,
+        class_overlap_iou=0.5,
+        class_confidence_margin=0.15,
+    )
+
+    assert target is detections[0]
+
+
+def test_distant_other_class_does_not_make_target_ambiguous() -> None:
+    detections = [
+        {**_det('p003', 120, 240), 'conf': 0.75},
+        {**_det('p001', 520, 240), 'conf': 0.90},
+    ]
+
+    target = pick_target(
+        detections,
+        None,
+        screen_center=(320.0, 240.0),
+        max_jump_px=200.0,
+        required_class='p003',
+        min_confidence=0.55,
+        class_overlap_iou=0.5,
+        class_confidence_margin=0.15,
+    )
+
+    assert target is detections[0]
+
+
+def test_low_confidence_required_class_is_rejected() -> None:
+    target = pick_target(
+        [{**_det('p003', 320, 240), 'conf': 0.54}],
+        None,
+        screen_center=(320.0, 240.0),
+        max_jump_px=200.0,
+        required_class='p003',
+        min_confidence=0.55,
+    )
+
+    assert target is None

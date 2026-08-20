@@ -3,10 +3,9 @@
 
 두 가지를 본다.
 
-1. 벽까지 거리
-   Nav2 는 로봇 내접 반경 + footprint_padding 안쪽 셀을 통과 불가로 본다.
-   그보다 벽에 가까운 waypoint 는 planner 가 도달할 수 없고,
-   NavFn 의 tolerance 때문에 '근처까지만' 경로를 그린 뒤 조용히 실패한다.
+1. 차체와 벽 사이 거리
+   waypoint yaw로 회전한 12x12cm footprint 외곽부터 점유 셀까지 잰다.
+   점유 셀과 겹치면 차단하고, 2cm 미만은 경고한다.
 
 2. waypoint 사이 간격
    두 지점이 xy_goal_tolerance 지름보다 가까우면, 한쪽에 서 있는 상태에서
@@ -18,7 +17,7 @@
 사용:
     ./check_waypoints.py
     ./check_waypoints.py --map ../map/archive/yun_map.yaml
-    ./check_waypoints.py --tolerance 0.12 --footprint 0.06 --padding 0.03
+    ./check_waypoints.py --tolerance 0.04 --minimum-clearance 0.0 --margin 0.02
 """
 
 import argparse
@@ -81,6 +80,50 @@ def occupied_cells(map_yaml: Path):
     return cells, meta, (width, height), extent
 
 
+def footprint_vertices(point, yaw, half_extent):
+    """waypoint yaw가 적용된 정사각 footprint 꼭짓점을 돌려준다."""
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    return [
+        (
+            point[0] + cos_yaw * local_x - sin_yaw * local_y,
+            point[1] + sin_yaw * local_x + cos_yaw * local_y,
+        )
+        for local_x, local_y in (
+            (half_extent, half_extent),
+            (half_extent, -half_extent),
+            (-half_extent, -half_extent),
+            (-half_extent, half_extent),
+        )
+    ]
+
+
+def body_clearance(point, yaw, half_extent, cells, resolution):
+    """회전된 차체 외곽부터 가장 가까운 점유 셀 영역까지의 거리다."""
+    if not cells:
+        return float("inf")
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    cell_radius = resolution / math.sqrt(2.0)
+    nearest = float("inf")
+    for wall_x, wall_y in cells:
+        dx, dy = wall_x - point[0], wall_y - point[1]
+        local_x = cos_yaw * dx + sin_yaw * dy
+        local_y = -sin_yaw * dx + cos_yaw * dy
+        outside_x = max(abs(local_x) - half_extent, 0.0)
+        outside_y = max(abs(local_y) - half_extent, 0.0)
+        distance = max(math.hypot(outside_x, outside_y) - cell_radius, 0.0)
+        nearest = min(nearest, distance)
+    return nearest
+
+
+def footprint_inside(point, yaw, half_extent, extent):
+    """차체 전체가 맵 범위 안에 있는지 확인한다."""
+    x0, x1, y0, y1 = extent
+    return all(
+        x0 <= x <= x1 and y0 <= y <= y1
+        for x, y in footprint_vertices(point, yaw, half_extent)
+    )
+
+
 def find_default(*relative: str) -> Path | None:
     """설치된 패키지 share 를 먼저 보고, 없으면 소스 트리를 거슬러 올라간다.
 
@@ -108,7 +151,7 @@ def find_default(*relative: str) -> Path | None:
 
 
 def current_pose(timeout: float = 5.0):
-    """/amcl_pose 를 한 건 읽어 (x, y) 를 돌려준다. ROS 환경에서만 동작한다."""
+    """/amcl_pose 를 한 건 읽어 (x, y, yaw) 를 돌려준다."""
     import rclpy
     from geometry_msgs.msg import PoseWithCovarianceStamped
     from rclpy.node import Node
@@ -119,10 +162,17 @@ def current_pose(timeout: float = 5.0):
     box = {}
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    def store_pose(message):
+        pose = message.pose.pose
+        q = pose.orientation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        box.setdefault("p", (pose.position.x, pose.position.y, yaw))
+
     node.create_subscription(
-        PoseWithCovarianceStamped, "/amcl_pose",
-        lambda m: box.setdefault("p", (m.pose.pose.position.x, m.pose.pose.position.y)),
-        qos)
+        PoseWithCovarianceStamped, "/amcl_pose", store_pose, qos)
     deadline = node.get_clock().now().nanoseconds + int(timeout * 1e9)
     while "p" not in box and node.get_clock().now().nanoseconds < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
@@ -138,15 +188,19 @@ def main() -> int:
                    help="현재 /amcl_pose 위치를 검사한다. 찍기 전에 확인용")
     p.add_argument("--at", nargs=2, type=float, metavar=("X", "Y"),
                    help="좌표를 직접 주고 검사한다")
+    p.add_argument("--yaw", type=float, default=0.0,
+                   help="--at 좌표의 yaw [rad] (기본 0)")
     p.add_argument("--map", type=Path, help="맵 yaml 경로")
     p.add_argument("--waypoints", type=Path, help="waypoint yaml 경로")
     p.add_argument("--footprint", type=float, default=0.06,
                    help="로봇 내접 반경 [m] (기본 0.06 = 0.12x0.12 정사각)")
-    p.add_argument("--padding", type=float, default=0.03,
+    p.add_argument("--padding", type=float, default=0.01,
                    help="costmap footprint_padding [m]")
-    p.add_argument("--margin", type=float, default=0.15,
-                   help="권장 최소 여유 [m]. 이 아래는 경고")
-    p.add_argument("--tolerance", type=float, default=0.12,
+    p.add_argument("--minimum-clearance", type=float, default=0.0,
+                   help="차체-벽 최소 여유 [m]. 이 아래는 차단")
+    p.add_argument("--margin", type=float, default=0.02,
+                   help="차체-벽 권장 여유 [m]. 이 아래는 경고")
+    p.add_argument("--tolerance", type=float, default=0.04,
                    help="xy_goal_tolerance [m]. 간격 검사에 쓴다")
     args = p.parse_args()
 
@@ -163,24 +217,27 @@ def main() -> int:
     cells, meta, (w, h), (x0, x1, y0, y1) = occupied_cells(map_yaml)
     waypoints = yaml.safe_load(wp_yaml.read_text())["waypoints"] or {}
 
-    blocked = args.footprint + args.padding
+    resolution = float(meta["resolution"])
+    blocked = args.minimum_clearance
 
     # --- 찍기 전 확인 모드 ---
     if args.probe or args.at:
-        point = tuple(args.at) if args.at else current_pose()
-        if point is None:
+        pose = (*args.at, args.yaw) if args.at else current_pose()
+        if pose is None:
             print("/amcl_pose 를 받지 못했습니다. localization 이 떠 있는지,")
             print("2D Pose Estimate 로 초기 위치를 찍었는지 확인하세요.")
             return 2
 
-        print(f"현재 위치  x={point[0]:.3f}  y={point[1]:.3f}")
-        if not (x0 <= point[0] <= x1 and y0 <= point[1] <= y1):
+        point, yaw = (pose[0], pose[1]), pose[2]
+        print(f"현재 위치  x={point[0]:.3f}  y={point[1]:.3f}  yaw={yaw:.3f}")
+        if not footprint_inside(point, yaw, args.footprint, (x0, x1, y0, y1)):
             print("  ✗ 맵 밖입니다. 위치추정이 틀렸을 가능성이 큽니다.")
             return 1
 
-        dist = min(math.dist(point, c) for c in cells)
-        print(f"벽까지     {dist:.3f}m", end="  ")
-        if dist < blocked:
+        dist = body_clearance(
+            point, yaw, args.footprint, cells, resolution)
+        print(f"차체-벽 여유 {dist:.3f}m", end="  ")
+        if dist <= blocked:
             print(f"✗ 도달 불가 ({blocked:.2f}m 미만). 벽에서 더 떨어지세요.")
         elif dist < args.margin:
             print(f"△ 여유 부족 (권장 {args.margin:.2f}m). 조금 더 떨어지는 게 좋습니다.")
@@ -208,21 +265,24 @@ def main() -> int:
     print(f"          {w}x{h}px  res={meta['resolution']}  "
           f"x[{x0:.3f},{x1:.3f}] y[{y0:.3f},{y1:.3f}]  점유 {len(cells)}셀")
     print(f"waypoint  {wp_yaml}  ({len(waypoints)}개)")
-    print(f"기준      벽에서 {blocked:.3f}m 이내 = 도달 불가, "
+    print(f"기준      차체-벽 {blocked:.3f}m 미만 = 도달 불가, "
           f"{args.margin:.3f}m 이내 = 경고\n")
 
     rows, n_blocked, n_outside, n_warn = [], 0, 0, 0
     for name, wp in waypoints.items():
         point = (float(wp["x"]), float(wp["y"]))
-        inside = x0 <= point[0] <= x1 and y0 <= point[1] <= y1
-        dist = min((math.dist(point, c) for c in cells), default=float("inf")) if inside else None
+        yaw = float(wp.get("yaw", 0.0))
+        inside = footprint_inside(
+            point, yaw, args.footprint, (x0, x1, y0, y1))
+        dist = body_clearance(
+            point, yaw, args.footprint, cells, resolution) if inside else None
         rows.append((name, point, inside, dist))
 
     for name, _, inside, dist in sorted(rows, key=lambda r: (r[2], r[3] or 0)):
         if not inside:
             verdict, n_outside = "맵 밖", n_outside + 1
             shown = "   ---"
-        elif dist < blocked:
+        elif dist <= blocked:
             verdict, n_blocked = "도달 불가", n_blocked + 1
             shown = f"{dist:6.3f}m"
         elif dist < args.margin:

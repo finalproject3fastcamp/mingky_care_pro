@@ -13,7 +13,7 @@
   aspect-ratio: 16 / 9;
   border-radius: 10px;
   overflow: hidden;
-  background: #b9bcbf;
+  background: #c5cbd1;
   /* 3D 안을 끌어 돌리는 동안 브라우저가 화면을 스크롤하면 안 된다. */
   touch-action: none;
 }
@@ -25,6 +25,8 @@
 }
 
 .map3d__canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }
@@ -94,7 +96,7 @@
   margin: 0;
   font-size: 0.85rem;
   color: #64748b;
-  background: #b9bcbf;
+  background: #c5cbd1;
 }
 
 .map3d__reset {
@@ -111,4 +113,235 @@
 
 .map3d__reset:hover {
   background: #f1f5f9;
+}
+
+/*
+ * 상태 표시.
+ *
+ * 평상시에는 색이 거의 없어야 한다 — 그래야 노란색이 떴을 때 눈에 들어온다.
+ * 화면이 늘 알록달록하면 정작 무슨 일이 생긴 순간이 묻힌다.
+ */
+.map3d__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 0.75rem;
+  padding: 0.2rem 0.7rem 0.2rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: #8b9ba1;
+  transition: color 0.25s ease;
+}
+
+.map3d__state i {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.map3d__state b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.map3d__state--normal { color: #0e93a0; }
+/* 정상과 같은 계열에서 한 칸. "나빠지는 방향"이 색으로 읽힌다 */
+.map3d__state--slow { color: #4f9bb5; }
+.map3d__state--wait { color: #b8850a; }
+.map3d__state--alarm { color: #cc3a2b; }
+
+/*
+ * 지난 일.
+ *
+ * 지도 위에 겹쳐 놓는다. 지도 아래에 줄을 더하면 이 컴포넌트가 높아져서
+ * 팀이 짜 둔 화면 배치가 밀린다. 왼쪽 아래는 건물이 잘 안 오는 자리다.
+ */
+.map3d__log {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.15rem;
+  pointer-events: none;
+  max-width: min(24rem, 60%);
+}
+
+.map3d__log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #3b4d52;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 최근 것이 가장 진하다. 오래된 것은 물러난다 */
+.map3d__log-row:nth-child(2) { opacity: 0.72; }
+.map3d__log-row:nth-child(3) { opacity: 0.5; }
+.map3d__log-row:nth-child(4) { opacity: 0.32; }
+
+.map3d__log-row time {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: #7d9298;
+  flex: none;
+}
+
+.map3d__log-row i {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  align-self: center;
+}
+
+.map3d__log-row--normal { color: #0e93a0; }
+.map3d__log-row--slow { color: #4f9bb5; }
+.map3d__log-row--wait { color: #b8850a; }
+.map3d__log-row--alarm { color: #cc3a2b; }
+.map3d__log-row--idle { color: #8b9ba1; }
+
+.map3d__log-row span { color: #3b4d52; }
+
+/*
+ * 떠 있는 뒤쪽 카메라 창. 지도 영역 안에만 있고 좌우 패널은 건드리지 않는다.
+ */
+.map3d__cam {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: #1b2226;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.42);
+  touch-action: none;
+  overflow: hidden;
+}
+
+.map3d__cam.is-dragging { box-shadow: 0 16px 38px rgba(0, 0, 0, 0.55); }
+
+.map3d__cam-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.45rem;
+  background: #2c383d;
+  cursor: grab;
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  color: #cfdadd;
+  user-select: none;
+}
+
+.map3d__cam.is-dragging .map3d__cam-bar { cursor: grabbing; }
+.map3d__cam-bar:focus-visible { outline: 2px solid #4ad07f; outline-offset: -2px; }
+
+.map3d__cam-grab {
+  width: 0.55rem;
+  height: 0.7rem;
+  flex: none;
+  color: #8fa4ab;
+  background-image: radial-gradient(currentColor 0.9px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+.map3d__cam-title { color: #e8eff1; white-space: nowrap; }
+
+.map3d__cam-src {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #9fb0b6;
+}
+
+.map3d__cam-src--normal { color: #5fd6c8; }
+.map3d__cam-src--slow { color: #86c2dc; }
+.map3d__cam-src--wait { color: #f0bb3d; }
+.map3d__cam-src--alarm { color: #ff7a6b; }
+
+.map3d__cam-btn {
+  flex: none;
+  width: 1.05rem;
+  height: 0.95rem;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cfdadd;
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.map3d__cam-btn:hover { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
+.map3d__cam-view {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  background: #10161a;
+}
+
+.map3d__cam-fail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  font-size: 0.7rem;
+  color: #cfdadd;
+}
+
+.map3d__cam-fail button {
+  font: inherit;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  background: transparent;
+  color: #cfdadd;
+  cursor: pointer;
+}
+
+.map3d__cam-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 17px;
+  height: 17px;
+  cursor: nwse-resize;
+}
+
+.map3d__cam-grip::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(255, 255, 255, 0.5);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.5);
 }

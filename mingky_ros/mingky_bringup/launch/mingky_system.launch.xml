@@ -36,8 +36,13 @@
     <arg name="patient_follow_initial_acquire_grace" default="4.0"/>
     <arg name="patient_follow_initial_acquire_distance" default="0.30"/>
     <arg name="patient_follow_target_height" default="0.13"/>
+    <arg name="patient_follow_target_min_confidence" default="0.55"/>
+    <arg name="patient_follow_target_class_overlap_iou" default="0.50"/>
+    <arg name="patient_follow_target_class_confidence_margin" default="0.15"/>
+    <arg name="patient_follow_target_confirm_frames" default="3"/>
+    <arg name="patient_follow_target_confirm_max_jump_px" default="80.0"/>
     <arg name="patient_follow_partial_bbox_max_distance" default="0.35"/>
-    <arg name="patient_follow_partial_bbox_conf_threshold" default="0.50"/>
+    <arg name="patient_follow_partial_bbox_conf_threshold" default="0.70"/>
     <arg name="patient_follow_timeout" default="2.0"/>
     <arg name="patient_follow_wait_limit" default="20.0"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
@@ -100,6 +105,9 @@
         <arg name="robot_id" value="$(var robot_id)"/>
         <arg name="camera_profile" value="$(var camera_profile)"/>
         <arg name="start_qr_distance" value="$(var start_rear_qr_distance)"/>
+        <!-- 환자 추적을 사용하지 않는 구성은 기존처럼 QR을 상시 계산한다. -->
+        <arg name="qr_process_only_while_guiding"
+             value="$(var start_patient_follow)"/>
         <arg name="qr_size" value="$(var rear_qr_size)"/>
         <arg name="rear_preview_port" value="$(var rear_preview_port)"/>
         <!-- QR Reader가 Picamera2 초기화를 마쳤다는 신호를 받은 뒤 후방 카메라를
@@ -110,6 +118,8 @@
         <arg name="preview_max_fps" value="$(var camera_preview_max_fps)"/>
         <arg name="preview_max_width" value="$(var camera_preview_max_width)"/>
         <arg name="preview_jpeg_quality" value="$(var camera_preview_jpeg_quality)"/>
+        <arg name="tracking_compressed_enable_topic"
+             value="/person_follow/processing_active"/>
     </include>
 
     <!-- 실제 /cmd_vel 의 유일한 발행자. Nav2/teleop 입력과 모터 출력을 분리한다. -->
@@ -168,6 +178,16 @@
                value="$(var patient_follow_initial_acquire_distance)"/>
         <param name="target_height_m"
                value="$(var patient_follow_target_height)"/>
+        <param name="target_min_confidence"
+               value="$(var patient_follow_target_min_confidence)"/>
+        <param name="target_class_overlap_iou"
+               value="$(var patient_follow_target_class_overlap_iou)"/>
+        <param name="target_class_confidence_margin"
+               value="$(var patient_follow_target_class_confidence_margin)"/>
+        <param name="target_confirm_frames"
+               value="$(var patient_follow_target_confirm_frames)"/>
+        <param name="target_confirm_max_jump_px"
+               value="$(var patient_follow_target_confirm_max_jump_px)"/>
         <param name="partial_bbox_max_distance_m"
                value="$(var patient_follow_partial_bbox_max_distance)"/>
         <param name="partial_bbox_conf_threshold"

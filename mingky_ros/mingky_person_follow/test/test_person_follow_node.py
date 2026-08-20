@@ -5,6 +5,7 @@ import time
 
 from mingky_interfaces.msg import GuideState, QrObservation
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import CompressedImage
 from mingky_person_follow.distance_policy import INACTIVE, NORMAL, SLOW, WAITING
 from mingky_person_follow.person_follow_node import PersonFollowNode
 import pytest
@@ -23,9 +24,13 @@ def node():
     instance = PersonFollowNode()
     speeds = []
     states = []
+    processing = []
     instance.speed_limit_pub.publish = lambda msg: speeds.append(msg.speed_limit)
     instance.follow_state_pub.publish = (
         lambda msg: states.append(json.loads(msg.data)))
+    instance.processing_active_pub.publish = (
+        lambda msg: processing.append(msg.data))
+    instance._test_processing_messages = processing
     yield instance, speeds, states
     instance.destroy_node()
 
@@ -46,6 +51,19 @@ def _qr(patient='patient-001', distance=0.10, visible=True):
         center_x=320.0,
         center_y=240.0,
     )
+
+
+def _target(cls='patient-001', x=320.0, confidence=0.85):
+    return {
+        'cls': cls,
+        'conf': confidence,
+        'x': x,
+        'y': 240.0,
+        'w': 160.0,
+        'h': 320.0,
+        'image_width': 640.0,
+        'image_height': 480.0,
+    }
 
 
 def test_matching_qr_controls_distance_band(node) -> None:
@@ -145,6 +163,35 @@ def test_non_guiding_session_releases_speed_limit(node) -> None:
     assert states[-1]['session_id'] == 0
 
 
+def test_inactive_session_does_not_copy_camera_frame(node) -> None:
+    instance, _, _ = node
+    message = CompressedImage(data=[1, 2, 3, 4])
+
+    instance._on_image(message)
+
+    assert instance._latest_jpeg is None
+    assert instance._latest_frame_at is None
+
+
+def test_guiding_session_copies_next_camera_frame(node) -> None:
+    instance, _, _ = node
+    instance._on_guide_state(_guide())
+
+    instance._on_image(CompressedImage(data=[1, 2, 3, 4]))
+
+    assert instance._latest_jpeg == bytes([1, 2, 3, 4])
+    assert instance._latest_frame_at is not None
+
+
+def test_guidance_state_controls_camera_processing(node) -> None:
+    instance, _, _ = node
+
+    instance._on_guide_state(_guide())
+    instance._on_guide_state(_guide(state=GuideState.SESSION_COMPLETED))
+
+    assert instance._test_processing_messages == [True, False]
+
+
 def test_visual_distance_works_without_a_recent_qr(node) -> None:
     instance, _, states = node
     instance._on_guide_state(_guide())
@@ -176,6 +223,41 @@ def test_near_partial_visual_always_moves_slowly(node) -> None:
     assert states[-1]['source'] == 'partial_near'
     assert states[-1]['distance'] == pytest.approx(0.34)
     assert states[-1]['visual_visible'] is True
+
+
+def test_new_yolo_target_requires_consecutive_confirmation(node) -> None:
+    instance, _, _ = node
+    target = _target()
+
+    with instance._lock:
+        assert instance._confirm_new_target(target) is False
+        assert instance._confirm_new_target({**target, 'x': 330.0}) is False
+        assert instance._confirm_new_target({**target, 'x': 340.0}) is True
+
+
+def test_new_yolo_target_confirmation_resets_on_large_jump(node) -> None:
+    instance, _, _ = node
+
+    with instance._lock:
+        assert instance._confirm_new_target(_target(x=100.0)) is False
+        assert instance._confirm_new_target(_target(x=300.0)) is False
+        assert instance._pending_target_hits == 1
+
+
+def test_tracking_reset_clears_pending_yolo_candidate(node) -> None:
+    instance, _, _ = node
+    with instance._lock:
+        instance._confirm_new_target(_target())
+        instance._reset_tracking()
+
+    assert instance._pending_target is None
+    assert instance._pending_target_hits == 0
+
+
+def test_partial_bbox_requires_high_confidence_by_default(node) -> None:
+    instance, _, _ = node
+
+    assert instance.partial_bbox_conf_threshold == pytest.approx(0.70)
 
 
 def test_short_tracking_loss_keeps_guiding_then_waits(node) -> None:
