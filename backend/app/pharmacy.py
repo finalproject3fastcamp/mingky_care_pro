@@ -51,10 +51,12 @@ Flask 판은 단일 `queue.Queue` 라 브라우저 두 개가 붙으면 이벤�
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
 import random
+import signal
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -379,7 +381,7 @@ async def _count_pills() -> dict:
     cmd = [str(_OMX_PYTHON), str(_TRAY_SCRIPT),
            "--root", str(_OMX_PROJECT), "--frames", str(TRAY_FRAMES)]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=str(_OMX_PROJECT),
+        *cmd, cwd=str(_OMX_PROJECT), preexec_fn=_die_with_parent,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         raw_out, raw_err = await asyncio.wait_for(
@@ -453,6 +455,66 @@ async def random_prescriptions() -> tuple[dict, int]:
 
 
 # ── SSE 브로드캐스트 ───────────────────────────────────────────────────
+# **libc 는 여기서, 모듈 로드 시점에 잡는다.** `_die_with_parent` 는 fork 직후의
+# 자식에서 도는데, 거기서 CDLL 로 라이브러리를 새로 열면 부모의 다른 스레드가
+# 쥔 채로 복제된 동적 로더 락에 걸려 멈출 수 있다. uvicorn 은 스레드를 쓴다.
+# 자식은 이미 풀린 함수 포인터만 호출하게 둔다.
+_PR_SET_PDEATHSIG = 1
+try:
+    _LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
+except OSError:                     # 리눅스가 아니거나 libc 이름이 다르다
+    _LIBC = None
+
+
+def _die_with_parent() -> None:
+    """부모가 죽으면 커널이 나에게 SIGINT 를 보내게 등록한다 (리눅스 전용).
+
+    러너는 팔을 움직이는 프로세스다. 백엔드가 죽어도 자식은 그대로 살아남아
+    감시자 없이 팔을 계속 움직이고, 포트·카메라를 쥔 채라 다음 기동까지 막는다.
+
+    `lifespan` 종료 훅만으로는 부족하다 — **SIGKILL 은 그 훅을 아예 안 태운다.**
+    약국 화면이 열려 있으면 SSE 때문에 uvicorn 이 SIGTERM 으로 안 죽어서
+    `stop.sh` 가 10초 뒤 SIGKILL 하는데, 하필 그때가 포장이 돌고 있을 때다.
+    이 등록은 커널이 들고 있으므로 부모가 어떻게 죽든 동작한다.
+
+    SIGTERM 이 아니라 **SIGINT** 인 이유는 러너가 `KeyboardInterrupt` 를 받아
+    `robot.disconnect()` 로 토크를 풀고 나가기 때문이다. 그냥 죽이면 팔이
+    마지막 자세로 힘을 준 채 굳는다 (중단 버튼이 SIGINT 를 쓰는 이유와 같다).
+
+    subprocess 의 preexec_fn 으로 fork 직후 자식에서 돈다. 실패해도 기동을
+    막지 않는다 — 이건 안전망이고, 정상 경로는 `shutdown_runner()` 다.
+    """
+    if _LIBC is None:
+        return
+    try:
+        _LIBC.prctl(_PR_SET_PDEATHSIG, signal.SIGINT, 0, 0, 0)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+
+async def shutdown_runner(timeout: float = 15.0) -> None:
+    """돌고 있는 로봇 러너를 정리한다. `lifespan` 종료 훅이 부른다.
+
+    조제·포장 둘 다 `_JOB_PROC` 하나를 쓰므로 여기서 같이 덮인다.
+    """
+    proc = _JOB_PROC
+    if proc is None or proc.returncode is not None:
+        return
+    log.warning("종료 중 — 로봇 러너(pid %s)를 정리합니다", proc.pid)
+    try:
+        proc.send_signal(signal.SIGINT)     # 토크를 풀고 나갈 기회를 준다
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        log.error("러너가 %.0f초 안에 끝나지 않아 강제 종료합니다", timeout)
+        proc.kill()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            pass
+    except ProcessLookupError:
+        pass
+
+
 def _push(event: dict) -> None:
     data = json.dumps(event, ensure_ascii=False)
     for q in list(_SUBSCRIBERS):
@@ -580,7 +642,7 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
     await _단계시작(i, 조합[0])
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_OMX_PROJECT), env=env,
+            *cmd, cwd=str(_OMX_PROJECT), env=env, preexec_fn=_die_with_parent,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         _JOB_PROC = proc
         assert proc.stdout is not None
@@ -637,7 +699,7 @@ async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]
            "HF_HUB_OFFLINE": "1"}
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_OMX_PROJECT), env=env,
+            *cmd, cwd=str(_OMX_PROJECT), env=env, preexec_fn=_die_with_parent,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         try:
             stdout, _ = await asyncio.wait_for(
@@ -652,9 +714,9 @@ async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]
 
 
 async def _pack_worker(job_id: str) -> None:
+    # 상태 전환은 `start_pack` 이 락 안에서 이미 했다 — 여기서 다시 하면 그
+    # 사이가 다시 경합 창이 된다.
     _push({"종류": "포장시작", "job": job_id})
-    async with _JOB_LOCK:
-        _JOB["상태"] = "포장중"
 
     for 단계 in ("봉투 준비", "약 투입", "라벨 인쇄", "밀봉"):
         _push({"종류": "포장단계", "이름": 단계})
@@ -703,7 +765,7 @@ async def _run_pack() -> tuple[bool, str]:
     마지막오류 = ""
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_DATA_DIR),
+            *cmd, cwd=str(_DATA_DIR), preexec_fn=_die_with_parent,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         _JOB_PROC = proc
         assert proc.stdout is not None
@@ -825,10 +887,25 @@ async def stop_dispense() -> dict:
 
 
 async def start_pack() -> tuple[dict, int]:
+    # **검사와 상태 전환이 한 임계구역 안에 있어야 한다.** 예전에는 여기서
+    # 상태만 보고 락을 놓은 뒤 `_pack_worker` 가 다시 락을 잡아 "포장중" 을
+    # 기록했다. 그 사이에 두 번째 요청이 들어오면 상태가 아직 "조제완료" 라
+    # 그대로 통과해 러너가 둘 떴다 — **두 정책이 같은 팔에 행동을 보낸다.**
+    # 게다가 `_JOB_PROC` 는 전역 하나라 뒤엣놈이 앞엣놈을 덮어써서, 중단
+    # 버튼이 한쪽만 잡고 나머지는 계속 팔을 움직인다.
+    #
+    # 화면 버튼의 disabled 는 방어가 못 된다 — 클라이언트가 들고 있는 상태는
+    # SSE 를 놓치면 서버와 갈라지고, API 는 누구나 두 번 부를 수 있다.
     async with _JOB_LOCK:
+        if _JOB["상태"] == "포장중":
+            return {"오류": "이미 포장이 진행 중입니다"}, 409
         if _JOB["상태"] not in ("조제완료", "완료"):
             return {"오류": "조제가 끝난 뒤에 포장할 수 있습니다"}, 409
+        if _JOB_PROC is not None:
+            # 상태는 끝났는데 러너가 남아 있다 — 포트·카메라를 아직 쥐고 있다.
+            return {"오류": "앞선 로봇 작업이 아직 정리되지 않았습니다"}, 409
         job_id = _JOB["id"]
+        _JOB["상태"] = "포장중"
     asyncio.create_task(_pack_worker(job_id))
     return {"결과": "포장을 시작했습니다"}, 200
 

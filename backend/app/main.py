@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import (
-    db, heartbeat, inventory_rules, notify, registry, servo_health,
-    topic_watch)
+    db, heartbeat, inventory_rules, notify, pharmacy as pharmacy_state,
+    registry, servo_health, topic_watch)
 from .routers import (
     events, fleet, maps, orders, patients, pharmacy, qr, robots, sessions, slo,
     teleop, waypoints)
@@ -166,6 +166,14 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # **로봇 러너를 제일 먼저 세운다.** 팔을 움직이는 자식 프로세스는 부모가
+        # 사라져도 그대로 살아남아 감시자 없이 계속 돌고, 포트·카메라를 쥔 채라
+        # 다음 기동까지 막는다. DB·락 정리보다 이쪽이 급하다.
+        #
+        # 이 훅은 정상 종료(SIGTERM) 경로에서만 돈다. SIGKILL 로 죽으면 여기가
+        # 아예 실행되지 않아서, 자식 쪽에도 PR_SET_PDEATHSIG 를 걸어 둔다
+        # (pharmacy._die_with_parent).
+        await pharmacy_state.shutdown_runner()
         for task in (monitor, topics, lock_watch):
             task.cancel()
             try:
