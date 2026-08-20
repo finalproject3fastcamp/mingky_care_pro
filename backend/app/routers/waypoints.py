@@ -38,7 +38,7 @@ class CheckRequest(BaseModel):
     waypoints: dict[str, Waypoint]
     footprint: float = Field(default=0.06, ge=0.0, le=1.0)
     padding: float = Field(default=0.01, ge=0.0, le=1.0)
-    minimum_clearance: float = Field(default=0.04, ge=0.0, le=2.0)
+    minimum_clearance: float = Field(default=0.01, ge=0.0, le=2.0)
     margin: float = Field(default=0.08, ge=0.0, le=2.0)
     tolerance: float = Field(default=0.07, gt=0.0, le=2.0)
 
@@ -147,8 +147,8 @@ def _body_clearance(
 
 def check_waypoints(request: CheckRequest) -> CheckResponse:
     occupied, (x0, x1, y0, y1), resolution = _occupied_map()
-    # 운영자가 요청한 4cm 차체 여유를 기본 하한으로 삼되, Nav2 padding보다
-    # 작게 설정해 실제 costmap 충돌을 통과시키는 구성은 허용하지 않는다.
+    # Nav2 padding 1cm를 기본 하한으로 삼아 실제 costmap 충돌을 통과시키는
+    # 구성은 허용하지 않되, 그 밖의 좁은 지점은 경고 상태로 시험할 수 있다.
     blocked = max(request.minimum_clearance, request.padding)
     rows: list[tuple[str, tuple[float, float], bool]] = []
     items = []
@@ -176,7 +176,7 @@ def check_waypoints(request: CheckRequest) -> CheckResponse:
         if clearance < blocked:
             status, message = (
                 "blocked",
-                "차체와 벽 사이 여유가 4cm 미만입니다.",
+                "차체와 벽 사이 여유가 1cm 미만입니다.",
             )
         elif clearance < request.margin:
             status, message = (

@@ -62,7 +62,7 @@ def test_check_defaults_match_nav2_and_clearance_policy():
 
     assert request.footprint == 0.06
     assert request.padding == 0.01
-    assert request.minimum_clearance == 0.04
+    assert request.minimum_clearance == 0.01
     assert request.margin == 0.08
     assert request.tolerance == 0.07
 
@@ -90,7 +90,7 @@ def test_check_applies_waypoint_yaw_to_footprint(monkeypatch):
     monkeypatch.setattr(
         waypoints,
         "_occupied_map",
-        lambda: ([(0.13, 0.0)], (-1.0, 1.0, -1.0, 1.0), 0.02),
+        lambda: ([(0.105, 0.0)], (-1.0, 1.0, -1.0, 1.0), 0.02),
     )
     request = waypoints.CheckRequest(waypoints={
         "rotated": waypoints.Waypoint(x=0.0, y=0.0, yaw=math.pi / 4.0),
@@ -100,4 +100,4 @@ def test_check_applies_waypoint_yaw_to_footprint(monkeypatch):
 
     assert result.ok is False
     assert result.items[0].status == "blocked"
-    assert result.items[0].clearance < 0.04
+    assert result.items[0].clearance < 0.01

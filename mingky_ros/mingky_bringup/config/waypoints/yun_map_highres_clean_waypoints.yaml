@@ -13,12 +13,12 @@
 #     ros2 run mingky_bringup check_waypoints.py
 #
 # 기준 (회전된 12x12cm 차체 외곽부터 측정)
-#     차체-벽 차단            0.04 m 미만
+#     차체-벽 차단            0.01 m 미만
 #     차체-벽 경고            0.08 m 미만
 #     서로 다른 목적지 간     0.14 m 이상
 #     충전소                 도킹 지점이 아니라 앞 0.3 m
 #
-# 관제 Waypoint Check와 check_waypoints.py가 같은 기준을 사용한다. 4~8cm
+# 관제 Waypoint Check와 check_waypoints.py가 같은 기준을 사용한다. 1~8cm
 # 경고 지점은 시험 주행할 수 있지만 현장에서 실제 충돌 여유를 확인해야 한다.
 
 

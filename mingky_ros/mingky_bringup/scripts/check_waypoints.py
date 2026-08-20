@@ -5,7 +5,7 @@
 
 1. 차체와 벽 사이 거리
    waypoint yaw로 회전한 12x12cm footprint 외곽부터 점유 셀까지 잰다.
-   4cm 미만은 차단하고, 8cm 미만은 경고한다.
+   1cm 미만은 차단하고, 8cm 미만은 경고한다.
 
 2. waypoint 사이 간격
    두 지점이 xy_goal_tolerance 지름보다 가까우면, 한쪽에 서 있는 상태에서
@@ -17,7 +17,7 @@
 사용:
     ./check_waypoints.py
     ./check_waypoints.py --map ../map/archive/yun_map.yaml
-    ./check_waypoints.py --tolerance 0.07 --minimum-clearance 0.04 --margin 0.08
+    ./check_waypoints.py --tolerance 0.07 --minimum-clearance 0.01 --margin 0.08
 """
 
 import argparse
@@ -196,7 +196,7 @@ def main() -> int:
                    help="로봇 내접 반경 [m] (기본 0.06 = 0.12x0.12 정사각)")
     p.add_argument("--padding", type=float, default=0.01,
                    help="costmap footprint_padding [m]")
-    p.add_argument("--minimum-clearance", type=float, default=0.04,
+    p.add_argument("--minimum-clearance", type=float, default=0.01,
                    help="차체-벽 최소 여유 [m]. 이 아래는 차단")
     p.add_argument("--margin", type=float, default=0.08,
                    help="차체-벽 권장 여유 [m]. 이 아래는 경고")

@@ -459,8 +459,9 @@ ros2 run mingky_bringup check_waypoints.py
 두 가지를 검사합니다.
 
 **1. 차체와 벽 사이 거리** — waypoint의 yaw로 회전한 실제 12×12cm
-footprint 외곽부터 점유 셀까지의 여유를 계산합니다. **4cm 미만은 차단**하고,
-**4cm 이상 8cm 미만은 경고**합니다. 관제의 Waypoint Check도 같은 기준을
+footprint 외곽부터 점유 셀까지의 여유를 계산합니다. Nav2의 실제 footprint
+padding과 같은 **1cm 미만은 차단**하고, **1cm 이상 8cm 미만은 경고**합니다.
+관제의 Waypoint Check도 같은 기준을
 사용합니다. 경고 상태는 좁은 위치 시험을 위해 주행할 수 있지만 현장에서
 충돌 여유를 확인해야 합니다.
 
@@ -500,7 +501,7 @@ ros2 run mingky_bringup check_waypoints.py --map <경로>/yun_map.yaml
 
 # 파라미터를 바꿨다면 같이 넘긴다
 ros2 run mingky_bringup check_waypoints.py --tolerance 0.07 \
-  --minimum-clearance 0.04 --margin 0.08 --padding 0.01
+  --minimum-clearance 0.01 --margin 0.08 --padding 0.01
 ```
 
 도달 불가나 맵 밖 waypoint 가 있으면 종료 코드 `1` 을 돌려줍니다.
@@ -518,7 +519,7 @@ waypoint 가 전혀 다른 물리 위치를 가리킵니다. 맵 밖으로 나�
 
 | 항목 | 값 |
 | --- | --- |
-| 차체-벽 차단 기준 | **0.04 m 미만** |
+| 차체-벽 차단 기준 | **0.01 m 미만** |
 | 차체-벽 경고 기준 | **0.08 m 미만** |
 | `_goal` ↔ `_waiting` 간격 | **0.14 m** 이상 (나눌 경우) |
 | 충전소 | 도킹 지점이 아니라 **앞 0.3 m** |
