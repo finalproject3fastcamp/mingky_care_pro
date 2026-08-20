@@ -1016,6 +1016,7 @@ class EventGateway(Node):
                 "navigation_speed_mps": self._navigation_speed_mps,
                 "low_obstacle_mode": self._low_obstacle_mode,
                 "guide_robot_state": self._guide_robot_state,
+                "guide_session_state": self._guide_session_state,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
                 "max_node_cpu_pct": self._max_node_cpu_pct,

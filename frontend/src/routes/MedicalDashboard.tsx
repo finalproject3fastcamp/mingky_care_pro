@@ -294,7 +294,11 @@ export function MedicalDashboard() {
                 robotId={selectedRobotId}
                 returning={selectedRobot?.returning_to_dock ?? false}
                 paused={selectedRobot?.guide_robot_state === 'paused'}
-                camera={activeSession ? 'rear' : 'front'}
+                camera={
+                  !activeSession || selectedRobot?.guide_session_state === 'in_room'
+                    ? 'front'
+                    : 'rear'
+                }
               />
             </div>
             <aside className="control-deck__rail" aria-label="로봇 주행 제어">

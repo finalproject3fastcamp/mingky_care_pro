@@ -28,6 +28,7 @@ class RuntimeState:
     navigation_speed_mps: float | None = None
     low_obstacle_mode: str | None = None
     guide_robot_state: str | None = None
+    guide_session_state: str | None = None
 
     # heartbeat 층 1 — 작고 자주 바뀌는 값들.
     #
@@ -61,6 +62,7 @@ def update(
     low_obstacle_mode: str | None = None,
     *,
     guide_robot_state: str | None = None,
+    guide_session_state: str | None = None,
     inventory_hash: str | None = None,
     cpu_total_pct: float | None = None,
     queue_pending: int | None = None,
@@ -78,6 +80,7 @@ def update(
         navigation_speed_mps=navigation_speed_mps,
         low_obstacle_mode=low_obstacle_mode,
         guide_robot_state=guide_robot_state,
+        guide_session_state=guide_session_state,
         reported_at=now,
         state_since=(
             previous.state_since
