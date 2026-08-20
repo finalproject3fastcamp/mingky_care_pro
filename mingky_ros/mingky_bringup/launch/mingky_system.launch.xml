@@ -40,6 +40,9 @@
     <arg name="patient_follow_partial_bbox_conf_threshold" default="0.50"/>
     <arg name="patient_follow_timeout" default="2.0"/>
     <arg name="patient_follow_wait_limit" default="20.0"/>
+    <!-- YOLO 클래스 라벨이 틀렸을 때(각도·조명으로 인형 종류를 헷갈릴 때)의
+         보조 안전판. 평균 RGB 유클리드 거리 기준, 실기 미검증 기본값. -->
+    <arg name="patient_follow_max_color_distance" default="60.0"/>
     <!-- 비우면 robot_id로 pinky_6294/pinky_15e2 보정값을 자동 선택한다. -->
     <arg name="camera_profile" default=""/>
     <arg name="rear_preview_port" default="8092"/>
@@ -172,6 +175,8 @@
                value="$(var patient_follow_partial_bbox_max_distance)"/>
         <param name="partial_bbox_conf_threshold"
                value="$(var patient_follow_partial_bbox_conf_threshold)"/>
+        <param name="max_color_distance"
+               value="$(var patient_follow_max_color_distance)"/>
     </node>
 
     <node pkg="mingky_navigation_manager" exec="navigation_manager"

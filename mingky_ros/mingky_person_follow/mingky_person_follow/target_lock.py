@@ -9,6 +9,16 @@
 같은 클래스 안에서도 순간적으로 검출이 흔들리는 걸 다루기 위해, 위치가
 `max_jump_px`픽셀 이상 벗어나면 (예: 화면을 가로질러 순간이동한 것처럼
 보이면) 다른 개체로 보고 버린다.
+
+## 클래스 라벨 자체가 틀리는 경우
+
+위 클래스 비교는 YOLO가 준 라벨을 그대로 믿는다 -- 각도·조명 때문에 YOLO가
+인형 종류를 잘못 판단해서 다른 인형에 같은 라벨을 붙이면, 이 비교만으로는
+바뀐 걸 못 걸러낸다(실제로 신고된 문제). 그래서 위치와 같은 방식으로 색상도
+"순간이동 금지" 조건을 하나 더 건다: 직전에 잠겼던 대상과 평균 RGB가
+`max_color_distance` 이상 차이 나면, 클래스가 같아도 다른 대상으로 보고
+버린다. 인형 세 종류(분홍 돼지/회백색 펭귄/노란 병아리)는 색이 뚜렷이 달라서
+이 조건이 실질적인 안전판 역할을 한다.
 """
 
 import math
@@ -26,10 +36,15 @@ class Detection(TypedDict):
     h: float
     image_width: float
     image_height: float
+    color: tuple[float, float, float]
 
 
 def bbox_center_distance(a: Detection, b: Detection) -> float:
     return math.hypot(a['x'] - b['x'], a['y'] - b['y'])
+
+
+def color_distance(a: Detection, b: Detection) -> float:
+    return math.dist(a['color'], b['color'])
 
 
 def pick_target(
@@ -39,15 +54,18 @@ def pick_target(
     screen_center: tuple[float, float],
     max_jump_px: float,
     required_class: str | None = None,
+    max_color_distance: float | None = None,
 ) -> Detection | None:
     """이번 프레임에서 계속 따라갈 대상을 고른다.
 
     - 처음 잠그는 경우(locked=None): 화면 중앙에 가장 가까운 검출을 새로 잠근다
       (클래스는 아직 정해진 게 없으니 아무거나 가능).
     - 이미 잠긴 대상이 있는 경우: **같은 클래스**이면서 직전 위치에서
-      `max_jump_px` 이내인 검출 중, 가장 가까운 것만 그 대상으로 인정한다.
-      클래스가 다른 검출은 아무리 가까워도 절대 후보에 넣지 않는다 --
-      다른 손님으로 바뀌치기되는 걸 막는 핵심 조건이다.
+      `max_jump_px` 이내, 그리고 (`max_color_distance`가 주어졌다면) 직전
+      색상에서 `max_color_distance` 이내인 검출 중, 가장 가까운 것만 그
+      대상으로 인정한다. 클래스가 다른 검출은 아무리 가까워도 절대 후보에
+      넣지 않는다 -- 다른 손님으로 바뀌치기되는 걸 막는 핵심 조건이다.
+      `max_color_distance`는 클래스 라벨 자체가 틀렸을 때의 보조 안전판이다.
     """
     if required_class:
         detections = [
@@ -67,6 +85,9 @@ def pick_target(
         d for d in detections
         if d['cls'] == locked['cls']
         and bbox_center_distance(d, locked) < max_jump_px
+        and (
+            max_color_distance is None
+            or color_distance(d, locked) <= max_color_distance)
     ]
     if not candidates:
         return None
