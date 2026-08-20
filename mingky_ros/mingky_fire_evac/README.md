@@ -34,7 +34,7 @@
 ```bash
 python3 -m venv fire_evac_venv
 source fire_evac_venv/bin/activate
-pip install ultralytics flask pillow waitress
+pip install ultralytics flask pillow waitress numpy
 
 python3 infer_server.py --model <가중치.pt 경로> --port 5000
 ```
@@ -144,6 +144,23 @@ ros2 service call fire_evac/reset_alarm std_srvs/srv/Trigger
 - 실기(pinky-02), 2026-08-12~13: 실제 라이터 불꽃으로 감지 → 대피소 도착 2회 성공.
 - `fire` 클래스만 사용 (`smoke`는 오탐과 잘 안 갈라져서 제외 — 검증 데이터 기준 `fire`는 오탐 0건,
   `smoke`는 노을·조명 등에서 비슷한 신뢰도로 오탐 발생).
+- 2026-08-20: 전등을 `fire`로 오인하는 사례 발견(YOLO가 밝은 광원을 불꽃으로 오판) →
+  1차로 `infer_server.py`에 HSV 색상 검증(채도 높은 주황/빨강만 통과)을 추가했으나,
+  같은 날 실기 재검증에서 실제 라이터 불꽃까지 걸러내는 것으로 드러남(20프레임 중
+  YOLO 원본 검출 5, 색상 필터 통과 1) — **라이터의 노란 불꽃과 백열등류의 따뜻한
+  노란빛은 HSV 색공간에서 사실상 겹쳐서 색상만으로는 원리적으로 못 가른다**(합성
+  색상으로 재확인: 어떤 채도/색상 임계값 조합도 둘을 갈라내지 못함).
+- 2026-08-20 (같은 날 2차 수정): 색상 검증을 **깜박임(flicker) 검증**으로 교체.
+  색상은 "명백히 흰색/저채도인 조명"만 걸러내는 느슨한 1차 필터(`FLAME_LOOSE_MIN_SATURATION`)
+  로만 쓰고, 진짜 판별은 최근 `FLICKER_WINDOW_SEC`(기본 3초) 동안의 박스 밝기(V)
+  표준편차가 `FLICKER_MIN_STD`(기본 6.0) 이상인지로 한다 — 조명은 밝기가 일정하고
+  실제 불꽃은 짧은 시간에도 눈에 띄게 흔들리는 물리적 차이를 이용한다. 로봇 1대
+  동시 사용을 가정해 밝기 이력은 서버에 전역 하나만 둔다(여러 대 동시 사용 시
+  화재원이 섞여 부정확해질 수 있음, 시연 규모에서는 범위 밖으로 판단).
+  **시연 전 반드시 실제 조명/라이터로 재검증하고 `FLICKER_MIN_STD`를 튜닝할 것.**
+  `/infer` 응답의 `raw_detections`(YOLO 원본 개수), `diagnostics`(색상 1차 필터
+  통과 후 각 박스의 conf/hue/saturation/value/flicker_std), `fire`(최종 확정)를
+  비교하면 어느 단계에서 걸리는지 바로 보인다.
 
 ## 운영 확인
 
