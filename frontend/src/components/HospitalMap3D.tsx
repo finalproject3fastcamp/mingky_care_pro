@@ -1074,7 +1074,7 @@ export function HospitalMap3D({
       else r.m.color.copy(r.base)
     }
     h.invalidate()
-  }, [pose, estop, selected, robotReady])
+  }, [pose, estop, robotReady])
 
   // ------------------------------------------------------------- 추종 상태
   /**
