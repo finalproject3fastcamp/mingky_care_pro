@@ -107,6 +107,27 @@ export interface HospitalMap3DProps extends DiagLayers {
    * `null` 이면 창을 띄우지 않는다(보여줄 카메라가 없는 화면).
    */
   camera?: 'front' | 'rear' | null
+  /**
+   * 환자를 못 찾은 채 이만큼(초) 지나면 로봇이 안내를 접고 충전소로 간다.
+   *
+   * 로봇 쪽 `patient_follow_wait_limit_sec` 과 같은 값이어야 한다. 화면이
+   * 세는 숫자와 로봇이 세는 숫자가 다르면, 0 이 됐는데 안 가거나 아직
+   * 남았는데 가버리는 것으로 보인다.
+   */
+  waitLimitSec?: number
+  /**
+   * 로봇이 **환자를 기다리느라 멈춰 있는지.**
+   *
+   * 남은 시간을 셀지 말지를 이 값으로 정한다. 로봇은 안내 목표를 향해
+   * 가던 중에 환자를 놓쳤을 때만 복귀 시계를 돌린다. 이미 도착해서 서
+   * 있었다면 시계를 아예 시작하지 않고, 그때는 환자를 놓쳐도 영영
+   * 기다린다.
+   *
+   * 그 차이를 무시하고 세면 화면은 0 까지 세고서 아무 일도 안 일어난다.
+   * **일어나지 않을 일을 예고하는 화면이 아무것도 안 보여주는 화면보다
+   * 나쁘다.**
+   */
+  paused?: boolean
 }
 
 type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
@@ -324,6 +345,8 @@ export function HospitalMap3D({
   returning = false,
   robotId = null,
   camera = 'rear',
+  waitLimitSec = 20,
+  paused = false,
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -1113,6 +1136,33 @@ export function HospitalMap3D({
   }, [mapState, pose, selected])
 
   /**
+   * 복귀까지 남은 시간.
+   *
+   * 기다리는 것만 보여주면 보는 사람은 "언제까지 기다리나" 를 모른다.
+   * 남은 시간이 보이면 **곧 무슨 일이 일어날지 알고 지켜볼 수 있다.**
+   *
+   * 로봇에게 물어보지 않고 화면에서 센다. 로봇은 남은 시간을 내보내지
+   * 않고, 대기가 시작된 시각은 화면이 `waiting` 을 처음 본 순간과 거의
+   * 같다. **다만 어림값이므로 초 단위로만 보여준다.**
+   */
+  const [waitLeft, setWaitLeft] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (mapState !== 'waiting' || !paused) {
+      setWaitLeft(null)
+      return
+    }
+    const startedAt = performance.now()
+    const tick = () => {
+      const left = waitLimitSec - (performance.now() - startedAt) / 1000
+      setWaitLeft(Math.max(0, left))
+    }
+    tick()
+    const id = window.setInterval(tick, 500)
+    return () => window.clearInterval(id)
+  }, [mapState, paused, waitLimitSec])
+
+  /**
    * 무슨 일이 있었는지 남긴다.
    *
    * 보는 사람은 화면을 계속 보고 있지 않는다. 잠깐 다른 데를 본 사이에
@@ -1342,6 +1392,7 @@ export function HospitalMap3D({
             (mapState === 'escort' || mapState === 'slow') && (
               <b>{followNow.follow_distance.toFixed(2)} m</b>
             )}
+          {waitLeft !== null && <b>복귀까지 {Math.ceil(waitLeft)}초</b>}
         </span>
         {pose ? (
           <span className="robot-map__coord">
