@@ -19,7 +19,7 @@
 
 ## 왜 pose 를 여기서 보내나
 
-지도 위에 로봇을 그리려면 위치가 필요한데, 이벤트로 보내면 안 된다. 2Hz 로
+지도 위에 로봇을 그리려면 위치가 필요한데, 이벤트로 보내면 안 된다. 5Hz 로
 쌓이는 좌표가 타임라인을 덮어버린다 (배터리를 이벤트에서 뺀 것과 같은 이유).
 조작 소켓이 이미 열려 있으므로 그 위에 얹는다.
 """
@@ -73,7 +73,9 @@ class TeleopBridge(Node):
 
         self.declare_parameter("backend_url", "https://mingkycarepro.site/api")
         self.declare_parameter("robot_id", "pinky-01")
-        self.declare_parameter("pose_interval_sec", 0.5)
+        # 로봇 위치는 조작 화면에서 움직임을 판단하는 핵심 정보다. 진단
+        # 레이어보다 가벼우므로 5Hz로 보내 화면 지연을 줄인다.
+        self.declare_parameter("pose_interval_sec", 0.2)
         # 진단용 레이어는 더 느려도 된다. 라이다 윤곽과 파티클 퍼짐은
         # 1초에 한 번만 봐도 발산 여부를 판단할 수 있다.
         self.declare_parameter("diag_interval_sec", 1.0)
@@ -105,6 +107,13 @@ class TeleopBridge(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self._scan_tf_warned = False
+        # /scan은 10Hz지만 관제 진단 레이어는 기본 1Hz다. 모든 scan을 좌표
+        # 변환한 뒤 9장을 버리지 않고, 전송 직전에 필요한 최신 한 장만 만든다.
+        self._scan_snapshot_requested = threading.Event()
+        self._particle_snapshot_requested = threading.Event()
+        # LiDAR 장착 TF는 정적이므로 매 scan마다 TF 트리를 조회하지 않는다.
+        self._scan_mount_transform = None
+        self._scan_mount_frame_id = None
 
         # AMCL 은 set_initial_pose 로 (0,0,0) 에서 시작한다. 로봇이 실제로 거기
         # 있지 않으면 **틀린 위치를 확신한 채** 출발한다. 지금까지는 RViz 로만
@@ -190,19 +199,31 @@ class TeleopBridge(Node):
         간단하기 때문이다. 여기서는 정적인 센서 장착 회전·오프셋만 적용하고,
         화면은 받은 pose 를 기준으로 지도 좌표까지 회전시켜 그린다.
         """
+        if not self._scan_snapshot_requested.is_set():
+            return
+        # 요청을 먼저 소비해야 계산 중 전송 스레드가 넣은 다음 요청을
+        # 마지막 clear()가 지우지 않는다.
+        self._scan_snapshot_requested.clear()
+
         ranges = msg.ranges
         if not ranges:
+            self._scan_snapshot_requested.set()
             return
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                SCAN_BASE_FRAME, msg.header.frame_id, Time())
-        except TransformException as exc:
-            if not self._scan_tf_warned:
-                self.get_logger().warn(
-                    f"라이다 TF를 찾지 못해 관제 전송을 건너뜁니다: "
-                    f"{msg.header.frame_id} → {SCAN_BASE_FRAME}: {exc}")
-                self._scan_tf_warned = True
-            return
+        transform = self._scan_mount_transform
+        if transform is None or self._scan_mount_frame_id != msg.header.frame_id:
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    SCAN_BASE_FRAME, msg.header.frame_id, Time())
+            except TransformException as exc:
+                if not self._scan_tf_warned:
+                    self.get_logger().warn(
+                        f"라이다 TF를 찾지 못해 관제 전송을 건너뜁니다: "
+                        f"{msg.header.frame_id} → {SCAN_BASE_FRAME}: {exc}")
+                    self._scan_tf_warned = True
+                self._scan_snapshot_requested.set()
+                return
+            self._scan_mount_transform = transform
+            self._scan_mount_frame_id = msg.header.frame_id
 
         self._scan_tf_warned = False
         t = transform.transform.translation
@@ -227,8 +248,12 @@ class TeleopBridge(Node):
 
     def _on_particles(self, msg: ParticleCloud):
         """가중치는 버리고 위치만 보낸다. 화면이 보는 것은 퍼진 정도다."""
+        if not self._particle_snapshot_requested.is_set():
+            return
+        self._particle_snapshot_requested.clear()
         particles = msg.particles
         if not particles:
+            self._particle_snapshot_requested.set()
             return
         step = max(1, len(particles) // PARTICLE_POINTS)
         self._particles = {
@@ -236,6 +261,14 @@ class TeleopBridge(Node):
             "points": [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)]
                        for p in particles[::step]],
         }
+
+    def _request_diagnostic_snapshots(self, elapsed: float) -> None:
+        """전송 직전 최신 scan과 다음 particle 표본을 요청한다."""
+        scan_lead = min(0.2, self.diag_interval)
+        if elapsed >= self.diag_interval - scan_lead:
+            # websocket 루프가 0.1초 단위로 돌기 때문에 다음 진단 전송 전에
+            # 최신 scan 한두 장만 변환한다. 오래된 1초 전 scan은 보내지 않는다.
+            self._scan_snapshot_requested.set()
 
     @staticmethod
     def _path_payload(msg: Path, kind: str) -> dict:
@@ -282,8 +315,10 @@ class TeleopBridge(Node):
 
     def _serve(self, socket):
         """명령을 받아 발행하고, 주기적으로 pose 와 진단 레이어를 올린다."""
+        self._particle_snapshot_requested.set()
         last_pose = 0.0
-        last_diag = 0.0
+        # 첫 진단도 최신 센서 표본을 받을 시간을 둔 뒤 보낸다.
+        last_diag = time.monotonic()
         last_mode_status = 0.0
         while not self._stop.is_set():
             # pose 를 보내려면 수신에서 오래 막히면 안 되므로 짧게 끊어 받는다.
@@ -297,11 +332,13 @@ class TeleopBridge(Node):
                 self._handle(raw)
 
             now = time.monotonic()
+            diag_elapsed = now - last_diag
+            self._request_diagnostic_snapshots(diag_elapsed)
             if self._pose is not None and now - last_pose >= self.pose_interval:
                 last_pose = now
                 socket.send(json.dumps(self._pose))
 
-            if now - last_diag >= self.diag_interval:
+            if diag_elapsed >= self.diag_interval:
                 last_diag = now
                 for payload in (
                     self._scan,
@@ -311,6 +348,9 @@ class TeleopBridge(Node):
                 ):
                     if payload is not None:
                         socket.send(json.dumps(payload))
+                # particle은 발행 주기가 낮을 수 있어 다음 갱신을 미리 잡는다.
+                # scan은 위에서 전송 직전에만 별도로 요청한다.
+                self._particle_snapshot_requested.set()
 
             if now - last_mode_status >= self.mode_status_interval:
                 last_mode_status = now

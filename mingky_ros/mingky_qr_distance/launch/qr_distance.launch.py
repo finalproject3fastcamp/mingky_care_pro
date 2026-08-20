@@ -13,6 +13,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('qr_size', default_value='0.028'),
         DeclareLaunchArgument('process_every_n', default_value='1'),
         DeclareLaunchArgument('max_process_fps', default_value='5.0'),
+        DeclareLaunchArgument(
+            'process_only_while_guiding', default_value='false'),
         Node(
             package='mingky_qr_distance',
             executable='qr_distance',
@@ -24,6 +26,8 @@ def generate_launch_description() -> LaunchDescription:
                 'qr_size': LaunchConfiguration('qr_size'),
                 'process_every_n': LaunchConfiguration('process_every_n'),
                 'max_process_fps': LaunchConfiguration('max_process_fps'),
+                'process_only_while_guiding': LaunchConfiguration(
+                    'process_only_while_guiding'),
             }],
             prefix=['nice -n 5'],
         ),

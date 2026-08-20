@@ -1,6 +1,7 @@
 """자동 재탐색과 환자 안내 사이의 안전 잠금."""
 
 import math
+from types import SimpleNamespace
 
 from mingky_interfaces.msg import GuideState
 from mingky_localize.auto_localize_node import (
@@ -113,3 +114,34 @@ def test_seed_acceptance_uses_pre_publish_particle_timestamp(monkeypatch):
 
     assert node._wait_for_seed_acceptance(
         hypothesis, updated_after=10.0) is True
+
+
+def test_inactive_localizer_does_not_expand_particle_cloud():
+    node = AutoLocalizeNode.__new__(AutoLocalizeNode)
+    node._busy = False
+    node._particles = [('existing',)]
+    node._particles_updated_at = 10.0
+    message = SimpleNamespace()
+
+    node._on_particles(message)
+
+    assert node._particles == [('existing',)]
+    assert node._particles_updated_at == 10.0
+
+
+def test_active_localizer_keeps_particle_updates(monkeypatch):
+    node = AutoLocalizeNode.__new__(AutoLocalizeNode)
+    node._busy = True
+    node._particles = None
+    node._particles_updated_at = None
+    particle = SimpleNamespace(pose=SimpleNamespace(
+        position=SimpleNamespace(x=1.2, y=-0.3),
+        orientation=SimpleNamespace(z=0.0, w=1.0),
+    ))
+    monkeypatch.setattr(
+        'mingky_localize.auto_localize_node.time.monotonic', lambda: 20.0)
+
+    node._on_particles(SimpleNamespace(particles=[particle]))
+
+    assert node._particles == [(1.2, -0.3, 0.0)]
+    assert node._particles_updated_at == 20.0

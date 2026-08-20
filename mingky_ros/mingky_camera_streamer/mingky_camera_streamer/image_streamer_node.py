@@ -6,8 +6,14 @@ import cv2
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import CompressedImage, Image
+from std_msgs.msg import Bool
 
 from .mjpeg_server import MjpegServer
 
@@ -22,6 +28,7 @@ class ImageStreamerNode(Node):
         self.declare_parameter('max_width', 640)
         self.declare_parameter('jpeg_quality', 60)
         self.declare_parameter('compressed_topic', '')
+        self.declare_parameter('compressed_enable_topic', '')
         self.declare_parameter('compressed_jpeg_quality', 70)
 
         topic = str(self.get_parameter('image_topic').value)
@@ -37,6 +44,22 @@ class ImageStreamerNode(Node):
                 CompressedImage, compressed_topic, qos_profile_sensor_data)
             if compressed_topic else None
         )
+        compressed_enable_topic = str(
+            self.get_parameter('compressed_enable_topic').value).strip()
+        self._compressed_enable_topic = compressed_enable_topic
+        self._compressed_enabled = not compressed_enable_topic
+        if compressed_enable_topic:
+            state_qos = QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                reliability=ReliabilityPolicy.RELIABLE,
+            )
+            self.create_subscription(
+                Bool,
+                compressed_enable_topic,
+                self._on_compressed_enabled,
+                state_qos,
+            )
         self._server = MjpegServer(
             int(self.get_parameter('port').value),
             self.get_logger(),
@@ -49,12 +72,25 @@ class ImageStreamerNode(Node):
         self.create_timer(1.0 / max(max_fps, 0.1), self._publish_latest)
         self.get_logger().info(f'camera stream source: {topic}')
 
+    def _on_compressed_enabled(self, message: Bool) -> None:
+        self._compressed_enabled = bool(message.data)
+
     def _on_image(self, message: Image) -> None:
         self._latest = message
+
+    def _compressed_gate_allows_processing(self) -> bool:
+        if not self._compressed_enable_topic:
+            return True
+        # 게이트 발행자가 없는 단독 카메라 점검과 Person Follow 장애 시에는
+        # 기존 compressed 토픽을 보존한다. 발행자가 있을 때만 상태를 따른다.
+        if self.count_publishers(self._compressed_enable_topic) == 0:
+            return True
+        return self._compressed_enabled
 
     def _publish_latest(self) -> None:
         compressed_needed = (
             self._compressed_pub is not None
+            and self._compressed_gate_allows_processing()
             and self._compressed_pub.get_subscription_count() > 0
         )
         if (

@@ -46,6 +46,7 @@ from .target_lock import pick_target
 
 SPEED_LIMIT_TOPIC = '/speed_limit'
 FOLLOWING_ACTIVE_TOPIC = '/person_follow/following'
+PROCESSING_ACTIVE_TOPIC = '/person_follow/processing_active'
 FOLLOW_STATE_TOPIC = '/person_follow/state'
 DETECTION_LOG_INTERVAL_SEC = 5.0
 
@@ -191,6 +192,11 @@ class PersonFollowNode(Node):
             SpeedLimit, SPEED_LIMIT_TOPIC, 10)
         self.following_active_pub = self.create_publisher(
             Bool, FOLLOWING_ACTIVE_TOPIC, state_qos)
+        # 후방 영상 압축기는 구독자 수만으로는 실제 추론 여부를 알 수 없다.
+        # 안내 세션 전체(정상/감속/환자 재탐색 대기 포함)를 명시적으로 알려
+        # 비활성 세션에서 추적용 JPEG 인코딩을 쉬게 한다.
+        self.processing_active_pub = self.create_publisher(
+            Bool, PROCESSING_ACTIVE_TOPIC, state_qos)
         self.follow_state_pub = self.create_publisher(
             String, FOLLOW_STATE_TOPIC, state_qos)
         self.create_subscription(
@@ -223,6 +229,7 @@ class PersonFollowNode(Node):
         # 안내 세션이 아니므로 시작 즉시 Nav2 속도 제한을 해제한다.
         self._publish_speed_limit(INACTIVE)
         self._publish_status(INACTIVE, None, 'none', force=True)
+        self.processing_active_pub.publish(Bool(data=False))
 
     def destroy_node(self):
         self._stop = True
@@ -247,6 +254,11 @@ class PersonFollowNode(Node):
         self._visual_anchor_distance_m = None
         self._visual_anchor_height_px = None
         self._last_reliable_distance_m = None
+        # 다음 세션이 직전 환자의 프레임으로 시작하지 않게 한다. 비활성
+        # 구간에는 새 프레임을 복사하지 않으므로 여기서 함께 비워야 한다.
+        self._latest_jpeg = None
+        self._latest_frame_at = None
+        self._last_processed_at = None
         self._guidance_started_at = None
         self._acquire_traveled_m = 0.0
         self._acquire_odom_seen = False
@@ -271,6 +283,7 @@ class PersonFollowNode(Node):
             self._patient_id = str(msg.patient_id) if active else ''
             if starting:
                 self._guidance_started_at = now
+        self.processing_active_pub.publish(Bool(data=active))
 
     def _on_qr_observation(self, msg: QrObservation) -> None:
         now = time.monotonic()
@@ -299,6 +312,11 @@ class PersonFollowNode(Node):
 
     def _on_image(self, msg: CompressedImage) -> None:
         with self._lock:
+            # 안내 중이 아닐 때도 후방 카메라는 스트리밍을 위해 계속 켜져
+            # 있다. 추론하지 않을 JPEG를 매 프레임 bytes로 복사하지 않는다.
+            # 세션이 GUIDING으로 바뀌면 바로 다음 프레임부터 다시 저장한다.
+            if not self._active:
+                return
             self._latest_jpeg = bytes(msg.data)
             self._latest_frame_at = time.monotonic()
 

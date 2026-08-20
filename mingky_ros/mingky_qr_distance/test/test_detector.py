@@ -1,6 +1,8 @@
 import cv2
 from mingky_aruco_detector.detector import CameraCalibration
 from mingky_qr_distance.detector import QrPoseEstimator
+from mingky_qr_distance.qr_distance_node import QrDistanceNode
+from mingky_interfaces.msg import GuideState
 import numpy as np
 import pytest
 
@@ -45,3 +47,25 @@ def test_detects_synthetic_qr_and_estimates_distance():
     # QRCodeEncoder 결과의 quiet zone은 자세 계산 모서리에 포함되지 않는다.
     # 200px 전체 중 실제 심볼 약 167px를 28mm로 보므로 약 15.1cm다.
     assert detection.distance == pytest.approx(0.151, abs=0.006)
+
+
+def test_integrated_detector_skips_frames_outside_guidance():
+    node = QrDistanceNode.__new__(QrDistanceNode)
+    node._guiding = False
+    node._frame_count = 0
+
+    node._on_image(object())
+
+    assert node._frame_count == 0
+
+
+def test_guidance_state_enables_integrated_detector():
+    node = QrDistanceNode.__new__(QrDistanceNode)
+    node._guiding = False
+
+    node._on_guide_state(GuideState(
+        session_id=42,
+        session_state=GuideState.SESSION_GUIDING,
+    ))
+
+    assert node._guiding is True

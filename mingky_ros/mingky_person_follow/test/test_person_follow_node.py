@@ -5,6 +5,7 @@ import time
 
 from mingky_interfaces.msg import GuideState, QrObservation
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import CompressedImage
 from mingky_person_follow.distance_policy import INACTIVE, NORMAL, SLOW, WAITING
 from mingky_person_follow.person_follow_node import PersonFollowNode
 import pytest
@@ -23,9 +24,13 @@ def node():
     instance = PersonFollowNode()
     speeds = []
     states = []
+    processing = []
     instance.speed_limit_pub.publish = lambda msg: speeds.append(msg.speed_limit)
     instance.follow_state_pub.publish = (
         lambda msg: states.append(json.loads(msg.data)))
+    instance.processing_active_pub.publish = (
+        lambda msg: processing.append(msg.data))
+    instance._test_processing_messages = processing
     yield instance, speeds, states
     instance.destroy_node()
 
@@ -143,6 +148,35 @@ def test_non_guiding_session_releases_speed_limit(node) -> None:
     assert instance._mode == INACTIVE
     assert speeds[-1] == pytest.approx(100.0)
     assert states[-1]['session_id'] == 0
+
+
+def test_inactive_session_does_not_copy_camera_frame(node) -> None:
+    instance, _, _ = node
+    message = CompressedImage(data=[1, 2, 3, 4])
+
+    instance._on_image(message)
+
+    assert instance._latest_jpeg is None
+    assert instance._latest_frame_at is None
+
+
+def test_guiding_session_copies_next_camera_frame(node) -> None:
+    instance, _, _ = node
+    instance._on_guide_state(_guide())
+
+    instance._on_image(CompressedImage(data=[1, 2, 3, 4]))
+
+    assert instance._latest_jpeg == bytes([1, 2, 3, 4])
+    assert instance._latest_frame_at is not None
+
+
+def test_guidance_state_controls_camera_processing(node) -> None:
+    instance, _, _ = node
+
+    instance._on_guide_state(_guide())
+    instance._on_guide_state(_guide(state=GuideState.SESSION_COMPLETED))
+
+    assert instance._test_processing_messages == [True, False]
 
 
 def test_visual_distance_works_without_a_recent_qr(node) -> None:

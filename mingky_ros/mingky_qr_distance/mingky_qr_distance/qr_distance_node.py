@@ -8,11 +8,16 @@ from mingky_aruco_detector.detector import (
     CameraCalibration,
     load_ros_calibration,
 )
-from mingky_interfaces.msg import QrObservation
+from mingky_interfaces.msg import GuideState, QrObservation
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import CameraInfo, Image
 
 from .detector import QrPoseEstimator
@@ -29,6 +34,7 @@ class QrDistanceNode(Node):
         self.declare_parameter('qr_size', 0.028)
         self.declare_parameter('process_every_n', 2)
         self.declare_parameter('max_process_fps', 5.0)
+        self.declare_parameter('process_only_while_guiding', False)
 
         get = self.get_parameter
         self._process_every_n = max(1, int(get('process_every_n').value))
@@ -36,6 +42,9 @@ class QrDistanceNode(Node):
         self._min_process_interval = 1.0 / max_process_fps
         self._last_process_at = 0.0
         self._frame_count = 0
+        self._process_only_while_guiding = bool(
+            get('process_only_while_guiding').value)
+        self._guiding = not self._process_only_while_guiding
         self._bridge = CvBridge()
         self._estimator = QrPoseEstimator(float(get('qr_size').value))
         calibration_file = str(get('calibration_file').value).strip()
@@ -55,11 +64,29 @@ class QrDistanceNode(Node):
             self.create_subscription(
                 CameraInfo, str(get('camera_info_topic').value),
                 self._on_camera_info, qos_profile_sensor_data)
+        if self._process_only_while_guiding:
+            state_qos = QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                reliability=ReliabilityPolicy.RELIABLE,
+            )
+            self.create_subscription(
+                GuideState,
+                '/guide_manager/state',
+                self._on_guide_state,
+                state_qos,
+            )
 
         source = calibration_file or str(get('camera_info_topic').value)
         self.get_logger().info(
             f'후방 QR 거리 측정 시작 | calibration={source} '
             f'| qr_size={get("qr_size").value}m')
+
+    def _on_guide_state(self, msg: GuideState) -> None:
+        self._guiding = (
+            msg.session_state == GuideState.SESSION_GUIDING
+            and msg.session_id > 0
+        )
 
     def _on_camera_info(self, msg: CameraInfo) -> None:
         matrix = np.asarray(msg.k, dtype=np.float64).reshape(3, 3)
@@ -72,6 +99,8 @@ class QrDistanceNode(Node):
         self._warned_calibration = False
 
     def _on_image(self, msg: Image) -> None:
+        if not self._guiding:
+            return
         self._frame_count += 1
         if self._frame_count % self._process_every_n:
             return
