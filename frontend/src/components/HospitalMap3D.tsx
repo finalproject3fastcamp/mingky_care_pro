@@ -1141,24 +1141,43 @@ export function HospitalMap3D({
    * 기다리는 것만 보여주면 보는 사람은 "언제까지 기다리나" 를 모른다.
    * 남은 시간이 보이면 **곧 무슨 일이 일어날지 알고 지켜볼 수 있다.**
    *
-   * 로봇에게 물어보지 않고 화면에서 센다. 로봇은 남은 시간을 내보내지
-   * 않고, 대기가 시작된 시각은 화면이 `waiting` 을 처음 본 순간과 거의
-   * 같다. **다만 어림값이므로 초 단위로만 보여준다.**
+   * 로봇은 남은 시간을 내보내지 않으므로 화면에서 센다. 그래서 **언제부터
+   * 세느냐가 전부다.** 화면에 오는 두 신호는 속도가 다르다.
+   *
+   * | 신호 | 주기 | 여기서 맡는 일 |
+   * |---|---|---|
+   * | `follow_state` | 0.5초 | **언제** 시작할지 |
+   * | `guide_robot_state` | 3초 | **세도 되는지** |
+   *
+   * 느린 쪽으로 시작을 잡으면 최대 3초를 늦게 세기 시작한다. 그러면 로봇이
+   * 이미 떠난 뒤에도 화면에 시간이 남아 있고, 숫자는 0 에 닿지도 못한 채
+   * 사라진다. 관객은 "2초 남았다" 는 화면을 보면서 로봇이 굴러가는 것을
+   * 본다. 그래서 시작은 빠른 쪽에서 잡고, 느린 쪽은 보여줄지 말지만 정한다.
    */
+  const waitStartedAt = useRef<number | null>(null)
   const [waitLeft, setWaitLeft] = useState<number | null>(null)
 
   useEffect(() => {
-    if (mapState !== 'waiting' || !paused) {
+    if (mapState !== 'waiting') {
+      // 환자가 돌아오면 로봇도 `_patient_wait_started_at` 을 0 으로 되돌린다.
+      // 짧게 여러 번 놓친 것을 합산하면 잘 따라오는데도 복귀해 버린다.
+      waitStartedAt.current = null
       setWaitLeft(null)
       return
     }
-    const startedAt = performance.now()
+    if (waitStartedAt.current === null) waitStartedAt.current = performance.now()
+    if (!paused) {
+      // 로봇이 시계를 안 돌리는 경우다. 세지 않는다.
+      setWaitLeft(null)
+      return
+    }
+    const startedAt = waitStartedAt.current
     const tick = () => {
       const left = waitLimitSec - (performance.now() - startedAt) / 1000
       setWaitLeft(Math.max(0, left))
     }
     tick()
-    const id = window.setInterval(tick, 500)
+    const id = window.setInterval(tick, 250)
     return () => window.clearInterval(id)
   }, [mapState, paused, waitLimitSec])
 
@@ -1392,7 +1411,25 @@ export function HospitalMap3D({
             (mapState === 'escort' || mapState === 'slow') && (
               <b>{followNow.follow_distance.toFixed(2)} m</b>
             )}
-          {waitLeft !== null && <b>복귀까지 {Math.ceil(waitLeft)}초</b>}
+          {/*
+              줄어드는 막대가 주인공이다. 이 화면은 시연용 모니터에 띄워
+              여러 사람이 떨어져서 본다 -- 두 자리 숫자는 안 읽히고 막대는
+              읽힌다. 게다가 화면이 세는 값은 어림이라, 막대가 "대략 이만큼"
+              을 숫자보다 정직하게 말한다.
+
+              마지막 1초는 숫자 대신 "복귀 준비" 로 바꾼다. 0 을 띄워 두고
+              멈춰 있는 것이 진행 표시에서 가장 오래된 결함이다.
+          */}
+          {waitLeft !== null && (
+            <span className="map3d__wait">
+              <span className="map3d__wait-bar" aria-hidden="true">
+                <i style={{ width: `${(waitLeft / waitLimitSec) * 100}%` }} />
+              </span>
+              <b>
+                {waitLeft <= 1 ? '복귀 준비' : `복귀까지 ${Math.ceil(waitLeft)}초`}
+              </b>
+            </span>
+          )}
         </span>
         {pose ? (
           <span className="robot-map__coord">
