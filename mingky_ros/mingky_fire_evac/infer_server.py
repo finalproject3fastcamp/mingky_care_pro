@@ -21,8 +21,10 @@ ROS2/DDS를 두 기기 사이에 걸치지 않고, 이미 확인된 TCP(HTTP) �
 """
 
 import argparse
+import collections
 import io
 import threading
+import time
 
 from flask import Flask, jsonify, request
 import numpy as np
@@ -35,30 +37,62 @@ model = None
 fire_class_id = None
 inference_lock = threading.Lock()
 
-# 전등/조명 오탐 방지용 색상 검증 (시연 요건: 라이터 불꽃 외엔 절대 안 걸려야 함).
-# YOLO가 fire 박스를 잡아도, 박스 영역이 실제 불꽃 색(채도 높은 주황~빨강)이
-# 아니면 버린다 -- 전등은 밝지만(명도 V 높음) 채도(S)는 낮은 흰색/미색이라 이
-# 조건으로 걸러진다. PIL 'HSV' 모드는 H/S/V 모두 0-255 스케일이고, H=0이
-# 빨강이라 0-360도 기준 0~45도(주황~노랑 경계) 구간은 대략 0-32에 해당한다.
-FIRE_HUE_MAX = 22
-FIRE_MIN_SATURATION = 110
-FIRE_MIN_VALUE = 140
-FIRE_PIXEL_RATIO = 0.12
+# 전등/조명 오탐 방지 (시연 요건: 라이터 불꽃 외엔 절대 안 걸려야 함).
+#
+# 처음엔 "색상만" 검증했다(채도 높은 주황~빨강만 통과) -- 그런데 실기
+# 검증(2026-08-20, 실제 라이터 영상 20프레임 중 YOLO raw 5, 색상 필터 통과
+# 1)에서 드러났듯, **라이터의 노란 불꽃과 백열등류의 따뜻한 노란빛은 HSV
+# 색공간에서 사실상 겹친다** -- Hue/Saturation을 아무리 조정해도 색상만으론
+# 이 둘을 원리적으로 못 가른다 (합성 색상으로 재확인함: (255,200,30) 노란
+# 불꽃과 (255,180,80) 백열등은 어떤 채도/색상 임계값에서도 항상 같이
+# 통과되거나 같이 걸러졌다).
+#
+# 그래서 색상은 "명백히 흰색/저채도인 조명"만 걸러내는 느슨한 1차 필터로만
+# 쓰고, 진짜 구분은 **깜박임(flicker)**으로 한다 -- 조명은 밝기가 일정하고,
+# 실제 불꽃은 짧은 시간에도 눈에 띄게 흔들린다. 최근 FLICKER_WINDOW_SEC
+# 동안의 박스 밝기(V) 표준편차가 FLICKER_MIN_STD 이상이어야 최종 확정한다.
+#
+# 시연 로봇 1대만 쓰는 걸 가정해 밝기 이력을 전역(글로벌)으로 하나만 든다 --
+# 로봇을 여러 대 동시에 쓰면 서로 다른 화재원이 섞여 부정확해질 수 있다.
+FLAME_LOOSE_MIN_SATURATION = 40
+FLICKER_WINDOW_SEC = 3.0
+FLICKER_RESET_GAP_SEC = 2.0
+FLICKER_MIN_SAMPLES = 4
+FLICKER_MIN_STD = 6.0
+
+_brightness_lock = threading.Lock()
+_brightness_history: collections.deque = collections.deque()  # [(ts, mean_v), ...]
 
 
-def _looks_like_flame(image: Image.Image, xyxy) -> bool:
+def _mean_hsv(image: Image.Image, xyxy) -> tuple[float, float, float] | None:
     x1, y1, x2, y2 = (max(0, int(v)) for v in xyxy)
     crop = image.crop((x1, y1, x2, y2))
     if crop.width == 0 or crop.height == 0:
-        return False
-    hsv = np.asarray(crop.convert('HSV'), dtype=np.int16)
-    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    flame_pixels = (
-        (h <= FIRE_HUE_MAX)
-        & (s >= FIRE_MIN_SATURATION)
-        & (v >= FIRE_MIN_VALUE)
+        return None
+    hsv = np.asarray(crop.convert('HSV'), dtype=np.float32)
+    return (
+        float(hsv[..., 0].mean()),
+        float(hsv[..., 1].mean()),
+        float(hsv[..., 2].mean()),
     )
-    return float(np.mean(flame_pixels)) >= FIRE_PIXEL_RATIO
+
+
+def _flicker_std(mean_value: float) -> float:
+    """최근 FLICKER_WINDOW_SEC 동안의 밝기 표준편차. 표본이 모자라면 0."""
+    now = time.monotonic()
+    with _brightness_lock:
+        while (_brightness_history
+               and now - _brightness_history[0][0] > FLICKER_WINDOW_SEC):
+            _brightness_history.popleft()
+        if (_brightness_history
+                and now - _brightness_history[-1][0] > FLICKER_RESET_GAP_SEC):
+            # 한참 끊겼다가 다시 잡힌 것 -- 이전 이력과 섞으면 무의미하다.
+            _brightness_history.clear()
+        _brightness_history.append((now, mean_value))
+        samples = [v for _, v in _brightness_history]
+    if len(samples) < FLICKER_MIN_SAMPLES:
+        return 0.0
+    return float(np.std(samples))
 
 
 @app.post('/infer')
@@ -81,16 +115,36 @@ def infer():
         results = model.predict(
             image, conf=conf, classes=[fire_class_id], verbose=False)
     boxes = results[0].boxes
-    confirmed = [b for b in boxes if _looks_like_flame(image, b.xyxy[0])]
+
+    confirmed = []
+    diagnostics = []
+    for b in boxes:
+        mean_hsv = _mean_hsv(image, b.xyxy[0])
+        if mean_hsv is None:
+            continue
+        hue, saturation, value = mean_hsv
+        if saturation < FLAME_LOOSE_MIN_SATURATION:
+            # 명백히 흰색/저채도인 조명 -- 깜박임 이력에 넣지 않고 바로 컷.
+            continue
+        std = _flicker_std(value)
+        diagnostics.append({
+            'conf': float(b.conf), 'hue': hue, 'saturation': saturation,
+            'value': value, 'flicker_std': std,
+        })
+        if std >= FLICKER_MIN_STD:
+            confirmed.append(b)
+
     return jsonify({
         'fire': len(confirmed) > 0,
         'detections': [
             {'conf': float(b.conf)} for b in confirmed
         ],
-        # YOLO는 잡았지만 색상 검증에서 걸러진 개수 -- 현장에서 임계값
-        # 튜닝할 때 (raw > 0 인데 fire가 계속 false면 조명이 필터에 안
-        # 걸리는 것) 참고용.
+        # YOLO 원본 검출 개수 -- 현장 튜닝용.
         'raw_detections': len(boxes),
+        # 색상 1차 필터는 통과했지만 깜박임 확정 전인 것까지 포함한 진단
+        # 정보. flicker_std가 FLICKER_MIN_STD 근처인데 계속 fire=false면
+        # FLICKER_MIN_STD를 낮추면 된다.
+        'diagnostics': diagnostics,
     })
 
 
