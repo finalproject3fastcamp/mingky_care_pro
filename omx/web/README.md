@@ -34,6 +34,8 @@ cd frontend && npm run dev
 |---|---|
 | `policies.json` | 조제에 쓸 수 있는 학습 정책 목록 (pharmacy 전용 · DB 와 무관) |
 | `count_tray.py` | 트레이 알약 계수 브리지 — 백엔드가 il venv 파이썬으로 띄운다 |
+| `safety_watch.py` | 포장 중 사람 감지 비상정지 판정 (FC-14) — `pack_run.py` 가 쓴다 |
+| `test_safety_watch.py` | 판정 규칙 테스트 — 로봇·GPU 없이 `python3 -m pytest` 로 돈다 |
 | `pack_run.py` | 포장(약통 → 봉투) 헤드리스 러너 — 같은 방식으로 띄운다 |
 
 ## DB 에 없는 시연용 텍스트
@@ -247,3 +249,25 @@ PACK_JSON {"완료": true, "초": 3.2, "dry_run": true}
 진행률은 **시간 기준**이다. ACT 는 "끝났다" 나 성공 여부를 내놓지 않기 때문에,
 화면에는 진행 표시로만 쓰고 성공 판정은 사람이 한다
 ([../il/TASK.md](../il/TASK.md) 의 성공 기준).
+
+
+## 비상정지 (FC-14)
+
+포장 중 top·wrist 카메라에 **사람이 연속 2회 보이면** 행동 전송을 멈추고
+팔의 힘을 뺀다. 감시는 `pack_run.py` 루프 안에서 돈다 — 카메라를 러너가
+독점하므로 별도 프로세스로는 만들 수 없다.
+
+워크스테이션에서 감지 서버 한 대를 더 띄운다. 인형 추종(:5001)과 같은
+`infer_server.py` 를 COCO 가중치로 다른 포트에 올리는 것뿐이다 (같은 환경
+사용, 새 코드 없음):
+
+    python mingky_ros/mingky_person_follow/infer_server.py \
+        --model yolov8n.pt --port 5003
+
+`pack_run.py` 는 기본으로 `http://127.0.0.1:5003/infer` 를 본다.
+바꾸려면 `--safety-server URL`, 끄려면 `--safety-server ""`,
+서버가 없을 때 아예 못 돌게 하려면 `--safety-required`.
+
+서버가 죽어 있으면 **경고를 남기고 감시 없이 계속 간다** (시연 우선).
+비상정지가 걸리면 `PACK_JSON {"오류": "비상정지 — …", "비상정지": true}` 로
+올라가 약국 화면에 오류로 표시된다.

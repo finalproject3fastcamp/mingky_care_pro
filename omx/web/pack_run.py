@@ -93,6 +93,14 @@ def main() -> int:
     ap.add_argument("--fps", type=int, default=DEFAULT_FPS)
     ap.add_argument("--dry-run", action="store_true",
                     help="추론까지만 하고 행동을 보내지 않는다 (팔이 움직이지 않음)")
+    # 비상정지 (FC-14). 작업 영역에 사람이 보이면 행동 전송을 멈추고 팔의
+    # 힘을 뺀다. 기본값이 켜짐인 이유: 끄는 것은 명시적 선택이어야 한다.
+    ap.add_argument("--safety-server",
+                    default=os.environ.get("OMX_SAFETY_SERVER",
+                                           "http://127.0.0.1:5003/infer"),
+                    help="사람 감지 추론 서버 URL. 빈 값을 주면 감시를 끈다")
+    ap.add_argument("--safety-required", action="store_true",
+                    help="감시 서버에 못 붙으면 팔을 세운다 (기본: 경고 후 계속)")
     args = ap.parse_args()
 
     # 로컬 디렉터리이거나 HF Hub repo id 다. `policies.json` 이 조제 정책을
@@ -181,11 +189,20 @@ def main() -> int:
     preprocessor.reset()
     postprocessor.reset()
 
+    watch = None
+    if args.safety_server:
+        from safety_watch import SafetyWatch
+        watch = SafetyWatch(
+            args.safety_server, required=args.safety_required,
+            warn=lambda msg: emit({"경고": msg}))
+        emit({"단계": "안전 감시 시작", "서버": args.safety_server})
+
     emit({"단계": "약 투입", "진행": 0.0})
     started = time.perf_counter()
     period = 1.0 / args.fps
     last_report = 0.0
     rc = 0
+    frame_no = 0
     try:
         while True:
             elapsed = time.perf_counter() - started
@@ -194,6 +211,18 @@ def main() -> int:
             loop_start = time.perf_counter()
 
             obs = robot.get_observation()
+
+            # 행동을 계산하기 전에 본다. 사람이 보이면 이번 프레임의 행동은
+            # 아예 만들지 않는다 — 멈추기로 한 팔에 줄 명령은 없다.
+            if watch is not None:
+                trip = watch.check(obs, frame_no)
+                if trip is not None:
+                    emit({"오류": f"비상정지 — {trip.pop('이유')}",
+                          "비상정지": True, **trip})
+                    rc = 3
+                    break
+            frame_no += 1
+
             frame = build_dataset_frame(ds_features, obs, prefix="observation")
             action_values = predict_action(
                 observation=frame,
