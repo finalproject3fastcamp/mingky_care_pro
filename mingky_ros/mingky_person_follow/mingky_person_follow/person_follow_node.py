@@ -41,7 +41,7 @@ from .distance_policy import (
     WAITING,
 )
 from .event_publisher import PersonFollowEventPublisher
-from .target_lock import pick_target
+from .target_lock import bbox_center_distance, pick_target
 
 
 SPEED_LIMIT_TOPIC = '/speed_limit'
@@ -69,6 +69,11 @@ class PersonFollowNode(Node):
         self.declare_parameter('conf_threshold', 0.25)
         self.declare_parameter('max_jump_px', 200.0)
         self.declare_parameter('target_reacquire_misses', 5)
+        self.declare_parameter('target_min_confidence', 0.55)
+        self.declare_parameter('target_class_overlap_iou', 0.50)
+        self.declare_parameter('target_class_confidence_margin', 0.15)
+        self.declare_parameter('target_confirm_frames', 3)
+        self.declare_parameter('target_confirm_max_jump_px', 80.0)
         self.declare_parameter('slow_distance_m', 0.15)
         self.declare_parameter('stop_distance_m', 0.30)
         self.declare_parameter('distance_hysteresis_m', 0.02)
@@ -80,7 +85,7 @@ class PersonFollowNode(Node):
         self.declare_parameter('target_height_m', 0.13)
         self.declare_parameter('bbox_edge_margin_px', 5.0)
         self.declare_parameter('partial_bbox_max_distance_m', 0.35)
-        self.declare_parameter('partial_bbox_conf_threshold', 0.50)
+        self.declare_parameter('partial_bbox_conf_threshold', 0.70)
         self.declare_parameter('status_period_sec', 0.5)
         # 0.0은 Nav2에서 제한 해제이므로 정지 표현에 쓰지 않는다.
         self.declare_parameter('stop_speed_percent', 0.1)
@@ -101,6 +106,16 @@ class PersonFollowNode(Node):
         self.max_jump_px = max(1.0, float(get('max_jump_px').value))
         self.target_reacquire_misses = max(
             1, int(get('target_reacquire_misses').value))
+        self.target_min_confidence = float(
+            get('target_min_confidence').value)
+        self.target_class_overlap_iou = float(
+            get('target_class_overlap_iou').value)
+        self.target_class_confidence_margin = float(
+            get('target_class_confidence_margin').value)
+        self.target_confirm_frames = max(
+            1, int(get('target_confirm_frames').value))
+        self.target_confirm_max_jump_px = max(
+            1.0, float(get('target_confirm_max_jump_px').value))
         self.policy = DistancePolicy(
             slow_distance_m=float(get('slow_distance_m').value),
             stop_distance_m=float(get('stop_distance_m').value),
@@ -134,6 +149,13 @@ class PersonFollowNode(Node):
                 or not 0.0 <= self.partial_bbox_conf_threshold <= 1.0):
             raise ValueError(
                 'partial_bbox_conf_threshold는 0~1 범위여야 합니다.')
+        for name, value in (
+                ('target_min_confidence', self.target_min_confidence),
+                ('target_class_overlap_iou', self.target_class_overlap_iou),
+                ('target_class_confidence_margin',
+                 self.target_class_confidence_margin)):
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f'{name}는 0~1 범위여야 합니다.')
         self.status_period_sec = max(
             0.1, float(get('status_period_sec').value))
         self.stop_speed_percent = float(get('stop_speed_percent').value)
@@ -169,6 +191,8 @@ class PersonFollowNode(Node):
         self._locked_target: dict | None = None
         self._locked_class: str | None = None
         self._target_misses = 0
+        self._pending_target: dict | None = None
+        self._pending_target_hits = 0
         self._visual_visible = False
         self._visual_complete = False
         self._last_visual_at: float | None = None
@@ -246,6 +270,8 @@ class PersonFollowNode(Node):
         self._locked_target = None
         self._locked_class = None
         self._target_misses = 0
+        self._pending_target = None
+        self._pending_target_hits = 0
         self._visual_visible = False
         self._visual_complete = False
         self._last_visual_at = None
@@ -359,6 +385,35 @@ class PersonFollowNode(Node):
             return float(ordered[middle])
         return float((ordered[middle - 1] + ordered[middle]) / 2.0)
 
+    def _confirm_new_target(self, target: dict) -> bool:
+        """잠금이 없는 새 YOLO 대상이 여러 프레임 이어지는지 확인한다.
+
+        기존 잠금 대상은 pick_target의 위치 연속성으로 즉시 이어가지만,
+        새 대상이나 잠금 해제 후 재등장한 대상은 한 프레임 오검출만으로 안내를
+        재개하지 않는다. 이 메서드는 self._lock을 잡은 상태에서 호출한다.
+        """
+        pending = self._pending_target
+        continuous = (
+            pending is not None
+            and pending['cls'] == target['cls']
+            and bbox_center_distance(pending, target)
+            <= self.target_confirm_max_jump_px
+        )
+        if continuous:
+            self._pending_target_hits += 1
+        else:
+            self._pending_target_hits = 1
+        self._pending_target = target
+        if self._pending_target_hits < self.target_confirm_frames:
+            return False
+        self._pending_target = None
+        self._pending_target_hits = 0
+        return True
+
+    def _clear_pending_target(self) -> None:
+        self._pending_target = None
+        self._pending_target_hits = 0
+
     def _inference_loop(self) -> None:
         while rclpy.ok() and not self._stop:
             time.sleep(0.05)
@@ -370,6 +425,7 @@ class PersonFollowNode(Node):
                 locked = self._locked_target
                 locked_class = self._locked_class
                 patient_id = self._patient_id
+                session_id = self._session_id
                 last_qr_at = self._last_qr_at
                 qr_center = self._qr_center
             now = time.monotonic()
@@ -393,13 +449,24 @@ class PersonFollowNode(Node):
                 screen_center=qr_center or (320.0, 240.0),
                 max_jump_px=self.max_jump_px,
                 required_class=locked_class or patient_id,
+                min_confidence=self.target_min_confidence,
+                class_overlap_iou=self.target_class_overlap_iou,
+                class_confidence_margin=self.target_class_confidence_margin,
             )
             qr_recent = (
                 last_qr_at is not None
                 and now - last_qr_at <= self.qr_stale_sec
             )
             with self._lock:
+                # HTTP 응답을 기다리는 동안 세션이 바뀌었다면 이전 환자의
+                # 결과를 새 세션 잠금에 사용하지 않는다.
+                if (
+                        not self._active
+                        or self._session_id != session_id
+                        or self._patient_id != patient_id):
+                    continue
                 if target is None:
+                    self._clear_pending_target()
                     self._target_misses += 1
                     self._visual_visible = False
                     self._visual_complete = False
@@ -408,6 +475,12 @@ class PersonFollowNode(Node):
                         # 위치 잠금만 풀고 세션 환자 클래스는 유지한다.
                         self._locked_target = None
                     continue
+                if locked is None and not self._confirm_new_target(target):
+                    self._visual_visible = False
+                    self._visual_complete = False
+                    self._partial_visual_distance_m = None
+                    continue
+                self._clear_pending_target()
                 self._locked_target = target
                 self._locked_class = str(target['cls'])
                 self._target_misses = 0

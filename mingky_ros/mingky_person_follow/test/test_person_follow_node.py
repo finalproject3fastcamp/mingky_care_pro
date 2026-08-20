@@ -53,6 +53,19 @@ def _qr(patient='patient-001', distance=0.10, visible=True):
     )
 
 
+def _target(cls='patient-001', x=320.0, confidence=0.85):
+    return {
+        'cls': cls,
+        'conf': confidence,
+        'x': x,
+        'y': 240.0,
+        'w': 160.0,
+        'h': 320.0,
+        'image_width': 640.0,
+        'image_height': 480.0,
+    }
+
+
 def test_matching_qr_controls_distance_band(node) -> None:
     instance, speeds, states = node
     instance._on_guide_state(_guide())
@@ -210,6 +223,41 @@ def test_near_partial_visual_always_moves_slowly(node) -> None:
     assert states[-1]['source'] == 'partial_near'
     assert states[-1]['distance'] == pytest.approx(0.34)
     assert states[-1]['visual_visible'] is True
+
+
+def test_new_yolo_target_requires_consecutive_confirmation(node) -> None:
+    instance, _, _ = node
+    target = _target()
+
+    with instance._lock:
+        assert instance._confirm_new_target(target) is False
+        assert instance._confirm_new_target({**target, 'x': 330.0}) is False
+        assert instance._confirm_new_target({**target, 'x': 340.0}) is True
+
+
+def test_new_yolo_target_confirmation_resets_on_large_jump(node) -> None:
+    instance, _, _ = node
+
+    with instance._lock:
+        assert instance._confirm_new_target(_target(x=100.0)) is False
+        assert instance._confirm_new_target(_target(x=300.0)) is False
+        assert instance._pending_target_hits == 1
+
+
+def test_tracking_reset_clears_pending_yolo_candidate(node) -> None:
+    instance, _, _ = node
+    with instance._lock:
+        instance._confirm_new_target(_target())
+        instance._reset_tracking()
+
+    assert instance._pending_target is None
+    assert instance._pending_target_hits == 0
+
+
+def test_partial_bbox_requires_high_confidence_by_default(node) -> None:
+    instance, _, _ = node
+
+    assert instance.partial_bbox_conf_threshold == pytest.approx(0.70)
 
 
 def test_short_tracking_loss_keeps_guiding_then_waits(node) -> None:

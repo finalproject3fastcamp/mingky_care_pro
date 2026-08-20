@@ -221,11 +221,26 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     assert _argument(root, 'patient_follow_initial_acquire_distance').get('default') == '0.30'
     assert _argument(root, 'patient_follow_target_height').get('default') == '0.13'
     assert _argument(
+        root, 'patient_follow_target_min_confidence'
+    ).get('default') == '0.55'
+    assert _argument(
+        root, 'patient_follow_target_class_overlap_iou'
+    ).get('default') == '0.50'
+    assert _argument(
+        root, 'patient_follow_target_class_confidence_margin'
+    ).get('default') == '0.15'
+    assert _argument(
+        root, 'patient_follow_target_confirm_frames'
+    ).get('default') == '3'
+    assert _argument(
+        root, 'patient_follow_target_confirm_max_jump_px'
+    ).get('default') == '80.0'
+    assert _argument(
         root, 'patient_follow_partial_bbox_max_distance'
     ).get('default') == '0.35'
     assert _argument(
         root, 'patient_follow_partial_bbox_conf_threshold'
-    ).get('default') == '0.50'
+    ).get('default') == '0.70'
     assert _argument(root, 'patient_follow_wait_limit').get('default') == '20.0'
     follower = next(
         item for item in root.findall('node')
@@ -250,6 +265,16 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
         '$(var patient_follow_initial_acquire_distance)')
     assert follower_params['target_height_m'] == (
         '$(var patient_follow_target_height)')
+    assert follower_params['target_min_confidence'] == (
+        '$(var patient_follow_target_min_confidence)')
+    assert follower_params['target_class_overlap_iou'] == (
+        '$(var patient_follow_target_class_overlap_iou)')
+    assert follower_params['target_class_confidence_margin'] == (
+        '$(var patient_follow_target_class_confidence_margin)')
+    assert follower_params['target_confirm_frames'] == (
+        '$(var patient_follow_target_confirm_frames)')
+    assert follower_params['target_confirm_max_jump_px'] == (
+        '$(var patient_follow_target_confirm_max_jump_px)')
     assert follower_params['partial_bbox_max_distance_m'] == (
         '$(var patient_follow_partial_bbox_max_distance)')
     assert follower_params['partial_bbox_conf_threshold'] == (
