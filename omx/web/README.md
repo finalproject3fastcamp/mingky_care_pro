@@ -34,6 +34,7 @@ cd frontend && npm run dev
 |---|---|
 | `policies.json` | 조제에 쓸 수 있는 학습 정책 목록 (pharmacy 전용 · DB 와 무관) |
 | `count_tray.py` | 트레이 알약 계수 브리지 — 백엔드가 il venv 파이썬으로 띄운다 |
+| `pack_run.py` | 포장(약통 → 봉투) 헤드리스 러너 — 같은 방식으로 띄운다 |
 
 ## DB 에 없는 시연용 텍스트
 
@@ -148,7 +149,101 @@ USB 를 다시 꽂고, 자동절전을 끈다 — [omx/il/TASK.md](../il/TASK.md
    4개 이상은 촬영한 적이 없어 정책이 다루지 못한다
 ```
 
-## 포장 단계
+## 포장 단계 — 조제와 다른 로봇, 다른 스위치
 
-`_pack_worker()` 가 4단계(봉투 준비 → 약 투입 → 라벨 인쇄 → 밀봉)를 시간만
-흘려보낸다. **실제 하드웨어가 붙으면 이 함수만 바꾸면 되도록** 분리했다.
+OMX 작업은 둘로 나뉘어 있고 **서로 다른 노트북에서 다른 모델로** 만들어졌다.
+한쪽만 갖춘 자리가 정상이라 스위치를 묶지 않는다 — `PHARMACY_REAL` 로 포장까지
+켜면, 조제 파트가 없는 자리에서 포장을 쓰려다 같이 실패한다.
+
+| | 조제 (알약 하나씩 집기) | 포장 (약통 → 봉투) |
+|---|---|---|
+| 스위치 | `PHARMACY_REAL=1` | `PACK_REAL=1` |
+| 코드 | `~/omx_pill_project` (저장소 밖) | `pack_run.py` (여기) |
+| 정책 | `policies.json` 의 `pill_v3` 계열 | `~/train/act_pill_bottle_v1` |
+| 백엔드 | `_run_sequence()` | `_run_pack()` |
+
+`_pack_worker()` 의 4단계 중 **로봇이 하는 것은 "약 투입" 하나다.** 학습된 작업이
+"약통을 집어 봉투에 넣기" 뿐이라([../il/TASK.md](../il/TASK.md)), 봉투 준비·라벨
+인쇄·밀봉은 실제 모드에서도 시뮬레이션이다. 넷 다 진짜인 것처럼 보이게 만들지
+않는다.
+
+| 환경 변수 | 기본값 | 무엇 |
+|---|---|---|
+| `PACK_REAL` | `0` | `1` 이면 "약 투입" 을 실제 로봇이 한다 |
+| `PACK_DRY_RUN` | `0` | 로봇·카메라에 붙어 추론까지 하되 **행동을 보내지 않는다** |
+| `PACK_CKPT` | `~/train/act_pill_bottle_v1/checkpoints/last/pretrained_model` | 정책. 로컬 경로 또는 HF Hub repo id |
+| `PACK_SECONDS` | `60` | 에피소드 상한 (05_record.sh 가 60초로 찍었다) |
+
+```bash
+# 리허설 — 팔이 움직이지 않는다. 배선을 확인할 때.
+cd backend && PACK_REAL=1 PACK_DRY_RUN=1 PACK_SECONDS=6 uvicorn app.main:app
+
+# 실기 — 팔이 실제로 움직인다.
+cd backend && PACK_REAL=1 uvicorn app.main:app
+```
+
+### 다른 노트북에서 포장을 돌리려면
+
+**체크포인트는 저장소에 없다.** `policies.json` 이 조제 정책을 HF Hub repo id 로
+참조하는 것과 같은 규칙이다 — 200MB 짜리 바이너리가 git 에 들어가면 앞으로 모든
+clone 이 그 값을 치르고, 모델을 새로 학습할 때마다 히스토리가 그만큼 불어난다.
+
+옮길 것은 **`pretrained_model` 하나, 약 200MB** 다.
+
+```
+~/train/act_pill_bottle_v1/
+└── checkpoints/last/
+    ├── pretrained_model/   198M  ← 이것만 필요 (추론에 쓰는 전부)
+    └── training_state/     394M  ← 학습 재개용. 안 옮겨도 된다
+```
+
+`PACK_CKPT` 는 **로컬 경로와 HF Hub repo id 를 모두 받는다.** 자리가 셋 이상이 되면
+허브에 올려 두는 쪽이 편하다 (`06_train.sh` 는 기본이 `push_to_hub=false` 다).
+
+```bash
+PACK_CKPT=~/train/act_pill_bottle_v1/checkpoints/last/pretrained_model   # 로컬
+PACK_CKPT=mingky/pill_bottle_v1_act                                     # 허브
+```
+
+옮기는 쪽에서 확인할 것 — **팔마다·머신마다 다른 것들이라 저장소가 들고 갈 수 없다.**
+
+| | 어떻게 |
+|---|---|
+| lerobot v0.4.4 (`~/venv/il`) | `omx/il/01_install.sh` (20~40분). 조제를 학습시킨 자리면 이미 있다 |
+| `/dev/omx_follower` 이름 고정 | `omx/il/02_find_ports.sh` (sudo) |
+| **그 팔의 캘리브레이션** | `lerobot-calibrate`. 남의 팔 것을 쓰면 관절 영점이 어긋나 엉뚱한 데로 간다 |
+| `omx/il/cams.env` | `omx/il/03_check_cameras.sh --view`. gitignore 대상이다 (by-id 경로가 머신마다 다르다) |
+| 학습 데이터셋 (921MB) | **필요 없다.** `09_compare_view.py` 로 화각을 대조할 때만 쓴다 |
+
+준비됐으면 프리플라이트로 한 번에 확인한다. 아무것도 움직이지 않는다.
+
+```bash
+./.claude/skills/run-local/preflight-omx.sh
+~/venv/il/bin/python omx/web/pack_run.py --dry-run --seconds 3   # 팔 무동작
+```
+
+### 왜 `omx/il/07_run.sh` 를 쓰지 않는가
+
+같은 정책을 돌리지만 그쪽은 **평가용**이라 웹 백엔드가 부를 수 없다.
+
+- `read -r _` 로 엔터를 기다린다 — 헤드리스로 못 붙인다
+- `lerobot-record` 라서 실행할 때마다 평가 데이터셋이 쌓인다
+- 로컬 패치가 첫 에피소드 앞에 리셋 대기를 넣어 → 를 누를 때까지 서 있는다
+- 스페이스바 DAgger 개입 · `--display_data=true` 전제
+- 진행 문구를 찍지 않아 화면에 올릴 것이 없다
+
+`pack_run.py` 는 같은 정책을 **키 입력 없이 한 번만** 돌리고, 데이터셋을 남기지
+않으며, `PACK_JSON` 한 줄씩으로 진행을 알린다 (`count_tray.py` 의 `TRAY_JSON` 과
+같은 방식). 배선을 의심할 때는 단독으로 돌려 범위를 좁힌다.
+
+```bash
+~/venv/il/bin/python omx/web/pack_run.py --dry-run --seconds 3
+PACK_JSON {"단계": "정책 로드"}
+PACK_JSON {"단계": "로봇 연결"}
+PACK_JSON {"단계": "약 투입", "진행": 0.347}
+PACK_JSON {"완료": true, "초": 3.2, "dry_run": true}
+```
+
+진행률은 **시간 기준**이다. ACT 는 "끝났다" 나 성공 여부를 내놓지 않기 때문에,
+화면에는 진행 표시로만 쓰고 성공 판정은 사람이 한다
+([../il/TASK.md](../il/TASK.md) 의 성공 기준).

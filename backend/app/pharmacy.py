@@ -127,6 +127,26 @@ _NOTES = {
 # Flask 판은 CLI 플래그였다. FastAPI 는 단일 앱이라 CLI 를 쓸 수 없다 —
 # 환경 변수로 옮긴다. 기본은 항상 시뮬레이션 (실수로 실제 로봇을 움직이지 않게).
 REAL_MODE = os.environ.get("PHARMACY_REAL", "0") == "1"
+
+# 포장(약통 → 봉투)은 조제와 **다른 노트북에서 다른 모델로** 만들어졌다. 조제는
+# `~/omx_pill_project` 가, 포장은 저장소 안 `omx/il` 킷과 `~/train/act_pill_bottle_v1`
+# 체크포인트가 있어야 돈다. 한쪽만 갖춘 자리가 정상이므로 스위치를 나눈다 —
+# PHARMACY_REAL 로 묶으면 포장을 켜려다 없는 조제 파트까지 끌어와 실패한다.
+PACK_REAL = os.environ.get("PACK_REAL", "0") == "1"
+_PACK_SCRIPT = _DATA_DIR / "pack_run.py"
+# 로컬 경로이거나 HF Hub repo id. 체크포인트는 200MB 가 넘어 저장소에 넣지
+# 않는다 — `policies.json` 이 조제 정책을 repo id 로 참조하는 것과 같은 규칙이다.
+_PACK_CKPT = os.environ.get(
+    "PACK_CKPT", "~/train/act_pill_bottle_v1/checkpoints/last/pretrained_model")
+# 05_record.sh 가 에피소드를 60초로 찍었다. 정책은 그보다 오래 줘도 배운 것
+# 이상은 못 한다 — 상한이지 목표 시간이 아니다.
+PACK_SECONDS = float(os.environ.get("PACK_SECONDS", "60"))
+# 리허설. 로봇·카메라에 붙어 추론까지 하지만 행동을 보내지 않는다 — 팔이 서
+# 있는 채로 화면·SSE·subprocess 배선을 전부 확인할 수 있다. 실기 앞에서 배선을
+# 고치다가 팔을 움직이지 않으려고 둔다.
+PACK_DRY_RUN = os.environ.get("PACK_DRY_RUN", "0") == "1"
+_PACK_MARKER = "PACK_JSON"
+
 DEFAULT_POLICY = os.environ.get("POLICY", "xy")
 SHOW_WINDOW = os.environ.get("SHOW", "1") != "0"   # 카메라 창을 띄울지
 RECORD = os.environ.get("REC", "0") != "0"         # 정책이 본 화면을 mp4 로 남길지
@@ -623,13 +643,90 @@ async def _pack_worker(job_id: str) -> None:
     _push({"종류": "포장시작", "job": job_id})
     async with _JOB_LOCK:
         _JOB["상태"] = "포장중"
+
     for 단계 in ("봉투 준비", "약 투입", "라벨 인쇄", "밀봉"):
         _push({"종류": "포장단계", "이름": 단계})
-        await asyncio.sleep(1.2)
+        # 로봇이 하는 것은 "약 투입" 하나다. 학습된 작업이 "약통을 집어 봉투에
+        # 넣기" 뿐이라 (`omx/il/TASK.md`), 나머지 셋은 실제 모드에서도 시뮬레이션
+        # 이다. 넷 다 진짜인 것처럼 보이게 만들지 않는다.
+        if 단계 == "약 투입" and PACK_REAL:
+            ok, 메모 = await _run_pack()
+            if not ok:
+                await _중단(메모)
+                return
+        else:
+            await asyncio.sleep(1.2)
+
     async with _JOB_LOCK:
         _JOB["상태"] = "완료"
     _push({"종류": "완료", "job": job_id,
            "시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+
+async def _run_pack() -> tuple[bool, str]:
+    """`omx/web/pack_run.py` 를 il venv 로 띄우고 `PACK_JSON` 줄만 읽는다.
+
+    조제(`_run_sequence`) 와 같은 구조다 — 백엔드는 lerobot·torch·카메라를 모르고,
+    자식 프로세스의 stdout 한 줄씩만 화면 이벤트로 옮긴다.
+    """
+    global _JOB_PROC
+
+    if not _PACK_SCRIPT.is_file():
+        return False, f"포장 러너를 찾지 못했습니다: {_PACK_SCRIPT}"
+    # repo id 는 여기서 확인할 방법이 없다 (받아 봐야 안다). 로컬 경로일 때만
+    # 미리 걸러 주고, 나머지는 러너가 판단해 `PACK_JSON {"오류": ...}` 로 올린다.
+    로컬 = Path(_PACK_CKPT).expanduser()
+    if _PACK_CKPT.startswith(("/", "~", ".")) and not (로컬 / "config.json").is_file():
+        return False, (f"포장 정책을 찾지 못했습니다: {로컬} — "
+                       f"PACK_CKPT 로 지정하거나 omx/il/06_train.sh 로 학습하세요")
+
+    cmd = [str(_OMX_PYTHON), str(_PACK_SCRIPT),
+           "--ckpt", _PACK_CKPT,
+           "--seconds", str(PACK_SECONDS)]
+    if PACK_DRY_RUN:
+        cmd.append("--dry-run")
+        _push({"종류": "알림", "글": "포장 — 리허설(팔이 움직이지 않습니다)", "급": "warn"})
+    마지막오류 = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=str(_DATA_DIR),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        _JOB_PROC = proc
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            if _JOB.get("중단요청"):
+                # SIGINT 로 보내야 러너의 finally 가 돌아 팔의 토크가 풀린다.
+                # 죽여 버리면 팔이 마지막 자세로 힘을 준 채 남는다.
+                proc.send_signal(2)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                return False, "사용자가 중단했습니다"
+            if _PACK_MARKER not in line:
+                continue
+            try:
+                ev = json.loads(line.split(_PACK_MARKER, 1)[1].strip())
+            except json.JSONDecodeError:
+                continue
+            if ev.get("오류"):
+                마지막오류 = str(ev["오류"])
+            elif ev.get("단계") in ("정책 로드", "로봇 연결"):
+                # 첫 실행은 torch·정책 로드에만 수십 초가 걸린다. 아무 소식이
+                # 없으면 멈춘 것으로 보이므로 로그에 남긴다.
+                _push({"종류": "알림", "글": f"포장 — {ev['단계']}"})
+        await proc.wait()
+    except Exception as e:  # noqa: BLE001
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        _JOB_PROC = None
+
+    if 마지막오류:
+        return False, 마지막오류
+    if proc.returncode != 0:
+        return False, f"포장 러너가 종료 코드 {proc.returncode} 로 끝났습니다"
+    return True, "완료"
 
 
 # ── 조작 API ──────────────────────────────────────────────────────────
