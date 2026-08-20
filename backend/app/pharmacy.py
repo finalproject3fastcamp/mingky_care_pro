@@ -145,6 +145,10 @@ PACK_SECONDS = float(os.environ.get("PACK_SECONDS", "60"))
 # 있는 채로 화면·SSE·subprocess 배선을 전부 확인할 수 있다. 실기 앞에서 배선을
 # 고치다가 팔을 움직이지 않으려고 둔다.
 PACK_DRY_RUN = os.environ.get("PACK_DRY_RUN", "0") == "1"
+# 러너는 팔이 학습 시작 자세로 돌아오면 상한을 기다리지 않고 끊는다. 감지가
+# 어긋나 작업 도중에 끊기면 이걸로 꺼서 예전처럼 PACK_SECONDS 를 채운다 —
+# 시연 중에 코드를 고치지 않고 되돌릴 수 있는 길을 남겨 둔다.
+PACK_NO_EARLY_STOP = os.environ.get("PACK_NO_EARLY_STOP", "0") == "1"
 _PACK_MARKER = "PACK_JSON"
 
 DEFAULT_POLICY = os.environ.get("POLICY", "xy")
@@ -694,6 +698,8 @@ async def _run_pack() -> tuple[bool, str]:
     if PACK_DRY_RUN:
         cmd.append("--dry-run")
         _push({"종류": "알림", "글": "포장 — 리허설(팔이 움직이지 않습니다)", "급": "warn"})
+    if PACK_NO_EARLY_STOP:
+        cmd.append("--no-early-stop")
     마지막오류 = ""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -720,6 +726,16 @@ async def _run_pack() -> tuple[bool, str]:
                 continue
             if ev.get("오류"):
                 마지막오류 = str(ev["오류"])
+            elif ev.get("완료"):
+                # 상한을 채운 것과 팔이 돌아와서 끝난 것은 다르다. 임계값을
+                # 조정하려면 이때의 이탈값이 필요해서 같은 줄에 싣는다 — 이
+                # 프로젝트에는 로거 설정이 없어 `log.info` 는 버려진다.
+                끝맺음 = "조기 종료" if ev.get("조기종료") else "제한 시간"
+                꼬리 = ""
+                if ev.get("최대이탈") is not None:
+                    꼬리 = f" · 최대이탈 {ev['최대이탈']} · 끝이탈 {ev.get('끝이탈')}"
+                _push({"종류": "알림",
+                       "글": f"포장 — {ev.get('초')}초 ({끝맺음}){꼬리}"})
             elif ev.get("단계") in ("정책 로드", "로봇 연결"):
                 # 첫 실행은 torch·정책 로드에만 수십 초가 걸린다. 아무 소식이
                 # 없으면 멈춘 것으로 보이므로 로그에 남긴다.

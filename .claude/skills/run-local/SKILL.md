@@ -120,7 +120,8 @@ PACK_REAL=1 ./.claude/skills/run-local/start.sh backend
 | `PACK_REAL` | `0` | 포장 실제 모드 |
 | `PACK_DRY_RUN` | `0` | 행동을 보내지 않는 리허설 |
 | `PACK_CKPT` | `~/train/act_pill_bottle_v1/checkpoints/last/pretrained_model` | |
-| `PACK_SECONDS` | `60` | 에피소드 상한. 05_record.sh 가 60초로 찍었다 |
+| `PACK_SECONDS` | `60` | 에피소드 **상한**. 팔이 학습 시작 자세로 돌아오면 그 전에 끊는다 |
+| `PACK_NO_EARLY_STOP` | `0` | 홈 복귀 감지를 끄고 상한을 끝까지 채운다 |
 
 `pack_run.py` 는 단독으로도 돌릴 수 있다 — 배선을 의심할 때 여기부터 좁힌다.
 
