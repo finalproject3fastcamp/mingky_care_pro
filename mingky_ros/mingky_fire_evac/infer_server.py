@@ -25,6 +25,7 @@ import io
 import threading
 
 from flask import Flask, jsonify, request
+import numpy as np
 from PIL import Image
 from ultralytics import YOLO
 from waitress import serve
@@ -33,6 +34,31 @@ app = Flask(__name__)
 model = None
 fire_class_id = None
 inference_lock = threading.Lock()
+
+# 전등/조명 오탐 방지용 색상 검증 (시연 요건: 라이터 불꽃 외엔 절대 안 걸려야 함).
+# YOLO가 fire 박스를 잡아도, 박스 영역이 실제 불꽃 색(채도 높은 주황~빨강)이
+# 아니면 버린다 -- 전등은 밝지만(명도 V 높음) 채도(S)는 낮은 흰색/미색이라 이
+# 조건으로 걸러진다. PIL 'HSV' 모드는 H/S/V 모두 0-255 스케일이고, H=0이
+# 빨강이라 0-360도 기준 0~45도(주황~노랑 경계) 구간은 대략 0-32에 해당한다.
+FIRE_HUE_MAX = 22
+FIRE_MIN_SATURATION = 110
+FIRE_MIN_VALUE = 140
+FIRE_PIXEL_RATIO = 0.12
+
+
+def _looks_like_flame(image: Image.Image, xyxy) -> bool:
+    x1, y1, x2, y2 = (max(0, int(v)) for v in xyxy)
+    crop = image.crop((x1, y1, x2, y2))
+    if crop.width == 0 or crop.height == 0:
+        return False
+    hsv = np.asarray(crop.convert('HSV'), dtype=np.int16)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    flame_pixels = (
+        (h <= FIRE_HUE_MAX)
+        & (s >= FIRE_MIN_SATURATION)
+        & (v >= FIRE_MIN_VALUE)
+    )
+    return float(np.mean(flame_pixels)) >= FIRE_PIXEL_RATIO
 
 
 @app.post('/infer')
@@ -55,11 +81,16 @@ def infer():
         results = model.predict(
             image, conf=conf, classes=[fire_class_id], verbose=False)
     boxes = results[0].boxes
+    confirmed = [b for b in boxes if _looks_like_flame(image, b.xyxy[0])]
     return jsonify({
-        'fire': len(boxes) > 0,
+        'fire': len(confirmed) > 0,
         'detections': [
-            {'conf': float(b.conf)} for b in boxes
+            {'conf': float(b.conf)} for b in confirmed
         ],
+        # YOLO는 잡았지만 색상 검증에서 걸러진 개수 -- 현장에서 임계값
+        # 튜닝할 때 (raw > 0 인데 fire가 계속 false면 조명이 필터에 안
+        # 걸리는 것) 참고용.
+        'raw_detections': len(boxes),
     })
 
 

@@ -34,7 +34,7 @@
 ```bash
 python3 -m venv fire_evac_venv
 source fire_evac_venv/bin/activate
-pip install ultralytics flask pillow waitress
+pip install ultralytics flask pillow waitress numpy
 
 python3 infer_server.py --model <가중치.pt 경로> --port 5000
 ```
@@ -144,6 +144,13 @@ ros2 service call fire_evac/reset_alarm std_srvs/srv/Trigger
 - 실기(pinky-02), 2026-08-12~13: 실제 라이터 불꽃으로 감지 → 대피소 도착 2회 성공.
 - `fire` 클래스만 사용 (`smoke`는 오탐과 잘 안 갈라져서 제외 — 검증 데이터 기준 `fire`는 오탐 0건,
   `smoke`는 노을·조명 등에서 비슷한 신뢰도로 오탐 발생).
+- 2026-08-20: 전등을 `fire`로 오인하는 사례 발견(YOLO가 밝은 광원을 불꽃으로 오판) →
+  `infer_server.py`에 HSV 색상 검증 단계 추가. YOLO가 `fire` 박스를 잡아도 그 영역이
+  채도 높은 주황/빨강(`FIRE_HUE_MAX`/`FIRE_MIN_SATURATION`/`FIRE_MIN_VALUE`/
+  `FIRE_PIXEL_RATIO`, 파일 상단 상수)이 아니면 버린다 — 전등은 밝지만(V 높음) 채도(S)가
+  낮아서 이 조건에서 걸러진다. **시연 전 반드시 실제 조명/라이터로 재검증하고 임계값을
+  튜닝할 것.** `/infer` 응답의 `raw_detections`(YOLO가 잡은 원본 개수)와 `fire`(색상
+  검증까지 통과한 개수)를 비교하면 어느 쪽이 문제인지 바로 보인다.
 
 ## 운영 확인
 
