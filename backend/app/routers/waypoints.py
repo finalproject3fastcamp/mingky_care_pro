@@ -37,9 +37,10 @@ class WaypointSet(BaseModel):
 class CheckRequest(BaseModel):
     waypoints: dict[str, Waypoint]
     footprint: float = Field(default=0.06, ge=0.0, le=1.0)
-    padding: float = Field(default=0.03, ge=0.0, le=1.0)
-    margin: float = Field(default=0.15, ge=0.0, le=2.0)
-    tolerance: float = Field(default=0.12, gt=0.0, le=2.0)
+    padding: float = Field(default=0.01, ge=0.0, le=1.0)
+    minimum_clearance: float = Field(default=0.04, ge=0.0, le=2.0)
+    margin: float = Field(default=0.08, ge=0.0, le=2.0)
+    tolerance: float = Field(default=0.07, gt=0.0, le=2.0)
 
 
 class CheckItem(BaseModel):
@@ -70,7 +71,11 @@ def _load_waypoints() -> WaypointSet:
     )
 
 
-def _occupied_map() -> tuple[list[tuple[float, float]], tuple[float, float, float, float]]:
+def _occupied_map() -> tuple[
+    list[tuple[float, float]],
+    tuple[float, float, float, float],
+    float,
+]:
     meta = yaml.safe_load(MAP_YAML.read_text(encoding="utf-8")) or {}
     width, height, pixels = _read_pgm(MAP_YAML.parent / meta["image"])
     resolution = float(meta["resolution"])
@@ -90,18 +95,70 @@ def _occupied_map() -> tuple[list[tuple[float, float]], tuple[float, float, floa
         origin_y,
         origin_y + height * resolution,
     )
-    return occupied, extent
+    return occupied, extent, resolution
+
+
+def _footprint_vertices(
+    point: tuple[float, float], yaw: float, half_extent: float,
+) -> list[tuple[float, float]]:
+    """12x12cm 정사각 footprint를 waypoint yaw에 맞춰 회전한다."""
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    result = []
+    for local_x, local_y in (
+        (half_extent, half_extent),
+        (half_extent, -half_extent),
+        (-half_extent, -half_extent),
+        (-half_extent, half_extent),
+    ):
+        result.append((
+            point[0] + cos_yaw * local_x - sin_yaw * local_y,
+            point[1] + sin_yaw * local_x + cos_yaw * local_y,
+        ))
+    return result
+
+
+def _body_clearance(
+    point: tuple[float, float],
+    yaw: float,
+    half_extent: float,
+    occupied: list[tuple[float, float]],
+    resolution: float,
+) -> float:
+    """회전 footprint 외곽부터 가장 가까운 점유 셀까지의 여유를 구한다.
+
+    점유 셀을 중심점으로만 보면 최대 반 셀만큼 여유를 크게 계산한다.
+    셀의 반대각 길이를 빼서 실제 셀 영역에 대해 보수적으로 판정한다.
+    """
+    if not occupied:
+        return float("inf")
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    cell_radius = resolution / math.sqrt(2.0)
+    nearest = float("inf")
+    for wall_x, wall_y in occupied:
+        dx, dy = wall_x - point[0], wall_y - point[1]
+        local_x = cos_yaw * dx + sin_yaw * dy
+        local_y = -sin_yaw * dx + cos_yaw * dy
+        outside_x = max(abs(local_x) - half_extent, 0.0)
+        outside_y = max(abs(local_y) - half_extent, 0.0)
+        distance = max(math.hypot(outside_x, outside_y) - cell_radius, 0.0)
+        nearest = min(nearest, distance)
+    return nearest
 
 
 def check_waypoints(request: CheckRequest) -> CheckResponse:
-    occupied, (x0, x1, y0, y1) = _occupied_map()
-    blocked = request.footprint + request.padding
+    occupied, (x0, x1, y0, y1), resolution = _occupied_map()
+    # 운영자가 요청한 4cm 차체 여유를 기본 하한으로 삼되, Nav2 padding보다
+    # 작게 설정해 실제 costmap 충돌을 통과시키는 구성은 허용하지 않는다.
+    blocked = max(request.minimum_clearance, request.padding)
     rows: list[tuple[str, tuple[float, float], bool]] = []
     items = []
 
     for name, waypoint in request.waypoints.items():
         point = (waypoint.x, waypoint.y)
-        inside = x0 <= waypoint.x <= x1 and y0 <= waypoint.y <= y1
+        footprint = _footprint_vertices(
+            point, waypoint.yaw, request.footprint)
+        inside = all(
+            x0 <= x <= x1 and y0 <= y <= y1 for x, y in footprint)
         rows.append((name, point, inside))
         if not inside:
             items.append(CheckItem(
@@ -109,16 +166,25 @@ def check_waypoints(request: CheckRequest) -> CheckResponse:
                 message="맵 밖의 좌표입니다.",
             ))
             continue
-        clearance = min(
-            (math.dist(point, cell) for cell in occupied),
-            default=float("inf"),
+        clearance = _body_clearance(
+            point,
+            waypoint.yaw,
+            request.footprint,
+            occupied,
+            resolution,
         )
         if clearance < blocked:
-            status, message = "blocked", "로봇 footprint가 벽과 겹칩니다."
+            status, message = (
+                "blocked",
+                "차체와 벽 사이 여유가 4cm 미만입니다.",
+            )
         elif clearance < request.margin:
-            status, message = "warning", "벽과의 권장 여유가 부족합니다."
+            status, message = (
+                "warning",
+                "차체와 벽 사이 여유가 8cm 미만입니다.",
+            )
         else:
-            status, message = "ok", "주행 가능한 여유가 있습니다."
+            status, message = "ok", "차체와 벽 사이 여유가 충분합니다."
         items.append(CheckItem(
             name=name, status=status, clearance=clearance, message=message,
         ))

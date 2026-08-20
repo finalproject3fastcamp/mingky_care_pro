@@ -448,7 +448,7 @@ export function WaypointDashboard() {
             <div className={`waypoint-check-item waypoint-check-item--${selectedCheck.status}`}>
               <strong>{selectedCheck.status.toUpperCase()}</strong>
               <span>{selectedCheck.message}</span>
-              {selectedCheck.clearance != null && <span>벽 여유 {selectedCheck.clearance.toFixed(3)}m</span>}
+              {selectedCheck.clearance != null && <span>차체-벽 여유 {selectedCheck.clearance.toFixed(3)}m</span>}
             </div>
           )}
           <div className="waypoint-editor-actions">
