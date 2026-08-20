@@ -366,6 +366,7 @@ export function WaypointDashboard() {
             onSelectWaypoint={setSelectedName}
             robotId={selectedRobotId}
             returning={selectedRobot?.returning_to_dock ?? false}
+            camera={null}
           />
         </section>
 

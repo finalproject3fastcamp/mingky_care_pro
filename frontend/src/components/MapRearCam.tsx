@@ -152,7 +152,7 @@ export function MapRearCam({ robotId, facing, tone, label }: Props) {
         className="map3d__cam-bar"
         role="button"
         tabIndex={0}
-        aria-label="뒤쪽 카메라 창. 끌어서 옮기고, 방향키로 미세 조정, 엔터로 접기"
+        aria-label={`${facing === 'front' ? '앞쪽' : '뒤쪽'} 카메라 창. 끌어서 옮기고, 방향키로 미세 조정, 엔터로 접기`}
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).closest('button')) return
           const r = e.currentTarget.parentElement!.getBoundingClientRect()

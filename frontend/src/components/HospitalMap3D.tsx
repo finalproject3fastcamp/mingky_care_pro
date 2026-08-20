@@ -94,8 +94,7 @@ export interface HospitalMap3DProps extends DiagLayers {
    * 추종 상태를 스스로 받아 올 로봇. `follow` 를 직접 넘기면 그쪽이 이긴다.
    *
    * 화면 쪽에서 받아다 넘기게 하면 대시보드마다 같은 폴링을 적어야 한다.
-   * `GuidanceRearCamera` 도 같은 방식으로 자기 값을 직접 받아 오고 있어서
-   * 이 저장소의 방식과도 맞는다.
+   * 지도 컴포넌트가 상태 표시와 카메라 제목을 함께 갱신한다.
    */
   robotId?: string | null
   /**
@@ -1066,7 +1065,9 @@ export function HospitalMap3D({
     QR_POLL_MS,
     robotId ?? null,
   )
-  const followNow = follow ?? observed.data
+  // 요청이 실패했는데 마지막 성공값을 계속 보여주면 끊긴 추적을 정상으로
+  // 오인할 수 있다. 명시적으로 넘겨받은 값이 없을 때는 오류 즉시 비운다.
+  const followNow = follow ?? (observed.error ? null : observed.data)
 
   const mapState: MapState = useMemo(() => {
     if (estop) return 'estop'
