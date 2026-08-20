@@ -1096,9 +1096,29 @@ export function HospitalMap3D({
     QR_POLL_MS,
     robotId ?? null,
   )
-  // 요청이 실패했는데 마지막 성공값을 계속 보여주면 끊긴 추적을 정상으로
-  // 오인할 수 있다. 명시적으로 넘겨받은 값이 없을 때는 오류 즉시 비운다.
-  const followNow = follow ?? (observed.error ? null : observed.data)
+  /**
+   * 요청이 실패했을 때의 원칙: **좋은 소식은 즉시 버리고, 나쁜 소식은 붙든다.**
+   *
+   * 낡은 normal/slow 를 계속 보여주면 끊긴 추적을 정상으로 오인한다 — 그래서
+   * 오류가 나면 비운다(기존 동작 유지). 그런데 waiting 까지 같이 비우면 반대
+   * 방향의 거짓말이 생긴다. 폴링이 한 번만 실패해도 화면이 대기 상태를 잠깐
+   * 벗어나면서 복귀 카운트다운이 20초부터 다시 시작하는데, 로봇의 시계는 그
+   * 500 에러를 모르고 계속 돈다. 하네스로 재보니 오류 한 번에 화면이 7초를
+   * 잃었고, 로봇이 떠나는 순간 화면에는 "복귀까지 10초" 가 남아 있었다.
+   * 이탈 경보가 껌뻑이며 이벤트 로그도 두 줄로 갈라진다.
+   *
+   * waiting 은 경보다. 경보를 오류 동안 유지하는 것은 안전한 방향이고,
+   * 그 사이에도 로봇은 실제로 세고 있으므로 사실에도 맞다. 연결이 돌아오면
+   * 다음 폴링(0.5초)이 진실로 되돌린다.
+   */
+  const heldWaiting = useRef<QrObservation | null>(null)
+  useEffect(() => {
+    if (observed.error) return
+    heldWaiting.current =
+      observed.data?.follow_state === 'waiting' ? observed.data : null
+  }, [observed.data, observed.error])
+  const followNow =
+    follow ?? (observed.error ? heldWaiting.current : observed.data)
 
   const mapState: MapState = useMemo(() => {
     if (estop) return 'estop'
