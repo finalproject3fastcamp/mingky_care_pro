@@ -206,7 +206,7 @@ const LOOK: Look = {
    * 3D 안이 아니라 캔버스 뒤에 깐다. 3D 안에 넣으면 톤매핑을 타서 지정한
    * 값과 다른 색으로 나온다(밝은 회색을 넣었더니 더 밝게 나왔다).
    */
-  background: '#d5d8dc',
+  background: '#c5cbd1',
   /** 하늘빛·바닥반사 받침 */
   sky: 0x9fb4c6,
   ground: 0xc8ccd0,

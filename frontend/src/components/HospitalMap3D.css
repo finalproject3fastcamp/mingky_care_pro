@@ -13,7 +13,7 @@
   aspect-ratio: 16 / 9;
   border-radius: 10px;
   overflow: hidden;
-  background: #b9bcbf;
+  background: #c5cbd1;
   /* 3D 안을 끌어 돌리는 동안 브라우저가 화면을 스크롤하면 안 된다. */
   touch-action: none;
 }
@@ -25,6 +25,8 @@
 }
 
 .map3d__canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }
@@ -94,7 +96,7 @@
   margin: 0;
   font-size: 0.85rem;
   color: #64748b;
-  background: #b9bcbf;
+  background: #c5cbd1;
 }
 
 .map3d__reset {

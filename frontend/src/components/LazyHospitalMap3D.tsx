@@ -18,7 +18,7 @@ export function LazyHospitalMap3D(props: HospitalMap3DProps) {
           style={{
             alignItems: 'center',
             aspectRatio: '16 / 9',
-            background: '#b9bcbf',
+            background: '#c5cbd1',
             borderRadius: 10,
             color: '#475569',
             display: 'flex',
