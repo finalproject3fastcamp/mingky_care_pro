@@ -646,12 +646,13 @@ export function HospitalMap3D({
     // 0 으로 두면 안 된다 — 화면을 연 직후에는 performance.now() 가 작아서
     // "방금 만졌다"로 잘못 읽히고, 첫 자동 이동이 통째로 무시된다.
     let lastTouch = Number.NEGATIVE_INFINITY
-    controls.addEventListener('start', () => {
+    const onGrab = () => {
       lastTouch = performance.now()
       // 날아가는 중이었다면 즉시 멈추고 조작권을 돌려준다.
       flying = false
       controls.enabled = true
-    })
+    }
+    controls.addEventListener('start', onGrab)
 
     // ---- 카메라 이동 ----
     // 900ms. 더 빠르면 순간이동처럼 보여 어디로 갔는지 못 따라가고,
@@ -1000,6 +1001,7 @@ export function HospitalMap3D({
       cancelAnimationFrame(raf)
       ro.disconnect()
       controls.removeEventListener('change', invalidate)
+      controls.removeEventListener('start', onGrab)
       controls.dispose()
       for (const l of labelsRef.current) l.el.remove()
       labelsRef.current = []
@@ -1010,6 +1012,9 @@ export function HospitalMap3D({
         if (Array.isArray(mat)) mat.forEach((x) => x.dispose())
         else if (mat) (mat as THREE.Material).dispose()
       })
+      // 재질을 버려도 텍스처는 같이 안 버려진다. 위 traverse 가 재질까지만
+      // 치우므로 손으로 만든 텍스처는 여기서 따로 버린다.
+      contactTex.dispose()
       envTex.dispose()
       pmrem.dispose()
       renderer.dispose()
