@@ -17,11 +17,11 @@ WAITING = 'waiting'
 class DwellPolicy:
     """포기까지 기다릴 시간.
 
-    시연에서는 짧게(십수 초), 운영에서는 길게(몇 분) 쓴다. 관람객이 멈춰 선
-    로봇을 3분 동안 볼 수는 없고, 실제 환자는 3분도 짧을 수 있다.
+    시연 중에도 환자를 충분히 기다리면서 기능을 바로 확인할 수 있도록
+    기본 대기 시간을 20초로 둔다.
     """
 
-    timeout_sec: float = 180.0
+    timeout_sec: float = 20.0
 
     def __post_init__(self) -> None:
         if not self.timeout_sec > 0.0:

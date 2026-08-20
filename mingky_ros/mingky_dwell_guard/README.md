@@ -30,11 +30,11 @@
 | 이름 | 기본값 | 뜻 |
 |---|---|---|
 | `enabled` | `true` | `false` 면 아무것도 하지 않는다 |
-| `timeout_sec` | `180.0` | 포기까지 기다릴 시간. 시연은 짧게, 운영은 길게 |
+| `timeout_sec` | `20.0` | 환자를 놓친 뒤 안내를 접기까지 기다릴 시간 |
 | `notice_every_sec` | `30.0` | 남은 시간 로그 간격. `0` 이면 안 알림 |
 
 ```bash
-ros2 run mingky_dwell_guard dwell_guard_node --ros-args -p timeout_sec:=15.0
+ros2 run mingky_dwell_guard dwell_guard_node
 ```
 
 ## 알아 둘 것

@@ -53,7 +53,7 @@ class DwellGuardNode(Node):
         super().__init__('dwell_guard')
 
         self.declare_parameter('enabled', True)
-        self.declare_parameter('timeout_sec', 180.0)
+        self.declare_parameter('timeout_sec', 20.0)
         # 남은 시간을 로그로 알려 주는 간격. 0 이면 안 알린다.
         self.declare_parameter('notice_every_sec', 30.0)
 
@@ -110,8 +110,8 @@ class DwellGuardNode(Node):
     def _now(self) -> float:
         """지금 시각(초).
 
-        따로 뺀 이유는 시험 때문이다. 3분을 기다리는 동작을 실제로 3분
-        기다려 확인할 수는 없으므로, 시험에서는 이 함수만 갈아끼운다.
+        따로 뺀 이유는 시험 때문이다. 대기 시간을 실제로 기다리지 않고
+        빠르게 확인할 수 있도록 시험에서는 이 함수만 갈아끼운다.
         """
         return self.get_clock().now().nanoseconds / 1e9
 

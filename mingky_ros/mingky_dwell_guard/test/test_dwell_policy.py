@@ -7,6 +7,10 @@ def timer(timeout=10.0):
     return DwellTimer(DwellPolicy(timeout_sec=timeout))
 
 
+def test_기본_대기_시간은_20초다():
+    assert DwellPolicy().timeout_sec == 20.0
+
+
 def test_대기가_아니면_아무_일도_없다():
     t = timer()
     assert t.update('normal', 0.0) is False
