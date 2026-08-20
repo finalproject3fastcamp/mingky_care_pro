@@ -67,6 +67,10 @@ class PersonFollowNode(Node):
         self.declare_parameter('infer_timeout_sec', 2.0)
         self.declare_parameter('conf_threshold', 0.25)
         self.declare_parameter('max_jump_px', 200.0)
+        # YOLO 클래스 라벨 자체가 틀렸을 때의 보조 안전판 (target_lock.py
+        # 참고). 평균 RGB(0-255 스케일) 유클리드 거리 기준. 실측 미검증
+        # 기본값이라 실기에서 인형 세 종류로 재보정 필요.
+        self.declare_parameter('max_color_distance', 60.0)
         self.declare_parameter('target_reacquire_misses', 5)
         self.declare_parameter('slow_distance_m', 0.15)
         self.declare_parameter('stop_distance_m', 0.30)
@@ -98,6 +102,8 @@ class PersonFollowNode(Node):
             0.1, float(get('infer_timeout_sec').value))
         self.conf_threshold = float(get('conf_threshold').value)
         self.max_jump_px = max(1.0, float(get('max_jump_px').value))
+        self.max_color_distance = max(
+            0.0, float(get('max_color_distance').value))
         self.target_reacquire_misses = max(
             1, int(get('target_reacquire_misses').value))
         self.policy = DistancePolicy(
@@ -375,6 +381,7 @@ class PersonFollowNode(Node):
                 screen_center=qr_center or (320.0, 240.0),
                 max_jump_px=self.max_jump_px,
                 required_class=locked_class or patient_id,
+                max_color_distance=self.max_color_distance,
             )
             qr_recent = (
                 last_qr_at is not None
@@ -596,6 +603,9 @@ class PersonFollowNode(Node):
             for raw in payload:
                 if not isinstance(raw, dict):
                     raise ValueError('검출 항목은 JSON 객체여야 합니다.')
+                color = raw.get('color', [0.0, 0.0, 0.0])
+                if not isinstance(color, list) or len(color) != 3:
+                    raise ValueError('color는 [r, g, b] 배열이어야 합니다.')
                 detection = {
                     'cls': str(raw['class']),
                     'conf': float(raw['conf']),
@@ -605,10 +615,12 @@ class PersonFollowNode(Node):
                     'h': float(raw['h']),
                     'image_width': image_width,
                     'image_height': image_height,
+                    'color': tuple(float(v) for v in color),
                 }
                 numeric = [
-                    value for key, value in detection.items() if key != 'cls'
-                ]
+                    value for key, value in detection.items()
+                    if key not in ('cls', 'color')
+                ] + list(detection['color'])
                 if not all(math.isfinite(value) for value in numeric):
                     raise ValueError(
                         '검출 좌표와 신뢰도는 유한한 수여야 합니다.')

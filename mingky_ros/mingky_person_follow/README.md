@@ -9,6 +9,14 @@
 - `/guide_manager/state`가 `guiding`일 때 현재 `patient_id`와 같은
   YOLO 클래스 또는 QR data의 거리만 인정한다.
 - YOLO는 현재 `patient_id`와 같은 `p001`~`p003` 클래스만 사용한다.
+- **클래스 라벨 자체가 틀리는 경우의 보조 안전판(2026-08-20):** 위 클래스
+  비교는 YOLO가 준 라벨을 그대로 믿는다. 각도·조명 때문에 YOLO가 인형
+  종류를 잘못 판단해 다른 인형에 같은 라벨을 붙이면(신고된 문제: 인형이
+  중간에 바뀌어도 계속 따라감) 클래스 비교만으로는 못 걸러낸다. 그래서
+  `target_lock.py`가 위치(`max_jump_px`)와 같은 방식으로 색상도 검사한다
+  — 직전에 잠겼던 대상과 평균 RGB가 `max_color_distance` 이상 차이 나면
+  클래스가 같아도 다른 대상으로 보고 버린다. **실기 미검증 값이니 인형
+  세 종류로 재보정 필요.**
 - 화면 상·하단에 잘린 바운딩 박스는 거리 판단에서 제외한다.
 - QR과 YOLO가 순간적으로 흔들려도 2초까지 직전 주행 상태를 유지한다.
   주행 중 2초를 초과하면 `waiting`이 된다.
@@ -90,7 +98,7 @@ YOLO 서버 URL을 비우면 QR 거리만으로 동작한다. QR 보완을 켜�
 GPU 컴퓨터에서 모델을 로드한다.
 
 ```bash
-pip install ultralytics flask pillow
+pip install ultralytics flask pillow numpy
 python3 infer_server.py --model <가중치.pt> --port 5001
 curl http://127.0.0.1:5001/health
 ```
@@ -113,6 +121,7 @@ curl http://127.0.0.1:5001/health
 | `slow_speed_percent` | `35.0` | 감속 시 Nav2 속도 비율 |
 | `stop_speed_percent` | `0.1` | Nav2 취소 전 즉시 정지 속도 비율 |
 | `infer_server_url` | 빈 문자열 | 선택 YOLO `/infer` URL |
+| `max_color_distance` | `60.0` | 잠금 대상 재인정용 색상(평균 RGB) 최대 편차. 클래스 라벨 오분류 보조 안전판, 실기 재보정 필요 |
 
 `SpeedLimit.speed_limit=0.0`은 Nav2에서 제한 없음이므로 정지값으로
 사용하지 않는다.
