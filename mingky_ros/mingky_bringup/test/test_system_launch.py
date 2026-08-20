@@ -226,6 +226,7 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     assert _argument(
         root, 'patient_follow_partial_bbox_conf_threshold'
     ).get('default') == '0.50'
+    assert _argument(root, 'patient_follow_wait_limit').get('default') == '20.0'
     follower = next(
         item for item in root.findall('node')
         if item.get('name') == 'person_follow_node'
@@ -264,6 +265,8 @@ def test_patient_distance_guidance_is_enabled_for_test() -> None:
     }
     assert guide_params['patient_follow_enabled'] == (
         '$(var start_patient_follow)')
+    assert guide_params['patient_follow_wait_limit_sec'] == (
+        '$(var patient_follow_wait_limit)')
 
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
