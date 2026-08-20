@@ -107,8 +107,16 @@ class DwellGuardNode(Node):
         """
         return self._session_id > 0 and self._session_state == GuideState.SESSION_GUIDING
 
+    def _now(self) -> float:
+        """지금 시각(초).
+
+        따로 뺀 이유는 시험 때문이다. 3분을 기다리는 동작을 실제로 3분
+        기다려 확인할 수는 없으므로, 시험에서는 이 함수만 갈아끼운다.
+        """
+        return self.get_clock().now().nanoseconds / 1e9
+
     def _tick(self) -> None:
-        now = self.get_clock().now().nanoseconds / 1e9
+        now = self._now()
 
         if not self._enabled or not self._guiding():
             # 안내가 아니면 시계를 지운다. 다음 세션에서 이전 대기가 이어지면 안 된다.
