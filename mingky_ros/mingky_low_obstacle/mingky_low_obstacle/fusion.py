@@ -17,7 +17,7 @@ class FusionConfig:
     clear_distance_m: float = 0.35
     slow_distance_m: float = 0.15
     stop_distance_m: float = 0.04
-    costmap_min_range_m: float = 0.10
+    costmap_min_range_m: float = 0.20
     slow_speed_mps: float = 0.08
     lidar_margin_m: float = 0.15
     median_samples: int = 3
@@ -35,9 +35,6 @@ class FusionConfig:
         if not self.stop_distance_m < self.costmap_min_range_m:
             raise ValueError(
                 'costmap_min_range_m은 stop_distance_m보다 커야 합니다.')
-        if self.costmap_min_range_m >= self.slow_distance_m:
-            raise ValueError(
-                'costmap_min_range_m은 slow_distance_m보다 작아야 합니다.')
         if self.clear_distance_m <= self.detect_distance_m:
             raise ValueError('clear_distance_m은 detect_distance_m보다 커야 합니다.')
         for value, name in (
@@ -274,7 +271,7 @@ class LowObstacleFilter:
         elif self._confirmed and filtered <= self.config.slow_distance_m:
             state = 'SLOW'
             output = self._costmap_output(filtered, max_range_m)
-            limit = self.config.slow_speed_mps
+            limit = self._confirmed_limit(filtered)
         elif self._confirmed:
             state = 'CONFIRMED'
             output = self._costmap_output(filtered, max_range_m)
@@ -318,7 +315,14 @@ class LowObstacleFilter:
         if distance_m <= self.config.stop_distance_m:
             return 0.0
         if distance_m <= self.config.slow_distance_m:
-            return self.config.slow_speed_mps
+            # A fixed 0.08 m/s limit until the 4 cm boundary still carries
+            # enough momentum and smoothing latency to overshoot the desired
+            # clearance. Reduce speed continuously as that boundary approaches
+            # while keeping 4 cm as the actual zero-velocity threshold.
+            remaining = distance_m - self.config.stop_distance_m
+            slowing_span = (
+                self.config.slow_distance_m - self.config.stop_distance_m)
+            return self.config.slow_speed_mps * remaining / slowing_span
         return None
 
     def _costmap_output(self, distance_m: float, max_range_m: float) -> float:

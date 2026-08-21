@@ -59,7 +59,9 @@ class LowObstacleSupervisor(Node):
             'clear_distance_m': 0.35,
             'slow_distance_m': 0.15,
             'stop_distance_m': 0.04,
-            'costmap_min_range_m': 0.10,
+            # 9.5cm padded footprint + 10cm local inflation 바깥에 endpoint를
+            # 두어 시작 자세가 장애물 안에 갇히지 않게 한다.
+            'costmap_min_range_m': 0.20,
             'slow_speed_mps': 0.08,
             'lidar_margin_m': 0.15,
             'median_samples': 3,
@@ -249,17 +251,11 @@ class LowObstacleSupervisor(Node):
                     # also clean a cone that may predate this node process.
                     self.range_pub.publish(output)
             elif not self.observation_retention.suppress_until_sensor_clear:
-                close_observation_already_marked = (
-                    decision.filtered_range_m is not None
-                    and decision.filtered_range_m
-                    < self.filter.config.costmap_min_range_m
-                    and bool(self._marked_observations))
-                # At very close range keep the first safe clamped endpoint
-                # fixed in the map instead of dragging an invented 10 cm point
-                # forward with the robot on every sensor update.
-                if not close_observation_already_marked:
-                    self.range_pub.publish(output)
-                    self._remember_marked_observation(output)
+                # RangeSensorLayer uses volatile sensor QoS. Publish throughout
+                # confirmation so a costmap activated after this node also
+                # receives the obstacle instead of missing a one-shot mark.
+                self.range_pub.publish(output)
+                self._remember_marked_observation(output)
         self._set_decision(decision)
 
     def _on_odom(self, msg: Odometry) -> None:

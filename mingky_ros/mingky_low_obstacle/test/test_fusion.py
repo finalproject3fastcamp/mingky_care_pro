@@ -28,7 +28,7 @@ def test_median_and_two_of_three_reject_one_spike():
 
     assert decisions[-1].filtered_range_m == pytest.approx(0.19)
     assert decisions[-1].state == 'CONFIRMED'
-    assert decisions[-1].output_range_m == pytest.approx(0.19)
+    assert decisions[-1].output_range_m == pytest.approx(0.20)
 
 
 def test_lidar_agreement_does_not_create_low_obstacle():
@@ -84,10 +84,11 @@ def test_near_samples_do_not_block_before_low_obstacle_confirmation():
     # LiDAR mismatch first has to satisfy the normal 2-of-3 confirmation rule.
     decision = _update(filter_, 0.06)
     assert decision.state == 'SLOW'
-    assert decision.forward_speed_limit_mps == pytest.approx(0.08)
+    assert decision.forward_speed_limit_mps == pytest.approx(
+        0.08 * (0.06 - 0.04) / (0.15 - 0.04))
     # The endpoint is clamped outside the footprint so Nav2 sees a routable
     # obstacle instead of clearing it, while the real range controls speed.
-    assert decision.output_range_m == pytest.approx(0.10)
+    assert decision.output_range_m == pytest.approx(0.20)
 
 
 def test_four_centimetres_is_the_hard_forward_stop():
@@ -98,17 +99,42 @@ def test_four_centimetres_is_the_hard_forward_stop():
 
     assert decision.state == 'FORWARD_BLOCKED'
     assert decision.forward_speed_limit_mps == 0.0
-    assert decision.output_range_m == pytest.approx(0.10)
+    assert decision.output_range_m == pytest.approx(0.20)
 
 
-def test_confirmed_obstacle_outside_footprint_is_kept_in_costmap():
+def test_slow_limit_decreases_continuously_toward_stop_boundary():
+    filter_ = LowObstacleFilter()
+
+    for _ in range(3):
+        farther = _update(filter_, 0.12)
+    for _ in range(3):
+        nearer = _update(filter_, 0.07)
+    for _ in range(3):
+        nearest = _update(filter_, 0.05)
+
+    assert farther.forward_speed_limit_mps > nearer.forward_speed_limit_mps
+    assert nearer.forward_speed_limit_mps > nearest.forward_speed_limit_mps
+    assert nearest.forward_speed_limit_mps > 0.0
+
+
+def test_confirmed_obstacle_is_projected_outside_inflated_footprint():
     filter_ = LowObstacleFilter()
 
     for _ in range(5):
         decision = _update(filter_, 0.12)
 
     assert decision.state == 'SLOW'
-    assert decision.output_range_m == pytest.approx(0.12)
+    assert decision.output_range_m == pytest.approx(0.20)
+
+
+def test_obstacle_farther_than_projection_distance_keeps_measured_range():
+    filter_ = LowObstacleFilter()
+
+    for _ in range(3):
+        decision = _update(filter_, 0.24)
+
+    assert decision.state == 'CONFIRMED'
+    assert decision.output_range_m == pytest.approx(0.24)
 
 
 def test_near_wall_seen_by_lidar_never_blocks_forward():
