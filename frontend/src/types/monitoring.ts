@@ -123,6 +123,9 @@ export interface MobileRobot extends RobotCommon {
   guide_robot_state:
     | 'idle' | 'moving' | 'waiting' | 'charging' | 'battery_low'
     | 'comm_lost' | 'paused' | 'returning_to_dock' | null
+  guide_session_state:
+    | 'none' | 'qr_scanning' | 'patient_confirmed' | 'guiding'
+    | 'arrived' | 'in_room' | 'completed' | null
   /**
    * 토픽 주기 감시 (§7.2). ROS 개념이라 팔에는 없다.
    *
