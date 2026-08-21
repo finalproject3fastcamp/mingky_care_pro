@@ -822,3 +822,88 @@ def test_two_pinkies_run_concurrent_sessions_kept_independent(backend):
     failed_ids = {f["session_id"] for f in after["failed_sessions"]}
     assert one["session_id"] not in failed_ids
     assert two["session_id"] not in failed_ids
+def _latest_session_for(patient_id: str):
+    return query("""
+        SELECT session_id, patient_id, end_reason, ended_at
+        FROM guidance_sessions
+        WHERE patient_id = $1 ORDER BY session_id DESC LIMIT 1
+    """, patient_id)[0]
+
+
+def test_outpatient_journey_snapshots_and_completes_branch_steps(backend):
+    """외래 환자는 검사 뒤 수납·약국·약수령까지 스냅샷되고 완주한다 (item 2).
+
+    p001 은 admission_type = 'outpatient' 다. 검사 3단계(X-ray → 임상병리실 →
+    물리치료실) 뒤에 qr.py 가 수납(4) → 약국(5) → 약수령(6) 을 이어 붙인다.
+    분기 스텝은 guide_manager 의 하드코딩이 아니라 session_steps 순회로 돈다 —
+    스냅샷이 6행이면 배관이 이어진 것이다.
+    """
+    play("outpatient_full_journey.yaml", backend)
+
+    session = _latest_session_for("p001")
+    assert session["end_reason"] == "completed"
+    assert session["ended_at"] is not None
+
+    steps = query("""
+        SELECT step_order, visit_name, arrived_at, completed_at
+        FROM session_steps WHERE session_id = $1 ORDER BY step_order
+    """, session["session_id"])
+
+    # 검사 3 + 외래 분기 3. step_order 는 검사 다음부터 연속이어야 한다.
+    assert [s["visit_name"] for s in steps] == [
+        "X-ray", "임상병리실", "물리치료실", "수납", "약국", "약수령"]
+    assert [s["step_order"] for s in steps] == [1, 2, 3, 4, 5, 6]
+    for step in steps:
+        assert step["arrived_at"] is not None, step["visit_name"]
+        assert step["completed_at"] is not None, step["visit_name"]
+
+    codes = [row["event_code"] for row in query("""
+        SELECT DISTINCT event_code FROM events
+        WHERE session_id = $1 AND source_node = 'fake_robot'
+    """, session["session_id"])]
+
+    # pharmacy.arrived 는 조제(item 3)가 잡는 seam 이다. 세션에 붙어야 어느
+    # 환자의 약국 도착인지 이어진다.
+    assert "pharmacy.arrived" in codes
+    assert "payment.arrived" in codes
+    assert "pickup.completed" in codes
+
+    # 새 분기 코드가 전부 정본에 실려 있어야 한다. 하나라도 빠지면 미등록
+    # 마커가 남는다.
+    assert scalar("""
+        SELECT count(*) FROM events
+        WHERE event_code = 'system.unknown_event_code'
+    """) == 0
+
+
+def test_inpatient_journey_snapshots_the_ward_step(backend):
+    """입원 환자는 검사 뒤 병동으로 안내된다 (item 2).
+
+    p003 은 admission_type = 'inpatient' 다. 외래와 달리 수납·약국이 아니라
+    병동 한 스텝이 붙는다 — 같은 배관이 admission_type 만으로 경로를 가른다.
+    """
+    play("inpatient_ward.yaml", backend)
+
+    session = _latest_session_for("p003")
+    assert session["end_reason"] == "completed"
+    assert session["ended_at"] is not None
+
+    steps = query("""
+        SELECT step_order, visit_name, completed_at
+        FROM session_steps WHERE session_id = $1 ORDER BY step_order
+    """, session["session_id"])
+
+    # 십자인대 파열 검사 3단계 + 입원 분기 병동 1단계.
+    assert [s["visit_name"] for s in steps] == [
+        "X-ray", "MRI", "물리치료실", "병동"]
+    for step in steps:
+        assert step["completed_at"] is not None, step["visit_name"]
+
+    codes = [row["event_code"] for row in query("""
+        SELECT DISTINCT event_code FROM events
+        WHERE session_id = $1 AND source_node = 'fake_robot'
+    """, session["session_id"])]
+
+    assert "ward.arrived" in codes
+    # 외래 분기는 입원 경로에 새면 안 된다.
+    assert "pharmacy.arrived" not in codes

@@ -21,7 +21,7 @@ from ..schemas import Patient, QrScanRequest, ScheduleStep, TodaySchedule
 router = APIRouter(prefix="/qr", tags=["qr"])
 
 _PATIENT_SQL = """
-    SELECT p.patient_id, p.name, p.gender, p.birth_date,
+    SELECT p.patient_id, p.name, p.gender, p.birth_date, p.admission_type,
            c.condition_name, c.condition_id
     FROM patients p
     JOIN conditions c USING (condition_id)
@@ -58,6 +58,27 @@ _SNAPSHOT_STEPS_SQL = """
     FROM examination_steps
     WHERE condition_id = $2
 """
+
+# 검사 스냅샷 뒤에 안내 분기 스텝을 이어 붙인다. 외래는 수납·약국·약수령,
+# 입원은 병동이다(admission_type). guide_manager 는 session_steps 를
+# 제네릭하게 순회하므로, 여기서 스텝을 넣고 visit_waypoints 에 좌표만
+# 매핑하면 분기 전용 코드 없이 자동으로 안내된다.
+#
+# step_order 는 검사 마지막 다음 번호부터 연속이어야 한다. 검사가 0건인
+# 경우도 있으므로 MAX 가 NULL 이면 0 으로 본다. unnest ... WITH ORDINALITY
+# 가 배열 순서를 그대로 1,2,3 오프셋으로 준다.
+_APPEND_BRANCH_STEPS_SQL = """
+    INSERT INTO session_steps (session_id, step_order, visit_name)
+    SELECT $1,
+           (SELECT COALESCE(MAX(step_order), 0)
+            FROM session_steps WHERE session_id = $1) + ord,
+           visit_name
+    FROM unnest($2::text[]) WITH ORDINALITY AS branch(visit_name, ord)
+"""
+
+# 안내 분기 스텝. 좌표 매핑은 waypoints yaml 의 visit_waypoints 에 있다.
+_OUTPATIENT_STEPS = ["수납", "약국", "약수령"]
+_INPATIENT_STEPS = ["병동"]
 
 _STEPS_SQL = """
     SELECT step_order, visit_name, arrived_at, completed_at
@@ -141,6 +162,12 @@ async def scan(payload: QrScanRequest) -> TodaySchedule:
                         status_code=409, detail="session conflict") from exc
                 await conn.execute(
                     _SNAPSHOT_STEPS_SQL, session_id, patient_row["condition_id"])
+                # 검사 뒤 안내 분기. 외래/입원은 환자 레코드가 정한다(013).
+                branch = (_INPATIENT_STEPS
+                          if patient_row["admission_type"] == "inpatient"
+                          else _OUTPATIENT_STEPS)
+                await conn.execute(
+                    _APPEND_BRANCH_STEPS_SQL, session_id, branch)
                 # arming 이 세션으로 소비됨. 이벤트는 여기서만 남기고, dict
                 # 정리는 트랜잭션 커밋 후에 한다 (아래).
                 await conn.execute(

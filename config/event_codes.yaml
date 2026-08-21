@@ -530,3 +530,39 @@ system.robot_type_mismatch:
   robot_types: [mobile, manipulator]
   level: warning
   payload: { received_code: string, actual_type: string, allowed_types: [string] }
+
+
+# === 안내 분기 (item 2) =====================================================
+# 검사 뒤 외래/입원 경로. 수납·약수령은 실제 결제/수령 시스템이 없으므로
+# 도착·확인 사건만 남긴다 — 안내가 그 지점까지 왔다는 사실이 전부다.
+
+payment.arrived:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 수납 창구 도착. 안내가 갈림길을 지나 외래 경로로 들어섰다는 첫 신호다.
+
+payment.completed:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 수납 확인. 실제 결제 연동은 없고 도착 후 진행 확인만 기록한다.
+
+pharmacy.arrived:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 약국 도착. 조제(item 3)가 이 지점을 seam 으로 잡는다 — session_id 와
+  # patient_id 를 실어 어느 환자의 처방인지 잇는다.
+
+pickup.completed:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 약 수령 확인. 약국 창구에서 그대로 수령하므로 별도 이동 없이 확인만 남긴다.
+
+ward.arrived:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 병동 도착. 입원 경로의 종착이다.

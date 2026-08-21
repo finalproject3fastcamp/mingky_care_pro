@@ -71,6 +71,21 @@ visit_waypoints:
   MRI:
     goal: mri_room_goal
     waiting: mri_room_waiting
+  # 검사 뒤 안내 분기(item 2). 외래는 수납→약국→약수령, 입원은 병동이다.
+  # session_steps 에 이 visit_name 이 들어오면 guide_manager 가 여기 매핑으로
+  # Nav2 goal 을 찾는다.
+  수납:
+    goal: payment_goal
+    waiting: reception_payment_waiting
+  약국:
+    goal: pharmacy_goal
+    waiting: pharmacy_waiting
+  약수령:
+    goal: pharmacy_goal      # 같은 약국 창구에서 수령한다
+    waiting: pharmacy_waiting
+  병동:
+    goal: ward_goal
+    waiting: ward_waiting
 
 waypoints:
   reception_goal:

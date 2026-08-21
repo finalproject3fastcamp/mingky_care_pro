@@ -1,0 +1,78 @@
+# 입원 안내 — 검사 뒤 병동으로 (item 2).
+#
+# p003(김지우)은 admission_type = 'inpatient' 다
+# (database/seeds/001_initial_data.sql). 십자인대 파열 검사 3단계
+# (X-ray → MRI → 물리치료실) 뒤에 qr.py 가 병동(4) 스텝을 이어 붙인다.
+# 외래와 달리 수납·약국은 없다 — 입원 환자는 병동으로 복귀한다.
+#
+# pinky-02 를 쓴다. 외래 시나리오(pinky-01)와 로봇·마커를 나눠 두 경로가
+# 서로의 세션에 걸리지 않게 한다.
+
+name: 입원 안내 (p003, 검사+병동)
+
+robots:
+  - id: pinky-02
+    type: mobile
+    battery_percent: 82
+    voltage: 11.7
+
+steps:
+  - { robot: pinky-02, action: battery }
+  - { robot: pinky-02, action: arm }
+  - { robot: pinky-02, action: qr_scan, patient_id: p003, marker_id: 31 }
+
+  - robot: pinky-02
+    action: event
+    code: session.started
+    payload: { patient_id: p003, marker_id: 31 }
+
+  - robot: pinky-02
+    action: event
+    code: qr.scan_ok
+    payload: { patient_id: p003 }
+
+  # --- 1단계 X-ray ---
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - robot: pinky-02
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: X-ray }
+    wait: 0.5
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 1, source: qr } }
+
+  # --- 2단계 MRI ---
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: MRI } }
+  - robot: pinky-02
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: MRI }
+    wait: 0.5
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 2, source: qr } }
+
+  # --- 3단계 물리치료실 ---
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: 물리치료실 } }
+  - robot: pinky-02
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 물리치료실 }
+    wait: 0.5
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 3, source: qr } }
+
+  # --- 4단계 병동 ---
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: 병동 } }
+  - robot: pinky-02
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 병동 }
+    wait: 0.5
+  - { robot: pinky-02, action: event, code: ward.arrived, payload: { session_id: 0, patient_id: p003 } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 4, source: qr } }
+
+  # --- 종료 후 충전소 복귀 ---
+  - { robot: pinky-02, action: event, code: session.ended, payload: { end_reason: completed } }
+  - { robot: pinky-02, action: event, code: dock.return_started, payload: { station_name: dock-2 } }
+  - robot: pinky-02
+    action: event
+    code: dock.return_succeeded
+    payload: { station_name: dock-2 }
+    wait: 0.5
