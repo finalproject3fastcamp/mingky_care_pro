@@ -8,7 +8,7 @@ type ThreeModule = typeof import('three')
  * 진짜 OMX glb 가 생기면 이 함수만 loader 로 갈아끼우면 된다.
  * 반환하는 joints 참조들이 애니메이션 루프에서 각도로 구동된다.
  */
-function buildArm(THREE: ThreeModule) {
+export function buildArm(THREE: ThreeModule) {
   // 은은한 무채색 금속 + 포인트 컬러 1개(앰버). 앱 accent(파랑)·핑키 톤과 겹치지 않게.
   const metal = new THREE.MeshStandardMaterial({ color: 0xb9bec9, metalness: 0.6, roughness: 0.42 })
   const dark = new THREE.MeshStandardMaterial({ color: 0x5b616f, metalness: 0.5, roughness: 0.55 })

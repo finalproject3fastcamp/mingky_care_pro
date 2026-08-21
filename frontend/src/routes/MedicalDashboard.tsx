@@ -1,5 +1,5 @@
 import { animate, createScope } from 'animejs'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ArmedWaiting } from '../components/ArmedWaiting'
@@ -24,6 +24,13 @@ import { useTeleopSocket } from '../lib/useTeleopSocket'
 import type { EventOut } from '../types/events'
 import { isMobile, type ActiveSession, type MobileRobot } from '../types/monitoring'
 
+// 플릿 개관 3D 씬은 three 를 끌어오므로 펼칠 때만 불러온다(lazy). 기본
+// 대시보드 로딩을 무겁게 하지 않는다.
+const FleetScene = lazy(async () => {
+  const module = await import('../components/FleetScene')
+  return { default: module.FleetScene }
+})
+
 const POLL_MS = 3000
 const FORECAST_POLL_MS = 120000
 // QR 이 인식된 순간 확인 화면을 띄우고 있는 시간. 스캔 대기에서 안내 화면으로
@@ -42,6 +49,7 @@ export function MedicalDashboard() {
   // 방금 한 선택을 무효로 보고 선택 화면으로 튕긴다. 폴링이 따라잡을 때까지
   // 이 응답으로 덮어쓴다.
   const [justArmed, setJustArmed] = useState<MobileRobot | null>(null)
+  const [fleetOpen, setFleetOpen] = useState(false)
   const [locationBusy, setLocationBusy] = useState(false)
   const [locationNotice, setLocationNotice] = useState<string | null>(null)
   const controlDeckRef = useRef<HTMLDivElement>(null)
@@ -389,6 +397,18 @@ export function MedicalDashboard() {
           onDisarmed={handleDisarmed}
         />
       )}
+      {/* 플릿 전체 개관. 펼칠 때만 3D 를 올려 담당 로봇 화면을 무겁게 하지 않는다. */}
+      <details
+        className="card fleet-overview"
+        onToggle={(e) => setFleetOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary className="card-title">병원 플릿 3D 개관 (핑키 2 · OMX 2)</summary>
+        {fleetOpen && (
+          <Suspense fallback={<p>3D 플릿 씬 불러오는 중…</p>}>
+            <FleetScene />
+          </Suspense>
+        )}
+      </details>
     </div>
   )
 }
