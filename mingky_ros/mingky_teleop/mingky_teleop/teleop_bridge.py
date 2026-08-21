@@ -81,6 +81,57 @@ def parse_low_obstacle_observation(data: str) -> dict | None:
     distance = raw.get("distance_m")
     fov = raw.get("fov_rad")
     state = raw.get("state")
+    retained_raw = raw.get("retained_obstacles", [])
+    if not isinstance(retained_raw, list):
+        return None
+    retained = []
+    for cluster in retained_raw[:32]:
+        if not isinstance(cluster, dict):
+            continue
+        observations = []
+        raw_observations = cluster.get("observations", [])
+        if not isinstance(raw_observations, list):
+            continue
+        for observation in raw_observations[:3]:
+            if not isinstance(observation, dict):
+                continue
+            values = [observation.get(key) for key in (
+                "x", "y", "yaw", "range_m", "fov_rad")]
+            if not all(
+                    isinstance(value, (int, float))
+                    and math.isfinite(float(value)) for value in values):
+                continue
+            x, y, yaw, distance_m, fov_rad = map(float, values)
+            if distance_m <= 0.0 or not 0.0 < fov_rad < math.pi:
+                continue
+            observations.append({
+                "x": round(x, 3),
+                "y": round(y, 3),
+                "yaw": round(yaw, 4),
+                "range_m": round(distance_m, 3),
+                "fov_rad": round(fov_rad, 4),
+            })
+        if not observations:
+            continue
+        estimate = None
+        raw_estimate = cluster.get("estimate")
+        if isinstance(raw_estimate, dict):
+            values = [raw_estimate.get(key) for key in (
+                "x", "y", "radius_m")]
+            if all(
+                    isinstance(value, (int, float))
+                    and math.isfinite(float(value)) for value in values):
+                x, y, radius_m = map(float, values)
+                if radius_m > 0.0:
+                    estimate = {
+                        "x": round(x, 3),
+                        "y": round(y, 3),
+                        "radius_m": round(radius_m, 3),
+                    }
+        retained.append({
+            "observations": observations,
+            "estimate": estimate,
+        })
     if active:
         if (
                 not isinstance(distance, (int, float))
@@ -96,6 +147,7 @@ def parse_low_obstacle_observation(data: str) -> dict | None:
         "distance_m": round(float(distance), 3) if active else None,
         "fov_rad": round(float(fov), 4) if active else None,
         "state": state if isinstance(state, str) else None,
+        "retained_obstacles": retained,
     }
 
 
@@ -417,6 +469,8 @@ class TeleopBridge(Node):
                     "distance_m": None,
                     "fov_rad": None,
                     "state": "STALE",
+                    "retained_obstacles": self._low_obstacle.get(
+                        "retained_obstacles", []),
                 }
                 self._low_obstacle_revision += 1
 

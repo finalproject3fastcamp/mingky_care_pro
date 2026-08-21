@@ -346,6 +346,8 @@ interface Handles {
   lowObstacle: THREE.Group
   lowObstacleFan: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
   lowObstaclePoint: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
+  retainedLowObstacleCones: THREE.InstancedMesh
+  retainedLowObstacles: THREE.InstancedMesh
   waypoints: THREE.Group
   invalidate: () => void
   resetView: () => void
@@ -548,6 +550,44 @@ export function HospitalMap3D({
     lowObstacleGroup.position.x = 0.0267 / FIT.scale
     lowObstacleGroup.visible = false
     robot.add(lowObstacleGroup)
+
+    // map에 고정된 초음파 관측도 점으로 단정하지 않고 부채꼴로 표시한다.
+    // 최대 32군집 x 3관측이며 InstancedMesh 하나를 재사용해 draw call과 GC를
+    // 늘리지 않는다. 겹치는 영역은 투명도가 누적되어 자연스럽게 진해진다.
+    const retainedLowObstacleCones = new THREE.InstancedMesh(
+      new THREE.CircleGeometry(1, 20, -0.13, 0.26),
+      new THREE.MeshBasicMaterial({
+        color: 0xf59e0b,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+      96,
+    )
+    retainedLowObstacleCones.count = 0
+    retainedLowObstacleCones.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    retainedLowObstacleCones.renderOrder = 8
+    scene.add(retainedLowObstacleCones)
+
+    // 서로 다른 자세의 관측이 실제로 겹칠 때만 후보 영역 고리를 그린다.
+    const retainedLowObstacles = new THREE.InstancedMesh(
+      new THREE.RingGeometry(0.026, 0.047, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xf97316,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+      32,
+    )
+    retainedLowObstacles.count = 0
+    retainedLowObstacles.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    retainedLowObstacles.renderOrder = 9
+    scene.add(retainedLowObstacles)
 
     /**
      * 로봇 아래에서 번지는 원. 어제 2D 지도에서 쓰던 것과 같은 박동이다 —
@@ -1073,6 +1113,8 @@ export function HospitalMap3D({
       lowObstacle: lowObstacleGroup,
       lowObstacleFan,
       lowObstaclePoint,
+      retainedLowObstacleCones,
+      retainedLowObstacles,
       waypoints: wpGroup,
       invalidate,
       resetView,
@@ -1158,9 +1200,13 @@ export function HospitalMap3D({
     if (active && lowObstacle?.distance != null && lowObstacle.fov != null) {
       const radius = THREE.MathUtils.clamp(lowObstacle.distance, 0.03, 0.50) / FIT.scale
       const fov = THREE.MathUtils.clamp(lowObstacle.fov, 0.10, Math.PI / 2)
-      h.lowObstacleFan.geometry.dispose()
-      h.lowObstacleFan.geometry = new THREE.CircleGeometry(
-        1, 32, -fov / 2, fov)
+      const previousFov = Number(h.lowObstacleFan.userData.fov)
+      if (!Number.isFinite(previousFov) || Math.abs(previousFov - fov) > 0.001) {
+        h.lowObstacleFan.geometry.dispose()
+        h.lowObstacleFan.geometry = new THREE.CircleGeometry(
+          1, 32, -fov / 2, fov)
+        h.lowObstacleFan.userData.fov = fov
+      }
       h.lowObstacleFan.scale.set(radius, radius, 1)
       h.lowObstaclePoint.position.x = radius
       const alarm = lowObstacle.state === 'FORWARD_BLOCKED'
@@ -1170,6 +1216,47 @@ export function HospitalMap3D({
     }
     h.invalidate()
   }, [lowObstacle, pose, robotReady])
+
+  useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const retained = lowObstacle?.retained ?? []
+    const marker = new THREE.Object3D()
+    const flatCones = retained.slice(0, 32).flatMap(
+      (cluster) => cluster.observations.slice(0, 3),
+    ).slice(0, 96)
+    const up = new THREE.Vector3(0, 1, 0)
+    const flatten = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    flatCones.forEach((cone, index) => {
+      const m = mapToModel(cone.x, cone.y)
+      marker.position.set(m.u, 0.021, -m.v)
+      marker.quaternion.setFromAxisAngle(up, mapYawToModel(cone.yaw))
+      marker.quaternion.multiply(flatten)
+      const radius = THREE.MathUtils.clamp(cone.range, 0.03, 0.50) / FIT.scale
+      marker.scale.set(radius, radius, 1)
+      marker.updateMatrix()
+      h.retainedLowObstacleCones.setMatrixAt(index, marker.matrix)
+    })
+    h.retainedLowObstacleCones.count = flatCones.length
+    h.retainedLowObstacleCones.instanceMatrix.needsUpdate = true
+
+    const estimates = retained.slice(0, 32).flatMap(
+      (cluster) => cluster.estimate ? [cluster.estimate] : [],
+    )
+    estimates.forEach((point, index) => {
+      const m = mapToModel(point.x, point.y)
+      marker.position.set(m.u, 0.028, -m.v)
+      marker.rotation.set(-Math.PI / 2, 0, 0)
+      const scale = THREE.MathUtils.clamp(point.radius / 0.04, 0.65, 2.0)
+      marker.scale.set(scale, scale, scale)
+      marker.updateMatrix()
+      h.retainedLowObstacles.setMatrixAt(index, marker.matrix)
+    })
+    h.retainedLowObstacles.count = estimates.length
+    h.retainedLowObstacles.instanceMatrix.needsUpdate = true
+    h.invalidate()
+  }, [lowObstacle?.retained, robotReady])
 
   // ------------------------------------------------------------- 추종 상태
   /**

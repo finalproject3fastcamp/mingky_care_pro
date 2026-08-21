@@ -29,6 +29,17 @@ export interface LowObstacleObservation {
   distance: number | null
   fov: number | null
   state: string | null
+  /** 점으로 단정하지 않은 map 고정 초음파 관측과 교차 추정 영역. */
+  retained: Array<{
+    observations: Array<{
+      x: number
+      y: number
+      yaw: number
+      range: number
+      fov: number
+    }>
+    estimate: { x: number; y: number; radius: number } | null
+  }>
 }
 
 /** 로컬라이제이션 진단 레이어. docs/nav2-debugging.md 가 보라는 것들이다. */
@@ -162,6 +173,40 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
           const active = message.active === true
           const distance = Number(message.distance_m)
           const fov = Number(message.fov_rad)
+          const retained = Array.isArray(message.retained_obstacles)
+            ? message.retained_obstacles.flatMap((value) => {
+              if (!value || typeof value !== 'object') return []
+              const cluster = value as Record<string, unknown>
+              const observations = Array.isArray(cluster.observations)
+                ? cluster.observations.slice(0, 3).flatMap((raw) => {
+                  if (!raw || typeof raw !== 'object') return []
+                  const item = raw as Record<string, unknown>
+                  const x = Number(item.x)
+                  const y = Number(item.y)
+                  const yaw = Number(item.yaw)
+                  const range = Number(item.range_m)
+                  const retainedFov = Number(item.fov_rad)
+                  return [x, y, yaw, range, retainedFov].every(Number.isFinite)
+                    && range > 0 && retainedFov > 0
+                    ? [{ x, y, yaw, range, fov: retainedFov }]
+                    : []
+                })
+                : []
+              if (observations.length === 0) return []
+              const rawEstimate = cluster.estimate
+              let estimate = null
+              if (rawEstimate && typeof rawEstimate === 'object') {
+                const item = rawEstimate as Record<string, unknown>
+                const x = Number(item.x)
+                const y = Number(item.y)
+                const radius = Number(item.radius_m)
+                if ([x, y, radius].every(Number.isFinite) && radius > 0) {
+                  estimate = { x, y, radius }
+                }
+              }
+              return [{ observations, estimate }]
+            })
+            : []
           setState((s) => ({
             ...s,
             lowObstacle: {
@@ -169,6 +214,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
               distance: active && Number.isFinite(distance) ? distance : null,
               fov: active && Number.isFinite(fov) ? fov : null,
               state: typeof message.state === 'string' ? message.state : null,
+              retained,
             },
           }))
         } else if (
