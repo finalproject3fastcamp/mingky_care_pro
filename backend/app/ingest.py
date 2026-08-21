@@ -41,9 +41,29 @@ from .schemas import EventIn, IngestResult
 log = logging.getLogger("mingky")
 
 _INSERT = """
+    WITH resolved AS (
+        SELECT
+            CASE
+                WHEN $3::bigint = 0 THEN NULL
+                WHEN EXISTS (
+                    SELECT 1 FROM guidance_sessions WHERE session_id = $3
+                ) THEN $3
+                ELSE NULL
+            END AS session_id,
+            $3::bigint <> 0 AND NOT EXISTS (
+                SELECT 1 FROM guidance_sessions WHERE session_id = $3
+            ) AS detached
+    )
     INSERT INTO events (event_id, robot_id, session_id, occurred_at,
                         level, event_code, source_node, payload)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    SELECT $1, $2, resolved.session_id, $4, $5, $6, $7,
+           CASE
+               WHEN resolved.detached THEN
+                   $8::jsonb || jsonb_build_object(
+                       'reported_session_id', $3::bigint)
+               ELSE $8::jsonb
+           END
+    FROM resolved
     ON CONFLICT (event_id) DO NOTHING
     RETURNING event_id
 """
@@ -77,8 +97,10 @@ async def _insert(conn: asyncpg.Connection, event: EventIn) -> bool:
         _INSERT,
         event.event_id,
         event.robot_id,
-        # session_id 0 은 '세션 없음' 이라 FK 를 걸 수 없다. NULL 로 저장한다.
-        event.session_id or None,
+        # 0 또는 현재 DB에 없는 과거 세션은 SQL에서 NULL로 분리한다. DB를
+        # 초기화한 뒤 로봇의 영속 큐가 옛 세션 이벤트를 재전송하더라도 배치
+        # 전체가 FK 오류로 막히지 않는다. 원래 값은 payload에 보존한다.
+        event.session_id,
         event.occurred_at,
         event.level,
         event.event_code,

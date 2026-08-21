@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.event_codes import UNKNOWN_CODE, EventCodeRegistry
-from app.ingest import ingest
+from app.ingest import _INSERT, ingest
 from app.schemas import EventIn
 
 MISMATCH_CODE = "system.robot_type_mismatch"
@@ -89,6 +89,12 @@ def _codes(conn):
 
 def _run(conn, events):
     return asyncio.run(ingest(conn, events, _registry()))
+
+
+def test_insert_sql_detaches_events_from_missing_sessions() -> None:
+    """DB 초기화 뒤 남은 로봇 큐 한 건이 새 이벤트 전체를 막지 않는다."""
+    assert "SELECT 1 FROM guidance_sessions WHERE session_id = $3" in _INSERT
+    assert "'reported_session_id', $3::bigint" in _INSERT
 
 
 def test_mismatched_event_is_recorded_but_never_updates_state():
