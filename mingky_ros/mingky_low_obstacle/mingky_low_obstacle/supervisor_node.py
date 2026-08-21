@@ -61,9 +61,12 @@ class LowObstacleSupervisor(Node):
             'transform_timeout_sec': 0.05,
             # 명목 FOV 밖의 옆 벽도 진단에 보이게 하되 판정을 뒤집지는 않는다.
             'lidar_wall_context_fov_rad': 1.5707963267948966,
-            'detect_distance_m': 0.30,
-            'clear_distance_m': 0.35,
-            'slow_distance_m': 0.15,
+            # 1Hz 전역 costmap이 우회 경로를 만들 시간을 확보하도록 40cm에서
+            # 먼저 표식하고 25cm부터 감속한다. 센서 10Hz/2-of-3 확인과 LiDAR
+            # 불일치 검증은 그대로라 계산 부하와 벽 반사 오판은 늘리지 않는다.
+            'detect_distance_m': 0.40,
+            'clear_distance_m': 0.45,
+            'slow_distance_m': 0.25,
             'stop_distance_m': 0.04,
             # 9.5cm padded footprint + 10cm local inflation 바깥에 endpoint를
             # 두어 시작 자세가 장애물 안에 갇히지 않게 한다.

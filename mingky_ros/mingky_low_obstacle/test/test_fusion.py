@@ -29,7 +29,7 @@ def test_median_and_two_of_three_reject_one_spike():
     decisions = [_update(filter_, value) for value in (0.18, 0.63, 0.19)]
 
     assert decisions[-1].filtered_range_m == pytest.approx(0.19)
-    assert decisions[-1].state == 'CONFIRMED'
+    assert decisions[-1].state == 'SLOW'
     assert decisions[-1].output_range_m == pytest.approx(0.20)
 
 
@@ -51,10 +51,10 @@ def test_hysteresis_holds_costmap_for_two_raw_clear_observations():
     # Two consecutive raw absences give the costmap a 0.2 second hold at the
     # deployed 10 Hz sensor rate. The causal median can still report the old
     # distance on the first sample, but clear timing follows raw absences.
-    first = _update(filter_, 0.36)
+    first = _update(filter_, 0.46)
     assert first.low_obstacle_confirmed
     assert first.output_range_m == pytest.approx(0.20)
-    decision = _update(filter_, 0.36)
+    decision = _update(filter_, 0.46)
     assert not decision.low_obstacle_confirmed
     assert decision.state == 'CLEAR'
     assert decision.output_range_m == pytest.approx(0.97)
@@ -87,7 +87,7 @@ def test_near_samples_do_not_block_before_low_obstacle_confirmation():
     decision = _update(filter_, 0.06)
     assert decision.state == 'SLOW'
     assert decision.forward_speed_limit_mps == pytest.approx(
-        0.08 * (0.06 - 0.04) / (0.15 - 0.04))
+        0.08 * (0.06 - 0.04) / (0.25 - 0.04))
     # The endpoint is clamped outside the footprint so Nav2 sees a routable
     # obstacle instead of clearing it, while the real range controls speed.
     assert decision.output_range_m == pytest.approx(0.20)
@@ -135,7 +135,7 @@ def test_obstacle_farther_than_projection_distance_keeps_measured_range():
     for _ in range(3):
         decision = _update(filter_, 0.24)
 
-    assert decision.state == 'CONFIRMED'
+    assert decision.state == 'SLOW'
     assert decision.output_range_m == pytest.approx(0.24)
 
 

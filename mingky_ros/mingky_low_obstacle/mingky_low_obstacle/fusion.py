@@ -52,9 +52,9 @@ class NavigationScope:
 class FusionConfig:
     """Thresholds for conservative low-obstacle confirmation."""
 
-    detect_distance_m: float = 0.30
-    clear_distance_m: float = 0.35
-    slow_distance_m: float = 0.15
+    detect_distance_m: float = 0.40
+    clear_distance_m: float = 0.45
+    slow_distance_m: float = 0.25
     stop_distance_m: float = 0.04
     costmap_min_range_m: float = 0.20
     slow_speed_mps: float = 0.08

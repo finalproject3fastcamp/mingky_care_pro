@@ -52,10 +52,11 @@ costmap을 한 번 초기화해 그 작업에서 누적한 저상 장애물 표�
 정확한 점 대신 전방 부채꼴을 표시합니다. 과거 관측이 만료되면 표시도 즉시
 사라집니다.
 
-기본 임계값은 센서값이 미터 단위로 안정적으로 들어온다는 전제의 보수적인
-초기값입니다. ADC 물리 보정을 대신하지 않으므로 실기 로그를 보고
-`detect_distance_m`, `lidar_margin_m`, `slow_distance_m`, `stop_distance_m` 순으로
-조정해야 합니다.
+기본값은 40cm에서 표식하고 25cm부터 감속하며 4cm에서 완전히 멈춥니다.
+ADC 물리 보정을 대신하지 않으므로 실기 로그를 보고 `detect_distance_m`,
+`lidar_margin_m`, `slow_distance_m`, `stop_distance_m` 순으로 조정해야 합니다.
+표식을 일찍 만들되 10Hz/2-of-3 확인과 LiDAR 불일치 검증은 유지하므로,
+costmap 주기를 올리지 않고 우회 준비 시간만 확보합니다.
 
 ## 상태
 
