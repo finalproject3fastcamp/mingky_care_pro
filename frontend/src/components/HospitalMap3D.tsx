@@ -48,7 +48,7 @@ import { usePolling } from '../lib/usePolling'
 import { MapRearCam } from './MapRearCam'
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
-import type { QrObservation } from '../types/monitoring'
+import type { LowObstacleState, QrObservation } from '../types/monitoring'
 import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
@@ -128,6 +128,8 @@ export interface HospitalMap3DProps extends DiagLayers {
    * 나쁘다.**
    */
   paused?: boolean
+  /** 전방 초음파/LiDAR 저상 장애물 상태머신의 현재 상태. */
+  lowObstacleState?: LowObstacleState | null
 }
 
 type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
@@ -170,6 +172,21 @@ const MAP_STATE: Record<
   waiting: { text: '기다리는 중', tone: 'wait', pulseMs: 2000, ring: false },
   returning: { text: '충전소로 복귀 중', tone: 'wait', pulseMs: null, ring: true },
   estop: { text: '비상정지', tone: 'alarm', pulseMs: 500, ring: false },
+}
+
+const LOW_OBSTACLE_DISPLAY: Record<
+  LowObstacleState,
+  { text: string; tone: 'normal' | 'wait' | 'slow' | 'alarm' | 'muted' }
+> = {
+  STARTING: { text: '저상 감시 준비 중', tone: 'muted' },
+  DISABLED: { text: '저상 감지 꺼짐', tone: 'muted' },
+  CLEAR: { text: '저상 감시 정상', tone: 'normal' },
+  UNCERTAIN: { text: '낮은 장애물 확인 중', tone: 'wait' },
+  CONFIRMED: { text: '낮은 장애물 감지', tone: 'wait' },
+  SLOW: { text: '저상 장애물 감속 회피', tone: 'slow' },
+  FORWARD_BLOCKED: { text: '전방 저상 장애물 · 이동 제한', tone: 'alarm' },
+  STALE_RANGE: { text: '초음파 센서 확인 필요', tone: 'muted' },
+  STALE_LIDAR: { text: 'LiDAR 연결 확인 필요', tone: 'muted' },
 }
 
 interface LabelHandle {
@@ -355,6 +372,7 @@ export function HospitalMap3D({
   camera = 'rear',
   waitLimitSec = 20,
   paused = false,
+  lowObstacleState = null,
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -1491,6 +1509,15 @@ export function HospitalMap3D({
             </span>
           )}
         </span>
+        {lowObstacleState && (
+          <span
+            className={`map3d__obstacle map3d__obstacle--${LOW_OBSTACLE_DISPLAY[lowObstacleState].tone}`}
+            role="status"
+          >
+            <i aria-hidden="true" />
+            {LOW_OBSTACLE_DISPLAY[lowObstacleState].text}
+          </span>
+        )}
         {pose ? (
           <span className="robot-map__coord">
             x {pose.x.toFixed(2)} · y {pose.y.toFixed(2)} ·{' '}

@@ -452,6 +452,10 @@ class MobileRobotOut(RobotBase):
     returning_to_dock: bool = False
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
     low_obstacle_mode: Literal["disabled", "sidestep"] | None = None
+    low_obstacle_state: Literal[
+        "STARTING", "DISABLED", "CLEAR", "UNCERTAIN", "CONFIRMED", "SLOW",
+        "FORWARD_BLOCKED", "STALE_RANGE", "STALE_LIDAR",
+    ] | None = None
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
@@ -520,6 +524,11 @@ class RobotHeartbeatIn(BaseModel):
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
     # guide_manager에 실제로 적용된 저상 장애물 회피 전략.
     low_obstacle_mode: Literal["disabled", "sidestep"] | None = None
+    # 초음파/LiDAR local costmap 융합 상태. 구버전 게이트웨이는 보내지 않는다.
+    low_obstacle_state: Literal[
+        "STARTING", "DISABLED", "CLEAR", "UNCERTAIN", "CONFIRMED", "SLOW",
+        "FORWARD_BLOCKED", "STALE_RANGE", "STALE_LIDAR",
+    ] | None = None
     # Guide Manager의 현재 로봇 상태. 구버전 게이트웨이는 보내지 않는다.
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",

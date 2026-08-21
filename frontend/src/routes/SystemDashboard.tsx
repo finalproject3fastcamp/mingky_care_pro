@@ -8,7 +8,12 @@ import { TopicWatchCard } from '../components/TopicWatchCard'
 import { getFleetConfig, getRobots, sendOrder, type RobotCommand } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { useRobotMode } from '../lib/useRobotMode'
-import { isManipulator, isMobile, type Robot } from '../types/monitoring'
+import {
+  isManipulator,
+  isMobile,
+  type LowObstacleState,
+  type Robot,
+} from '../types/monitoring'
 
 const POLL_MS = 3000
 // 형상은 몇 시간에 한 번 바뀐다. 로봇 상태와 같은 주기로 물으면 팔 2대분
@@ -18,7 +23,6 @@ const MIN_NAVIGATION_SPEED = 0.05
 const MAX_NAVIGATION_SPEED = 0.25
 const DEFAULT_NAVIGATION_SPEED = 0.20
 const NAVIGATION_SPEED_STEP = 0.01
-type LowObstacleMode = 'disabled' | 'sidestep'
 
 function clampNavigationSpeed(value: number) {
   return Math.min(
@@ -43,6 +47,19 @@ function systemStateLabel(state: string) {
   return '확인 불가'
 }
 
+function lowObstacleStateLabel(state: LowObstacleState | null) {
+  if (state === 'CLEAR') return '정상 감시 중'
+  if (state === 'UNCERTAIN') return '낮은 장애물 확인 중'
+  if (state === 'CONFIRMED') return '낮은 장애물 감지'
+  if (state === 'SLOW') return '감속 회피 중'
+  if (state === 'FORWARD_BLOCKED') return '전방 이동 제한 중'
+  if (state === 'STALE_RANGE') return '초음파 센서 확인 필요'
+  if (state === 'STALE_LIDAR') return 'LiDAR 연결 확인 필요'
+  if (state === 'DISABLED') return '감지 기능 꺼짐'
+  if (state === 'STARTING') return '감시 준비 중'
+  return '상태 수신 대기'
+}
+
 export function SystemDashboard() {
   const robots = usePolling((signal) => getRobots({ signal }), POLL_MS)
   const config = usePolling((signal) => getFleetConfig({ signal }), CONFIG_POLL_MS)
@@ -50,7 +67,6 @@ export function SystemDashboard() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [speedDraft, setSpeedDraft] = useState(DEFAULT_NAVIGATION_SPEED)
-  const [lowObstacleDraft, setLowObstacleDraft] = useState<LowObstacleMode>('disabled')
 
   // §7.3: 선택기는 4대를 모두 보여주고 제어 패널만 타입에 따라 바꾼다.
   // 여기서 팔을 거르면 "팔은 관제 대상이 아니다" 라는 뜻이 되고, 실제로
@@ -78,21 +94,13 @@ export function SystemDashboard() {
   const activeSession = mobileRobot?.active_session_id != null
   const online = selectedRobot?.link_state === 'online'
   const appliedSpeed = mobileRobot?.navigation_speed_mps ?? null
-  const appliedLowObstacleMode = mobileRobot?.low_obstacle_mode ?? null
   const speedBlocked = busy || activeSession || !online || mode !== 'auto'
     || mobileRobot?.system_state !== 'active' || mobileRobot?.localization_active
     || mobileRobot?.fire_alarm_active === true || appliedSpeed == null
-  const lowObstacleBlocked = busy || activeSession || !online
-    || mobileRobot?.system_state !== 'active' || mobileRobot?.localization_active
-    || mobileRobot?.fire_alarm_active === true || appliedLowObstacleMode == null
 
   useEffect(() => {
     setSpeedDraft(appliedSpeed ?? DEFAULT_NAVIGATION_SPEED)
   }, [selectedRobotId, appliedSpeed])
-
-  useEffect(() => {
-    setLowObstacleDraft(appliedLowObstacleMode ?? 'disabled')
-  }, [selectedRobotId, appliedLowObstacleMode])
 
   async function issue(command: RobotCommand, label: string, confirmMessage: string) {
     if (!selectedRobotId || !window.confirm(confirmMessage)) return
@@ -120,24 +128,6 @@ export function SystemDashboard() {
       setNotice('주행 속도 변경 명령을 보냈습니다. 실제 적용값을 확인하고 있습니다.')
     } catch {
       setNotice('주행 속도 변경 명령을 보내지 못했습니다.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function applyLowObstacleMode() {
-    if (!selectedRobotId || lowObstacleBlocked) return
-    const label = lowObstacleDraft === 'sidestep' ? '옆걸음 회피 사용' : '사용 안 함'
-    if (!window.confirm(
-      `${selectedRobotId}의 저상 장애물 대응을 '${label}'으로 변경할까요?`,
-    )) return
-    setBusy(true)
-    setNotice(null)
-    try {
-      await sendOrder(selectedRobotId, 'set_low_obstacle_mode', lowObstacleDraft)
-      setNotice('저상 장애물 대응 변경 명령을 보냈습니다. 실제 적용값을 확인하고 있습니다.')
-    } catch {
-      setNotice('저상 장애물 대응 변경 명령을 보내지 못했습니다.')
     } finally {
       setBusy(false)
     }
@@ -251,26 +241,12 @@ export function SystemDashboard() {
 
         <section className="card waypoint-obstacle-control">
           <div className="card-title">저상 장애물 대응</div>
-          <p>초음파 센서가 낮은 장애물을 감지하면 안내 목표를 잠시 멈추고 옆걸음으로 우회합니다.</p>
-          <div className="waypoint-speed-applied">
-            <span>현재 적용값</span>
-            <strong>{appliedLowObstacleMode == null
-              ? '확인 중'
-              : appliedLowObstacleMode === 'sidestep' ? '옆걸음 회피' : '사용 안 함'}</strong>
+          <p>초음파와 LiDAR를 비교해 낮은 장애물만 local costmap에 자동 반영합니다. 일반 벽은 LiDAR와 일치하므로 저상 장애물로 판정하지 않습니다.</p>
+          <div className="waypoint-speed-applied" aria-live="polite">
+            <span>실시간 감지 상태</span>
+            <strong>{lowObstacleStateLabel(mobileRobot?.low_obstacle_state ?? null)}</strong>
           </div>
-          <label>
-            <span>동작 방식</span>
-            <select value={lowObstacleDraft}
-              disabled={lowObstacleBlocked}
-              onChange={(event) => setLowObstacleDraft(event.target.value as LowObstacleMode)}>
-              <option value="disabled">사용 안 함</option>
-              <option value="sidestep">옆걸음 회피</option>
-            </select>
-          </label>
-          <small>안내를 시작하기 전에 설정하세요. 안내 중에는 변경할 수 없습니다.</small>
-          <button type="button" className="btn primary"
-            disabled={lowObstacleBlocked || lowObstacleDraft === appliedLowObstacleMode}
-            onClick={applyLowObstacleMode}>적용</button>
+          <small>안내·Waypoint 주행 모두 같은 자동 판정과 MPPI 회피를 사용합니다.</small>
         </section>
 
         <section className="card waypoint-localize-control">

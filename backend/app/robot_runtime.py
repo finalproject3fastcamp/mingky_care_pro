@@ -27,6 +27,7 @@ class RuntimeState:
     returning_to_dock: bool = False
     navigation_speed_mps: float | None = None
     low_obstacle_mode: str | None = None
+    low_obstacle_state: str | None = None
     guide_robot_state: str | None = None
     guide_session_state: str | None = None
 
@@ -60,6 +61,7 @@ def update(
     returning_to_dock: bool | None = None,
     navigation_speed_mps: float | None = None,
     low_obstacle_mode: str | None = None,
+    low_obstacle_state: str | None = None,
     *,
     guide_robot_state: str | None = None,
     guide_session_state: str | None = None,
@@ -79,6 +81,7 @@ def update(
         returning_to_dock=bool(returning_to_dock),
         navigation_speed_mps=navigation_speed_mps,
         low_obstacle_mode=low_obstacle_mode,
+        low_obstacle_state=low_obstacle_state,
         guide_robot_state=guide_robot_state,
         guide_session_state=guide_session_state,
         reported_at=now,

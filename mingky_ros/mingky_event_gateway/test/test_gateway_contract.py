@@ -23,10 +23,11 @@ from mingky_event_gateway.gateway_node import (
     parse_patient_follow_status,
     parse_navigation_speed,
     parse_low_obstacle_mode,
+    parse_low_obstacle_state,
     send_outcome,
 )
 from mingky_interfaces.msg import GuideState, QrObservation
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 
 def test_system_commands_only_target_fixed_systemd_actions():
@@ -56,6 +57,21 @@ def test_low_obstacle_mode_only_accepts_implemented_strategies():
     assert parse_low_obstacle_mode('sidestep') == 'sidestep'
     assert parse_low_obstacle_mode('enabled') is None
     assert parse_low_obstacle_mode('range_layer') is None
+
+
+def test_low_obstacle_state_only_accepts_fusion_state_machine_values():
+    assert parse_low_obstacle_state(' slow ') == 'SLOW'
+    assert parse_low_obstacle_state('FORWARD_BLOCKED') == 'FORWARD_BLOCKED'
+    assert parse_low_obstacle_state('blocked') is None
+
+
+def test_low_obstacle_state_is_reported_in_heartbeat():
+    gateway = object.__new__(EventGateway)
+    gateway._low_obstacle_state = None
+
+    gateway._on_low_obstacle_state(String(data='CONFIRMED'))
+
+    assert gateway._low_obstacle_state == 'CONFIRMED'
 
 
 class _Logger:

@@ -213,6 +213,34 @@
 .map3d__state--wait { color: #b8850a; }
 .map3d__state--alarm { color: #cc3a2b; }
 
+.map3d__obstacle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.map3d__obstacle i {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.map3d__obstacle--normal { color: #0f8a78; }
+.map3d__obstacle--wait { color: #b77908; }
+.map3d__obstacle--slow { color: #d26617; }
+.map3d__obstacle--alarm { color: #cc3a2b; }
+.map3d__obstacle--muted { color: #718096; }
+
 /*
  * 지난 일.
  *

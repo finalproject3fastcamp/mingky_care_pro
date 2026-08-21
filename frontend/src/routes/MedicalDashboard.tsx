@@ -294,6 +294,7 @@ export function MedicalDashboard() {
                 robotId={selectedRobotId}
                 returning={selectedRobot?.returning_to_dock ?? false}
                 paused={selectedRobot?.guide_robot_state === 'paused'}
+                lowObstacleState={selectedRobot?.low_obstacle_state ?? null}
                 camera={
                   !activeSession || selectedRobot?.guide_session_state === 'in_room'
                     ? 'front'

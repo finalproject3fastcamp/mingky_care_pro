@@ -129,21 +129,19 @@ ros2 param set /guide_manager low_obstacle_mode disabled
 ros2 param set /navigation_manager low_obstacle_mode disabled
 ```
 
-운영에서는 관제의 **로봇 시스템 관리 → 저상 장애물 대응**에서 같은 값을
-선택할 수 있습니다. 주행이 시작되기 전에만 변경되며, 화면의 현재 적용값은 로봇
-게이트웨이가 `guide_manager`와 `navigation_manager` 양쪽의 파라미터 적용 성공을
-확인한 뒤 보고합니다.
-
 `sidestep`은 안내 목표나 Waypoint 시험 목표를 취소하고 좌우 탐색과 단계 전진을
 완료한 뒤 원래 목표를 다시 보내는 기존 실험 모드입니다. 기본값은 계속
-`disabled`입니다.
+`disabled`이며 관제 선택 UI에서는 제거했습니다. 호환성과 개발자 비교 시험을
+위해 launch 및 ROS parameter 인터페이스만 유지합니다.
 
 별도로 `low_obstacle_fusion_enabled:=true`가 기본 적용됩니다. 전방 초음파를
 median 3개와 최근 5개 중 3개로 확인하고, 같은 부채꼴의 LiDAR보다 물체가 충분히
 가까울 때만 `/low_obstacle/range`에 발행합니다. 이 정보는 **local costmap에만**
-추가되어 MPPI와 기존 Adaptive Recovery가 함께 사용합니다. 15cm 이내에서는
-전진을 0.08m/s로 제한하고, 7cm 이내가 반복 확인되면 전진 성분만 막습니다.
-회전과 후퇴는 기존 Nav2 판단을 유지합니다.
+추가되어 MPPI와 기존 Adaptive Recovery가 함께 사용합니다. 같은 거리에서
+LiDAR도 물체를 보고 있으면 벽으로 판단해 저상 장애물로 확정하지 않습니다.
+15cm 이내에서는 전진을 0.08m/s로 제한하고, 저상 장애물 확정 후 7cm 이내가
+반복 확인되면 전진 성분만 막습니다. 회전과 후퇴는 기존 Nav2 판단을 유지합니다.
+관제는 이 자동 판정 상태만 표시하며 알고리즘을 선택하지 않습니다.
 
 센서 또는 융합 노드가 끊겨도 기존 LiDAR costmap을 `not current`로 만들지
 않습니다. 대신 `/low_obstacle/state`가 `STALE_RANGE` 또는 `STALE_LIDAR`를
