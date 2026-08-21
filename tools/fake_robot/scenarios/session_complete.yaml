@@ -71,6 +71,50 @@ steps:
     code: session.step_completed
     payload: { step_order: 3, source: qr }
 
+  # p001 은 외래(admission_type=outpatient)라 검사 뒤 수납·약국·약수령이
+  # session_steps 에 이어 붙는다 (qr.py 분기 · migration 013). 그 스텝까지
+  # 완료해야 세션이 completed 로 끝난다.
+
+  # --- 4단계 수납 ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 수납 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 수납 }
+    wait: 0.5
+  - { robot: pinky-01, action: event, code: payment.arrived, payload: { session_id: 0, patient_id: p001 } }
+  - { robot: pinky-01, action: event, code: payment.completed, payload: { session_id: 0, patient_id: p001 } }
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 4, source: qr }
+
+  # --- 5단계 약국 (pharmacy.arrived seam) ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 약국 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 약국 }
+    wait: 0.5
+  - { robot: pinky-01, action: event, code: pharmacy.arrived, payload: { session_id: 0, patient_id: p001 } }
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 5, source: qr }
+
+  # --- 6단계 약수령 ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 약수령 } }
+  - robot: pinky-01
+    action: event
+    code: nav.goal_succeeded
+    payload: { visit_name: 약수령 }
+    wait: 0.5
+  - { robot: pinky-01, action: event, code: pickup.completed, payload: { session_id: 0, patient_id: p001 } }
+  - robot: pinky-01
+    action: event
+    code: session.step_completed
+    payload: { step_order: 6, source: qr }
+
   # --- 종료 후 충전소 복귀 ---
   # dock.* 를 쓴다. nav.goal_succeeded 를 재사용하면 충전소 도착이 다음 진료실
   # 도착으로 기록된다 (config/event_codes.yaml 충전소 절).

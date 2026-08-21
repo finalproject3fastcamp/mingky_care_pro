@@ -196,8 +196,10 @@ def test_a_guidance_session_runs_to_completion(backend):
         FROM session_steps WHERE session_id = $1 ORDER BY step_order
     """, session["session_id"])
 
-    # 마스터를 조인하지 않고 스냅샷을 복사하므로 3행이 그대로 있어야 한다.
-    assert [s["visit_name"] for s in steps] == ["X-ray", "임상병리실", "물리치료실"]
+    # p001 은 외래(outpatient)라 검사 3단계 뒤 수납·약국·약수령이 이어 붙는다
+    # (qr.py 분기 · migration 013). 스냅샷을 복사하므로 이 6행이 그대로 있어야 한다.
+    assert [s["visit_name"] for s in steps] == [
+        "X-ray", "임상병리실", "물리치료실", "수납", "약국", "약수령"]
     for step in steps:
         assert step["arrived_at"] is not None, step["visit_name"]
         assert step["completed_at"] is not None, step["visit_name"]
@@ -775,10 +777,12 @@ def test_two_pinkies_run_concurrent_sessions_kept_independent(backend):
         assert row["end_reason"] == "completed", row["robot_id"]
         assert row["ended_at"] is not None, row["robot_id"]
 
-    # 각자 단계 수만큼(p001=3, p002=2) session_steps 가 모두 완료됐다.
+    # 각자 단계 수만큼 session_steps 가 모두 완료됐다. 둘 다 외래(outpatient)라
+    # 검사 뒤 수납·약국·약수령이 붙어 p001=6, p002=5 단계다 (migration 013).
     expected_steps = {
-        one["session_id"]: ["X-ray", "임상병리실", "물리치료실"],
-        two["session_id"]: ["X-ray", "CT"],
+        one["session_id"]: [
+            "X-ray", "임상병리실", "물리치료실", "수납", "약국", "약수령"],
+        two["session_id"]: ["X-ray", "CT", "수납", "약국", "약수령"],
     }
     for session_id, names in expected_steps.items():
         steps = query("""
