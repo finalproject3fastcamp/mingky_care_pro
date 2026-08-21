@@ -31,6 +31,7 @@ install(
     scripts/run_nav2_waypoint_test.sh
     scripts/start_guidance_test.sh
     scripts/check_waypoints.py
+    scripts/camera_power_manager.py
     scripts/run_discovery_server.sh
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -53,6 +54,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_waypoint_config test/test_waypoint_config.py)
   ament_add_pytest_test(test_battery_command test/test_battery_command.py)
   ament_add_pytest_test(test_nav2_progress_config test/test_nav2_progress_config.py)
+  ament_add_pytest_test(test_camera_power_policy test/test_camera_power_policy.py)
 endif()
 
 ament_package()

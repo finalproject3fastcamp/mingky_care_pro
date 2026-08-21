@@ -30,6 +30,7 @@ class ImageStreamerNode(Node):
         self.declare_parameter('compressed_topic', '')
         self.declare_parameter('compressed_enable_topic', '')
         self.declare_parameter('compressed_jpeg_quality', 70)
+        self.declare_parameter('viewer_active_topic', '')
 
         topic = str(self.get_parameter('image_topic').value)
         max_fps = float(self.get_parameter('max_fps').value)
@@ -48,6 +49,18 @@ class ImageStreamerNode(Node):
             self.get_parameter('compressed_enable_topic').value).strip()
         self._compressed_enable_topic = compressed_enable_topic
         self._compressed_enabled = not compressed_enable_topic
+        viewer_active_topic = str(
+            self.get_parameter('viewer_active_topic').value).strip()
+        self._viewer_active_pub = None
+        self._last_viewer_active = None
+        if viewer_active_topic:
+            state_qos = QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                reliability=ReliabilityPolicy.RELIABLE,
+            )
+            self._viewer_active_pub = self.create_publisher(
+                Bool, viewer_active_topic, state_qos)
         if compressed_enable_topic:
             state_qos = QoSProfile(
                 depth=1,
@@ -88,6 +101,11 @@ class ImageStreamerNode(Node):
         return self._compressed_enabled
 
     def _publish_latest(self) -> None:
+        viewer_active = self._server.has_viewers
+        if (getattr(self, '_viewer_active_pub', None) is not None
+                and viewer_active != self._last_viewer_active):
+            self._viewer_active_pub.publish(Bool(data=viewer_active))
+            self._last_viewer_active = viewer_active
         compressed_needed = (
             self._compressed_pub is not None
             and self._compressed_gate_allows_processing()
@@ -95,7 +113,7 @@ class ImageStreamerNode(Node):
         )
         if (
                 self._latest is None
-                or not (self._server.has_viewers or compressed_needed)):
+                or not (viewer_active or compressed_needed)):
             return
         try:
             frame = self._bridge.imgmsg_to_cv2(
@@ -114,7 +132,7 @@ class ImageStreamerNode(Node):
                 message.format = 'jpeg'
                 message.data = encoded.tobytes()
                 self._compressed_pub.publish(message)
-        if self._server.has_viewers:
+        if viewer_active:
             self._server.update(frame)
 
 

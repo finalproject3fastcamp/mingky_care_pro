@@ -6,6 +6,10 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
+        # 조제 진행(SSE, /api/pharmacy/progress)은 스트림이다. 앞단 nginx 는
+        # 백엔드의 X-Accel-Buffering:no 를 다음 홉으로 전달하지 않으므로, 이
+        # 호스트 nginx 가 버퍼링하면 진행이 몰아서/영영 안 온다(45초 워치독 반복).
+        proxy_buffering off;
         # 대시보드의 실시간 조작이 /api/ 아래로 WebSocket 을 연다.
         # 업그레이드 헤더를 넘기지 않으면 평범한 GET 이 되어 404 가 된다.
         proxy_set_header Upgrade $http_upgrade;

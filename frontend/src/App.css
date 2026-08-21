@@ -1916,6 +1916,38 @@
   opacity: 0.45;
 }
 
+/* OMX 절차적 로봇팔 썸네일. 크기·모서리는 핑키와 동일, 배경은 기존 OMX
+   글자 플레이스홀더의 보라 톤을 이어받아 두 카드가 색으로도 구분되게 한다. */
+.omx-model-viewer {
+  width: 128px;
+  height: 104px;
+  overflow: hidden;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #3f3b52 0%, #6b6486 100%);
+}
+.omx-model-viewer__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0.9;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.waypoint-robot-card:hover .omx-model-viewer__canvas,
+.waypoint-robot-card.selected .omx-model-viewer__canvas {
+  opacity: 1;
+  transform: scale(1.025);
+}
+.omx-model-viewer__fallback {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.72rem;
+  letter-spacing: 0.15em;
+  opacity: 0.75;
+}
+
 /* Waypoint tool */
 .waypoint-dashboard,
 .system-dashboard { display: grid; gap: 18px; }
@@ -2196,6 +2228,7 @@
   .waypoint-map-panel__header { padding: 5px 6px 12px; }
   .waypoint-robot-card { grid-template-columns: 96px minmax(0, 1fr); }
   .pinky-model-viewer { width: 96px; height: 82px; }
+  .omx-model-viewer { width: 96px; height: 82px; }
 }
 
 .medical-location-control {
@@ -2224,6 +2257,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pinky-model-viewer__canvas { transition: none; }
+  .omx-model-viewer__canvas { transition: none; }
 }
 
 /* ── 값 신선도 ─────────────────────────────────────────────────────────

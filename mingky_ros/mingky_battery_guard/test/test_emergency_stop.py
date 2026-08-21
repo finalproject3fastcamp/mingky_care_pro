@@ -18,6 +18,7 @@ def ros():
 def make_gate(state_file):
     return EmergencyStop(parameter_overrides=[
         Parameter('use_led', value=False),
+        Parameter('use_buzzer', value=False),
         Parameter('cancel_nav2', value=False),
         Parameter('state_file', value=str(state_file)),
     ])
@@ -64,4 +65,22 @@ def test_communication_loss_engages_persistent_stop(tmp_path):
     assert node.engaged is True
     assert node.reason == 'communication_loss'
     node.release()
+    node.destroy_node()
+
+
+def test_fire_alarm_keeps_red_led_until_alarm_reset(tmp_path):
+    node = make_gate(tmp_path / 'emergency.state')
+    led_commands = []
+    node.set_led = lambda command, red=0, green=0, blue=0: (
+        led_commands.append((command, red, green, blue)))
+
+    node.on_fire_alarm(Bool(data=True))
+    node.engage('operator')
+    node.release()
+    node.on_fire_alarm(Bool(data=False))
+
+    assert led_commands[-2:] == [
+        ('fill', 255, 0, 0),
+        ('clear', 0, 0, 0),
+    ]
     node.destroy_node()
