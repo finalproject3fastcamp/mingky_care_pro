@@ -47,6 +47,8 @@ def test_private_runtime_switch_is_ordered_and_observable() -> None:
     assert "grep -Eq '/home/pinky/[^/]+/mingky_care_pro'" in script
     assert 'wait_for_topic "$validation_repo" /mode 20' in script
     assert 'wait_for_topic "$validation_repo" /guide_manager/state 60' in script
+    assert 'ros2 topic type "$topic"' in script
+    assert 'ros2 topic echo "$topic" "$topic_type" --once' in script
     assert 'transition_active_units "$private_repo"' in script
     assert 'transition_active_units "$public_repo"' in script
     assert r'robot_id:=\${MINGKY_ROBOT_ID}' in script

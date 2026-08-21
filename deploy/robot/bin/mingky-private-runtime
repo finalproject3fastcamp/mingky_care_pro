@@ -123,7 +123,21 @@ wait_for_topic() {
     source /opt/ros/jazzy/setup.bash
     source /home/pinky/pinky_pro/install/local_setup.bash
     source "$validation_repo/install/local_setup.bash"
-    timeout "$timeout_sec" ros2 topic echo "$topic" --once \
+    # `ros2 topic echo`는 토픽 타입을 아직 발견하지 못하면 기다리지 않고 즉시
+    # 실패한다. systemd 기동 직후에는 노드가 정상이어도 DDS 발견이 늦을 수
+    # 있으므로, 타입이 보일 때까지 먼저 기다린 뒤 명시적인 타입으로 읽는다.
+    local started_at topic_type remaining
+    started_at="$SECONDS"
+    topic_type=""
+    while (( SECONDS - started_at < timeout_sec )); do
+      topic_type="$(ros2 topic type "$topic" 2>/dev/null | head -n 1)"
+      [[ -n "$topic_type" ]] && break
+      sleep 1
+    done
+    [[ -n "$topic_type" ]] || return 1
+    remaining=$((timeout_sec - (SECONDS - started_at)))
+    (( remaining > 0 )) || return 1
+    timeout "$remaining" ros2 topic echo "$topic" "$topic_type" --once \
       --qos-durability transient_local \
       --qos-reliability reliable >/dev/null
   )
