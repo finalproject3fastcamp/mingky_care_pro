@@ -20,6 +20,13 @@ ros2 launch mingky_bringup mingky_system.launch.xml \
 `pinky-01`은 `pinky_6294`, `pinky-02`는 `pinky_15e2`의 후방 카메라 보정값을
 자동으로 사용합니다.
 
+실제 카메라 캡처는 마지막 사용 후 기본 15초 뒤 절전됩니다. 전방 카메라는
+QR 스캔, 관제 미리보기 또는 `/front_camera/image_raw/compressed` 구독자가
+있으면 즉시 켜집니다. 따라서 화재 감지 노드가 영상을 구독하는 동안에는
+절전되지 않아 감지를 계속합니다. 후방 카메라는 안내 중이거나 관제 미리보기
+접속자가 있을 때 켜지고, 노드와 MJPEG 주소는 절전 중에도 유지됩니다. 유예는
+`camera_idle_timeout` 인자로 조정할 수 있습니다.
+
 ```text
 전방 MJPEG  http://127.0.0.1:8091/stream
 후방 MJPEG  http://127.0.0.1:8092/stream
@@ -65,6 +72,11 @@ LCD는 환자 확인, `출발 위치 → X-ray` 또는 `X-ray → CT` 안내, �
 문구보다 우선합니다. LCD를 쓰지 않는 개발 PC에서는
 `start_lcd_status:=false`를 전달합니다. 같은 SPI 장치를 사용하는
 `pinky_emotion emotion_server`와 동시에 실행하면 안 됩니다.
+자동 모드에서 활성 세션이 없는 대기·충전 상태는 기본 0%로 백라이트를 끄고,
+안내·수동 조작·경고·화재 대피 중에는 즉시 100%로 복원됩니다.
+화재가 확정되면 `/fire_evac/alarm_active`가 해제될 때까지 빨간 LED를 유지하고
+위험 부저를 기본 5초 간격으로 반복합니다. 대피 이동이 끝나도 경보는 유지되며,
+현장 확인 후 `fire_evac/reset_alarm`을 호출해야 LED와 부저가 꺼집니다.
 
 로봇 이미지의 기존 `battery` 명령도 LCD를 직접 초기화하므로 LCD 상태 노드와
 동시에 실행하면 안 됩니다. 빌드 후 아래 설치기를 한 번 실행하면 `battery`를

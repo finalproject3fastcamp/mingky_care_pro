@@ -99,6 +99,8 @@ Nav2 / teleop -> cmd_vel_safety_input -> emergency_stop -> cmd_vel -> motor
 - `/emergency_stop/release` (`Trigger`): 명시적 해제
 - `/emergency_stop/state` (`Bool`, latched): 현재 정지 상태
 - `/emergency_stop/reason` (`String`, latched): `operator` 또는 `obstacle`
+- `/fire_evac/alarm_active` (`Bool`, latched): 화재 경보 중 빨간 LED와 위험
+  부저를 유지하고, `false`가 오면 해제
 
 비상정지는 즉시 0 속도를 발행하고 Nav2 목표를 취소합니다. 상태는 기본적으로
 `~/.mingky/emergency_stop.state`에 저장되므로 프로세스 재시작으로 풀리지
@@ -107,6 +109,10 @@ Nav2 / teleop -> cmd_vel_safety_input -> emergency_stop -> cmd_vel -> motor
 안전 게이트는 입력이 `command_timeout`(기본 0.5초) 동안 끊겨도 0을 발행합니다.
 또한 `pinky_bringup` 모터 드라이버에도 같은 워치독이 있어 게이트 프로세스 자체가
 죽은 경우 마지막 RPM을 계속 유지하지 않습니다.
+
+화재 경보 LED는 비상정지 점멸보다 우선해 계속 빨간색으로 켜집니다. 부저는
+기본 `danger` 패턴을 5초마다 반복합니다. 대피 주행의 성공·실패와 무관하게
+`fire_evac/reset_alarm`으로 경보를 확인 해제할 때까지 유지됩니다.
 
 ## 실기 검증 — 발행자가 하나인지 먼저 확인하세요
 

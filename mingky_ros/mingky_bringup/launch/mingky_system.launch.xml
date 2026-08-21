@@ -52,6 +52,8 @@
     <arg name="camera_preview_max_fps" default="5.0"/>
     <arg name="camera_preview_max_width" default="640"/>
     <arg name="camera_preview_jpeg_quality" default="60"/>
+    <!-- 카메라 마지막 사용 뒤 센서 스트림을 끄기까지의 유예. -->
+    <arg name="camera_idle_timeout" default="15.0"/>
     <!-- 로봇 설치 시 gateway와 teleop bridge는 systemd 상시 서비스다. gateway를
          여기서도 띄우면 heartbeat·명령 폴링이 중복되므로 기본은 끈다. -->
     <arg name="start_event_gateway" default="false"/>
@@ -72,6 +74,10 @@
         <!-- 배터리는 mingky-battery-pub.service가 주행 전부터 상시 발행한다. -->
         <arg name="start_battery_publisher" value="false"/>
     </include>
+
+    <!-- 비상정지와 화재 경보가 사용하는 후면 RGB LED 서비스. -->
+    <node pkg="pinky_led" exec="led_server" name="led_service_server"
+          output="screen" if="$(var use_led)"/>
 
     <include file="$(find-pkg-share pinky_navigation)/launch/bringup_launch.xml">
         <arg name="map" value="$(var map)"/>
@@ -96,6 +102,8 @@
         <arg name="preview_max_fps" value="$(var camera_preview_max_fps)"/>
         <arg name="preview_max_width" value="$(var camera_preview_max_width)"/>
         <arg name="preview_jpeg_quality" value="$(var camera_preview_jpeg_quality)"/>
+        <arg name="camera_idle_timeout_seconds"
+             value="$(var camera_idle_timeout)"/>
     </include>
 
     <!-- 후방 원본은 로봇 내부 ROS 토픽에 남기고, 관제에는 접속자가 있을 때만
@@ -105,6 +113,9 @@
         <arg name="robot_id" value="$(var robot_id)"/>
         <arg name="camera_profile" value="$(var camera_profile)"/>
         <arg name="start_qr_distance" value="$(var start_rear_qr_distance)"/>
+        <!-- MJPEG endpoint와 QR 노드는 유지하고 실제 V4L2 capture만 아래
+             camera_power_manager가 필요할 때 실행한다. -->
+        <arg name="start_rear_camera" value="false"/>
         <!-- 환자 추적을 사용하지 않는 구성은 기존처럼 QR을 상시 계산한다. -->
         <arg name="qr_process_only_while_guiding"
              value="$(var start_patient_follow)"/>
@@ -122,12 +133,21 @@
              value="/person_follow/processing_active"/>
     </include>
 
+    <node pkg="mingky_bringup" exec="camera_power_manager.py"
+          name="camera_power_manager" output="screen"
+          if="$(var start_rear_camera_stream)">
+        <param name="robot_id" value="$(var robot_id)"/>
+        <param name="camera_profile" value="$(var camera_profile)" type="str"/>
+        <param name="idle_timeout_seconds" value="$(var camera_idle_timeout)"/>
+    </node>
+
     <!-- 실제 /cmd_vel 의 유일한 발행자. Nav2/teleop 입력과 모터 출력을 분리한다. -->
     <node pkg="mingky_battery_guard" exec="emergency_stop"
           name="emergency_stop" output="screen">
         <param name="input_topic" value="cmd_vel_safety_input"/>
         <param name="output_topic" value="cmd_vel"/>
         <param name="use_led" value="$(var use_led)"/>
+        <param name="use_buzzer" value="$(var use_buzzer)"/>
     </node>
 
     <node pkg="mingky_battery_guard" exec="battery_guard"

@@ -18,6 +18,7 @@ from std_msgs.msg import Bool
 from mingky_interfaces.msg import GuideState, SessionStart
 from mingky_camera_streamer.mjpeg_server import MjpegServer
 
+from .camera_power_policy import camera_demanded
 from .scan_policy import completion_scan_enabled
 
 
@@ -58,6 +59,10 @@ class QrReaderNode(Node):
         self.declare_parameter("preview_max_fps", 10.0)
         # 화재 감지 등 공유 소비자에는 QR 디코드 주기와 별도로 낮은 FPS만 보낸다.
         self.declare_parameter("image_publish_max_fps", 3.0)
+        # 실제 센서 전원/ISP 스트림은 필요할 때만 유지한다. 노드와 MJPEG
+        # 리스너는 살아 있으므로 관제에서 스트림을 열면 스스로 다시 깨어난다.
+        self.declare_parameter("camera_idle_timeout_seconds", 15.0)
+        self.declare_parameter("camera_restart_backoff_seconds", 5.0)
         # arming 폴링 주기. 백엔드에 GET /robots/<id>/arming 을 주기로 던져
         # 의료진이 이 로봇을 활성화했는지 확인한다. armed 가 아니면 QR 을
         # 디코드/전송하지 않는다.
@@ -89,6 +94,14 @@ class QrReaderNode(Node):
             self.get_parameter("arming_fail_disarm_after").value)
         self.session_retry_limit = max(
             1, int(self.get_parameter("session_retry_limit").value))
+        self._camera_idle_timeout = max(
+            0.0,
+            float(self.get_parameter("camera_idle_timeout_seconds").value),
+        )
+        self._camera_restart_backoff = max(
+            1.0,
+            float(self.get_parameter("camera_restart_backoff_seconds").value),
+        )
 
         if not self.robot_id:
             raise RuntimeError("robot_id 파라미터가 필요합니다 (백엔드가 필수로 받음)")
@@ -96,6 +109,9 @@ class QrReaderNode(Node):
         self._capture: cv2.VideoCapture | None = None
         self._picam2 = None
         self._static_frame = None
+        self._camera_running = False
+        self._last_camera_demand_at = time.monotonic()
+        self._last_camera_start_attempt = float('-inf')
         self._last: LastScan | None = None
 
         state_qos = QoSProfile(
@@ -182,6 +198,7 @@ class QrReaderNode(Node):
             if not capture.isOpened():
                 raise RuntimeError(f"USB 카메라를 열 수 없습니다 (index={index})")
             self._capture = capture
+            self._camera_running = True
         elif self.source == "csi":
             # Pi 5 + libcamera 스택에서는 cv2.VideoCapture 로 CSI 카메라를 못 연다
             # (배포된 cv2 가 GStreamer 미지원). Pinky 표준인 Picamera2 를 쓴다.
@@ -217,6 +234,7 @@ class QrReaderNode(Node):
                     f"{exc}"
                 ) from exc
             self._picam2 = picam2
+            self._camera_running = True
         else:
             raise RuntimeError(f"알 수 없는 source: {self.source}")
 
@@ -232,6 +250,51 @@ class QrReaderNode(Node):
             return None
         return frame
 
+    def _start_camera(self) -> bool:
+        """Wake an already configured physical camera."""
+        if self._static_frame is not None or self._camera_running:
+            return True
+        now = time.monotonic()
+        if (now - self._last_camera_start_attempt
+                < self._camera_restart_backoff):
+            return False
+        self._last_camera_start_attempt = now
+        try:
+            if self._picam2 is not None:
+                self._picam2.start()
+            elif self.source == 'usb':
+                index = int(self.get_parameter("usb_device_index").value)
+                capture = cv2.VideoCapture(index)
+                if not capture.isOpened():
+                    capture.release()
+                    raise RuntimeError(f'USB camera open failed (index={index})')
+                self._capture = capture
+            else:
+                return True
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f'전방 카메라 절전 해제 실패: {exc}')
+            self._camera_ready_pub.publish(Bool(data=False))
+            return False
+        self._camera_running = True
+        self._camera_ready_pub.publish(Bool(data=True))
+        self.get_logger().info('전방 카메라 절전 해제')
+        return True
+
+    def _stop_camera(self) -> None:
+        """Stop physical capture while keeping ROS and preview endpoints alive."""
+        if self._static_frame is not None or not self._camera_running:
+            return
+        if self._picam2 is not None:
+            self._picam2.stop()
+        elif self._capture is not None:
+            self._capture.release()
+            self._capture = None
+        self._camera_running = False
+        self._camera_ready_pub.publish(Bool(data=False))
+        if self._preview is not None:
+            self._preview.clear()
+        self.get_logger().info('전방 카메라 절전 진입')
+
     def _tick(self) -> None:
         # QR 디코드는 arming/waiting 동안만 한다. 관제 카메라 화면을 실제로 연
         # 사람이 있거나, /front_camera/image_raw/compressed 구독자(예: 화재
@@ -241,7 +304,21 @@ class QrReaderNode(Node):
         scan_enabled = self._armed or self._completion_scan_enabled
         preview_enabled = self._preview is not None and self._preview.has_viewers
         image_topic_enabled = self._image_pub.get_subscription_count() > 0
-        if not (scan_enabled or preview_enabled or image_topic_enabled):
+        demanded = camera_demanded(
+            scan_enabled=scan_enabled,
+            preview_enabled=preview_enabled,
+            image_topic_enabled=image_topic_enabled,
+        )
+        now = time.monotonic()
+        if demanded:
+            self._last_camera_demand_at = now
+            if not self._start_camera():
+                return
+        else:
+            if (self._camera_running
+                    and now - self._last_camera_demand_at
+                    >= self._camera_idle_timeout):
+                self._stop_camera()
             return
 
         frame = self._read_frame()
@@ -528,7 +605,8 @@ class QrReaderNode(Node):
         if self._capture is not None:
             self._capture.release()
         if self._picam2 is not None:
-            self._picam2.stop()
+            if self._camera_running:
+                self._picam2.stop()
             self._picam2.close()
         return super().destroy_node()
 
