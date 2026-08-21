@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import math
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from mingky_interfaces.msg import GuideState
 from nav2_msgs.srv import ClearEntireCostmap
 from nav_msgs.msg import Odometry
@@ -33,9 +33,14 @@ from .fusion import (
     guide_navigation_segment_active,
     limit_forward_velocity,
     LowObstacleFilter,
+    matching_observation_cluster,
     NavigationScope,
-    nearest_lidar_in_ultrasonic_cone,
+    nearest_lidar_in_ultrasonic_cones,
+    ObstacleCone,
+    observation_overlap_estimate,
+    observation_pose_distinct,
     observation_pose_expired,
+    retained_cone_speed_limit,
 )
 
 
@@ -59,7 +64,9 @@ class LowObstacleSupervisor(Node):
             'scan_stale_sec': 0.5,
             'range_stale_sec': 0.5,
             'transform_timeout_sec': 0.05,
-            # 명목 FOV 밖의 옆 벽도 진단에 보이게 하되 판정을 뒤집지는 않는다.
+            # 초음파 전체 빔보다 좁은 정면 LiDAR 영역만 장애물 확정에
+            # 쓴다. 그 밖 90도 영역의 가까운 벽은 코너 반사 억제에 쓴다.
+            'lidar_confirmation_fov_rad': 0.2617993877991494,
             'lidar_wall_context_fov_rad': 1.5707963267948966,
             # 1Hz 전역 costmap이 우회 경로를 만들 시간을 확보하도록 40cm에서
             # 먼저 표식하고 25cm부터 감속한다. 센서 10Hz/2-of-3 확인과 LiDAR
@@ -73,6 +80,8 @@ class LowObstacleSupervisor(Node):
             'costmap_min_range_m': 0.20,
             'slow_speed_mps': 0.08,
             'lidar_margin_m': 0.15,
+            'side_wall_guard_distance_m': 0.22,
+            'side_wall_reflection_max_range_m': 0.10,
             'median_samples': 3,
             'confirmation_window': 3,
             'confirmations_required': 2,
@@ -85,6 +94,14 @@ class LowObstacleSupervisor(Node):
             # 전역 costmap(1 Hz)이 적어도 한 번은 안정된 장애물을 보고
             # 우회 경로를 만들 수 있도록 즉시 삭제하지 않는다.
             'observation_clear_hold_sec': 1.5,
+            # 같은 장애물을 다른 자세에서 본 관측은 하나로 군집화해
+            # RangeSensorLayer에 로봇 진행 궤적 모양의 표식이 남지 않게 한다.
+            'observation_merge_distance_m': 0.12,
+            # URDF ultrasonic_link x와 padded footprint 폭을 사용해, 센서가
+            # 잠깐 놓친 보존 장애물이 실제 전방 주행 폭 안에 있으면 계속
+            # 감속/정지한다. 회전해 옆으로 비키면 자동으로 제한이 풀린다.
+            'ultrasonic_mount_x_m': 0.0267,
+            'retained_corridor_half_width_m': 0.08,
         }
         for name, default in parameters.items():
             self.declare_parameter(name, default)
@@ -95,6 +112,9 @@ class LowObstacleSupervisor(Node):
         self.range_stale_sec = max(0.1, float(get('range_stale_sec').value))
         self.transform_timeout = Duration(
             seconds=max(0.0, float(get('transform_timeout_sec').value)))
+        self.lidar_confirmation_fov = min(
+            math.pi - 1e-3,
+            max(0.05, float(get('lidar_confirmation_fov_rad').value)))
         self.lidar_wall_context_fov = min(
             math.pi - 1e-3,
             max(0.26, float(get('lidar_wall_context_fov_rad').value)))
@@ -104,6 +124,12 @@ class LowObstacleSupervisor(Node):
             0.05, float(get('observation_expiry_yaw_rad').value))
         self.observation_retention = CostmapObservationRetention(
             float(get('observation_clear_hold_sec').value))
+        self.observation_merge_distance = max(
+            0.02, float(get('observation_merge_distance_m').value))
+        self.ultrasonic_mount_x = max(
+            0.0, float(get('ultrasonic_mount_x_m').value))
+        self.retained_corridor_half_width = max(
+            0.01, float(get('retained_corridor_half_width_m').value))
         self.navigation_scope = NavigationScope()
         self.filter = LowObstacleFilter(FusionConfig(
             detect_distance_m=float(get('detect_distance_m').value),
@@ -113,6 +139,10 @@ class LowObstacleSupervisor(Node):
             costmap_min_range_m=float(get('costmap_min_range_m').value),
             slow_speed_mps=float(get('slow_speed_mps').value),
             lidar_margin_m=float(get('lidar_margin_m').value),
+            side_wall_guard_distance_m=float(
+                get('side_wall_guard_distance_m').value),
+            side_wall_reflection_max_range_m=float(
+                get('side_wall_reflection_max_range_m').value),
             median_samples=int(get('median_samples').value),
             confirmation_window=int(get('confirmation_window').value),
             confirmations_required=int(get('confirmations_required').value),
@@ -132,9 +162,20 @@ class LowObstacleSupervisor(Node):
         self._decision = self.filter.stale_decision()
         self._last_published_state = ''
         self._latest_odom_pose: tuple[float, float, float] | None = None
+        self._latest_map_pose: tuple[float, float, float] | None = None
         self._mark_anchor_pose: tuple[float, float, float] | None = None
         self._marked_observations: list[Range] = []
         self._marked_observation_poses: list[
+            tuple[float, float, float] | None] = []
+        self._marked_observation_endpoints: list[
+            tuple[float, float] | None] = []
+        self._marked_observation_map_endpoints: list[
+            tuple[float, float] | None] = []
+        self._marked_observation_odom_cones: list[list[ObstacleCone]] = []
+        self._marked_observation_map_cones: list[list[ObstacleCone]] = []
+        self._marked_observation_odom_estimates: list[
+            tuple[float, float, float] | None] = []
+        self._marked_observation_map_estimates: list[
             tuple[float, float, float] | None] = []
         self._last_active_observation_distance: float | None = None
 
@@ -172,6 +213,12 @@ class LowObstacleSupervisor(Node):
             qos_profile_sensor_data)
         self.create_subscription(
             Odometry, '/odom', self._on_odom, qos_profile_sensor_data)
+        self.create_subscription(
+            PoseWithCovarianceStamped,
+            '/amcl_pose',
+            self._on_map_pose,
+            qos_profile_sensor_data,
+        )
         self.create_subscription(
             Twist, str(get('cmd_vel_input_topic').value), self._on_cmd, 10)
         self.create_subscription(
@@ -228,13 +275,15 @@ class LowObstacleSupervisor(Node):
             'scan_to_ultrasonic_y': float(translation.y),
             'scan_to_ultrasonic_yaw': yaw,
         }
-        # 실제 저상 장애물 판정은 센서가 명시한 정면 FOV만 사용한다. 넓은
-        # 범위의 벽 하나로 실제 저상 장애물을 무시하면 안 된다.
-        lidar_range = nearest_lidar_in_ultrasonic_cone(
-            **common, ultrasonic_fov=self._ultrasonic_fov)
-        wall_context_range = nearest_lidar_in_ultrasonic_cone(
-            **common, ultrasonic_fov=max(
-                self._ultrasonic_fov, self.lidar_wall_context_fov))
+        # 정면 방향 일치도를 높이기 위해 센서 명목 FOV와 15도 중
+        # 더 좁은 범위만 저상 장애물 확정에 사용한다.
+        lidar_range, wall_context_range = nearest_lidar_in_ultrasonic_cones(
+            **common,
+            ultrasonic_fovs=(
+                min(self._ultrasonic_fov, self.lidar_confirmation_fov),
+                max(self._ultrasonic_fov, self.lidar_wall_context_fov),
+            ),
+        )
         if lidar_range is not None:
             self._latest_lidar_range = lidar_range
             self._latest_lidar_at_ns = self.get_clock().now().nanoseconds
@@ -255,6 +304,7 @@ class LowObstacleSupervisor(Node):
             max_range_m=float(msg.max_range),
             lidar_range_m=self._latest_lidar_range,
             lidar_fresh=lidar_fresh,
+            wall_context_range_m=self._latest_wall_context_range,
         )
         self.observation_retention.on_detection(
             decision.low_obstacle_confirmed)
@@ -287,8 +337,10 @@ class LowObstacleSupervisor(Node):
                 # RangeSensorLayer uses volatile sensor QoS. Publish throughout
                 # confirmation so a costmap activated after this node also
                 # receives the obstacle instead of missing a one-shot mark.
+                for clear in self._remember_marked_observation(
+                        output, measured_range_m=decision.filtered_range_m):
+                    self.range_pub.publish(clear)
                 self.range_pub.publish(output)
-                self._remember_marked_observation(output)
         self._set_decision(decision)
 
     def _on_guide_state(self, msg: GuideState) -> None:
@@ -372,7 +424,81 @@ class LowObstacleSupervisor(Node):
                 '회피 이동 후 과거 관측 만료',
                 suppress_until_sensor_clear=True)
 
-    def _remember_marked_observation(self, msg: Range) -> None:
+    def _on_map_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        """Keep a lightweight map-frame pose for fixed 3D obstacle markers."""
+        orientation = msg.pose.pose.orientation
+        yaw = math.atan2(
+            2.0 * (
+                orientation.w * orientation.z
+                + orientation.x * orientation.y),
+            1.0 - 2.0 * (
+                orientation.y * orientation.y
+                + orientation.z * orientation.z),
+        )
+        position = msg.pose.pose.position
+        self._latest_map_pose = (float(position.x), float(position.y), yaw)
+
+    @staticmethod
+    def _clear_message(marked: Range) -> Range:
+        clear = Range()
+        clear.header.stamp = marked.header.stamp
+        clear.header.frame_id = marked.header.frame_id
+        clear.radiation_type = marked.radiation_type
+        clear.field_of_view = marked.field_of_view
+        clear.min_range = marked.min_range
+        clear.max_range = marked.max_range
+        clear.range = marked.max_range
+        return clear
+
+    @staticmethod
+    def _observation_endpoint(
+            distance_m: float,
+            pose: tuple[float, float, float] | None,
+    ) -> tuple[float, float] | None:
+        if pose is None or not math.isfinite(float(distance_m)):
+            return None
+        return (
+            pose[0] + float(distance_m) * math.cos(pose[2]),
+            pose[1] + float(distance_m) * math.sin(pose[2]),
+        )
+
+    def _observation_cone(
+            self, distance_m: float,
+            pose: tuple[float, float, float] | None,
+    ) -> ObstacleCone | None:
+        if pose is None or not math.isfinite(float(distance_m)):
+            return None
+        return ObstacleCone(
+            origin_x=pose[0] + self.ultrasonic_mount_x * math.cos(pose[2]),
+            origin_y=pose[1] + self.ultrasonic_mount_x * math.sin(pose[2]),
+            yaw=pose[2],
+            range_m=float(distance_m),
+            fov_rad=float(self._ultrasonic_fov),
+        )
+
+    @staticmethod
+    def _remember_cone(
+            cones: list[ObstacleCone], cone: ObstacleCone | None) -> bool:
+        """Keep at most three observations; report meaningful geometry change."""
+        if cone is None:
+            return False
+        if cones and not observation_pose_distinct(cones[-1], cone):
+            changed = abs(cones[-1].range_m - cone.range_m) >= 0.015
+            cones[-1] = cone
+            return changed
+        cones.append(cone)
+        del cones[:-3]
+        return True
+
+    def _remember_marked_observation(
+            self, msg: Range, *, measured_range_m: float | None) -> list[Range]:
+        """Store one latest Range cone per spatial obstacle cluster.
+
+        RangeSensorLayer otherwise retains every robot-relative cone. When the
+        robot approaches one object, those cones form a long artificial wall.
+        Clear the previous cone before replacing it with a nearby observation,
+        while keeping distinct obstacle clusters for the whole navigation task.
+        """
         if self._mark_anchor_pose is None:
             self._mark_anchor_pose = self._latest_odom_pose
         stored = Range()
@@ -384,44 +510,78 @@ class LowObstacleSupervisor(Node):
         stored.max_range = msg.max_range
         stored.range = msg.range
         pose = self._latest_odom_pose
-        if self._marked_observations:
-            previous_pose = self._marked_observation_poses[-1]
-            same_pose = (
-                pose is None or previous_pose is None
-                or not observation_pose_expired(
-                    previous_pose, pose,
-                    distance_m=0.01, yaw_rad=math.radians(2.0)))
-            if same_pose:
-                # 같은 부채꼴은 최신 stamp로 교체해야 TF 캐시 안에서 확실히
-                # 지울 수 있고, 정지 중 10Hz 메시지가 메모리에 쌓이지 않는다.
-                self._marked_observations[-1] = stored
-                self._marked_observation_poses[-1] = pose
-                return
+        measured_range = (
+            float(measured_range_m)
+            if measured_range_m is not None else float(stored.range))
+        endpoint_distance = measured_range + self.ultrasonic_mount_x
+        endpoint = self._observation_endpoint(endpoint_distance, pose)
+        map_endpoint = self._observation_endpoint(
+            endpoint_distance, self._latest_map_pose)
+        odom_cone = self._observation_cone(measured_range, pose)
+        map_cone = self._observation_cone(
+            measured_range, self._latest_map_pose)
+        index = matching_observation_cluster(
+            self._marked_observation_endpoints,
+            endpoint,
+            merge_distance_m=self.observation_merge_distance,
+        )
+        if index is not None:
+            clear = self._clear_message(self._marked_observations[index])
+            self._marked_observations[index] = stored
+            self._marked_observation_poses[index] = pose
+            self._marked_observation_endpoints[index] = endpoint
+            if map_endpoint is not None:
+                self._marked_observation_map_endpoints[index] = map_endpoint
+            if self._remember_cone(
+                    self._marked_observation_odom_cones[index], odom_cone):
+                self._marked_observation_odom_estimates[index] = (
+                    observation_overlap_estimate(
+                        self._marked_observation_odom_cones[index]))
+            if self._remember_cone(
+                    self._marked_observation_map_cones[index], map_cone):
+                self._marked_observation_map_estimates[index] = (
+                    observation_overlap_estimate(
+                        self._marked_observation_map_cones[index]))
+            return [clear]
         self._marked_observations.append(stored)
         self._marked_observation_poses.append(pose)
+        self._marked_observation_endpoints.append(endpoint)
+        self._marked_observation_map_endpoints.append(map_endpoint)
+        self._marked_observation_odom_cones.append([])
+        self._marked_observation_map_cones.append([])
+        self._remember_cone(self._marked_observation_odom_cones[-1], odom_cone)
+        self._remember_cone(self._marked_observation_map_cones[-1], map_cone)
+        self._marked_observation_odom_estimates.append(None)
+        self._marked_observation_map_estimates.append(None)
         # 종료 시 costmap 전체 초기화가 누락된 RangeSensorLayer 셀까지 지운다.
-        # 여기서는 메모리만 제한하고 주행 중 costmap 표식은 삭제하지 않는다.
+        # 여기서는 메모리만 제한하고, 서로 다른 장애물 군집은
+        # 현재 주행 작업이 끝날 때까지 유지한다.
         if len(self._marked_observations) > 32:
             self._marked_observations.pop(0)
             self._marked_observation_poses.pop(0)
+            self._marked_observation_endpoints.pop(0)
+            self._marked_observation_map_endpoints.pop(0)
+            self._marked_observation_odom_cones.pop(0)
+            self._marked_observation_map_cones.pop(0)
+            self._marked_observation_odom_estimates.pop(0)
+            self._marked_observation_map_estimates.pop(0)
+        return []
 
     def _clear_marked_observations(self, reason: str) -> None:
         if not self._marked_observations:
             self._mark_anchor_pose = None
             return
         for marked in self._marked_observations:
-            clear = Range()
-            clear.header.stamp = marked.header.stamp
-            clear.header.frame_id = marked.header.frame_id
-            clear.radiation_type = marked.radiation_type
-            clear.field_of_view = marked.field_of_view
-            clear.min_range = marked.min_range
-            clear.max_range = marked.max_range
-            clear.range = marked.max_range
-            self.range_pub.publish(clear)
+            self.range_pub.publish(self._clear_message(marked))
         count = len(self._marked_observations)
         self._marked_observations.clear()
         self._marked_observation_poses.clear()
+        self._marked_observation_endpoints.clear()
+        self._marked_observation_map_endpoints.clear()
+        self._marked_observation_odom_cones.clear()
+        self._marked_observation_map_cones.clear()
+        self._marked_observation_odom_estimates.clear()
+        self._marked_observation_map_estimates.clear()
         self._mark_anchor_pose = None
         self.get_logger().info(f'저상 장애물 과거 관측 {count}건 삭제: {reason}')
 
@@ -436,6 +596,18 @@ class LowObstacleSupervisor(Node):
 
         limit = (
             self._decision.forward_speed_limit_mps if self.enabled else None)
+        retained_limit = retained_cone_speed_limit(
+            self._latest_odom_pose,
+            self._marked_observation_odom_cones,
+            overlap_estimates=self._marked_observation_odom_estimates,
+            sensor_offset_m=self.ultrasonic_mount_x,
+            corridor_half_width_m=self.retained_corridor_half_width,
+            slow_distance_m=self.filter.config.slow_distance_m,
+            stop_distance_m=self.filter.config.stop_distance_m,
+            slow_speed_mps=self.filter.config.slow_speed_mps,
+        ) if self.enabled else None
+        if retained_limit is not None:
+            limit = retained_limit if limit is None else min(limit, retained_limit)
         output.linear.x = limit_forward_velocity(output.linear.x, limit)
         self.cmd_pub.publish(output)
 
@@ -497,14 +669,49 @@ class LowObstacleSupervisor(Node):
             # 현재 센서에서 잠깐 사라져도 이번 주행의 costmap에 보존된
             # 저상 장애물이 있으면 복구 후보 선택에는 계속 반영한다.
             'retained_active': bool(self._marked_observations),
+            # 관제 3D 지도는 이번 주행에서 보존 중인 장애물을 map 좌표에
+            # 고정해 표시한다. 주행이 끝나면 위 목록과 함께 빈 배열이 된다.
+            'retained_obstacles': [
+                {
+                    'observations': [
+                        {
+                            'x': round(cone.origin_x, 3),
+                            'y': round(cone.origin_y, 3),
+                            'yaw': round(cone.yaw, 4),
+                            'range_m': round(cone.range_m, 3),
+                            'fov_rad': round(cone.fov_rad, 4),
+                        }
+                        for cone in cones
+                    ],
+                    'estimate': (
+                        {
+                            'x': round(estimate[0], 3),
+                            'y': round(estimate[1], 3),
+                            'radius_m': round(estimate[2], 3),
+                        }
+                        if estimate is not None else None
+                    ),
+                }
+                for cones, estimate in zip(
+                    self._marked_observation_map_cones,
+                    self._marked_observation_map_estimates,
+                )
+                if cones
+            ],
             'distance_m': (
                 round(distance, 3)
                 if active and distance is not None else None),
             'fov_rad': round(float(self._ultrasonic_fov), 4),
-            # 관제 진단값일 뿐, 이 값만으로 저상 장애물을 해제하지 않는다.
+            'forward_confirmation_fov_rad': round(float(min(
+                self._ultrasonic_fov,
+                self.lidar_confirmation_fov,
+            )), 4),
+            # 90도 주변 LiDAR 최단 거리. 정면 15도가 비어 있고
+            # 주변에만 가까운 벽이 있을 때 코너 반사 판정에 사용한다.
             'wall_context_m': (
                 round(float(self._latest_wall_context_range), 3)
                 if self._latest_wall_context_range is not None else None),
+            'wall_reflection_likely': decision.wall_reflection_likely,
             'state': decision.state,
         }, ensure_ascii=False, separators=(',', ':'))
         self.observation_pub.publish(String(data=payload))

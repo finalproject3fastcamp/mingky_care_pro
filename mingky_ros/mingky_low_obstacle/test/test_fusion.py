@@ -6,20 +6,28 @@ from mingky_low_obstacle.fusion import (
     guide_navigation_segment_active,
     limit_forward_velocity,
     LowObstacleFilter,
+    matching_observation_cluster,
     NavigationScope,
     nearest_lidar_in_ultrasonic_cone,
+    nearest_lidar_in_ultrasonic_cones,
+    ObstacleCone,
+    observation_overlap_estimate,
+    observation_pose_distinct,
     observation_pose_expired,
+    retained_cone_speed_limit,
+    retained_obstacle_speed_limit,
 )
 import pytest
 
 
-def _update(filter_, sonar, lidar=0.80):
+def _update(filter_, sonar, lidar=0.80, wall_context=None):
     return filter_.update(
         sonar,
         min_range_m=0.02,
         max_range_m=0.97,
         lidar_range_m=lidar,
         lidar_fresh=True,
+        wall_context_range_m=wall_context,
     )
 
 
@@ -149,6 +157,158 @@ def test_near_wall_seen_by_lidar_never_blocks_forward():
         decision.forward_speed_limit_mps is None for decision in decisions)
 
 
+def test_off_axis_corner_wall_suppresses_ultrasonic_reflection():
+    filter_ = LowObstacleFilter()
+
+    decisions = [
+        _update(filter_, 0.049, lidar=2.14, wall_context=0.181)
+        for _ in range(8)
+    ]
+
+    assert all(decision.state == 'CLEAR' for decision in decisions)
+    assert all(decision.wall_reflection_likely for decision in decisions)
+    assert all(not decision.low_obstacle_confirmed for decision in decisions)
+
+
+def test_low_obstacle_is_kept_when_no_close_side_wall_explains_echo():
+    filter_ = LowObstacleFilter()
+
+    decisions = [
+        _update(filter_, 0.12, lidar=0.80, wall_context=0.80)
+        for _ in range(5)
+    ]
+
+    assert decisions[-1].state == 'SLOW'
+    assert not decisions[-1].wall_reflection_likely
+
+
+def test_real_low_obstacle_beyond_short_echo_guard_is_kept_near_wall():
+    filter_ = LowObstacleFilter()
+
+    decisions = [
+        _update(filter_, 0.28, lidar=0.80, wall_context=0.19)
+        for _ in range(5)
+    ]
+
+    assert decisions[-1].state == 'CONFIRMED'
+    assert decisions[-1].low_obstacle_confirmed
+    assert not decisions[-1].wall_reflection_likely
+
+
+def test_confirmed_obstacle_is_not_released_by_later_wall_context():
+    filter_ = LowObstacleFilter()
+    for _ in range(5):
+        decision = _update(filter_, 0.12, lidar=0.80, wall_context=0.80)
+    assert decision.low_obstacle_confirmed
+
+    decisions = [
+        _update(filter_, 0.05, lidar=0.80, wall_context=0.18)
+        for _ in range(5)
+    ]
+
+    assert all(item.low_obstacle_confirmed for item in decisions)
+    assert decisions[-1].state == 'SLOW'
+    assert not decisions[-1].wall_reflection_likely
+
+
+def test_spatial_observation_cluster_uses_nearest_match_only():
+    endpoints = [(0.10, 0.20), (0.80, 0.20)]
+
+    assert matching_observation_cluster(
+        endpoints, (0.17, 0.23), merge_distance_m=0.12) == 0
+    assert matching_observation_cluster(
+        endpoints, (0.72, 0.20), merge_distance_m=0.12) == 1
+    assert matching_observation_cluster(
+        endpoints, (0.45, 0.20), merge_distance_m=0.12) is None
+
+
+def _retained_limit(pose, endpoints):
+    return retained_obstacle_speed_limit(
+        pose,
+        endpoints,
+        sensor_offset_m=0.0267,
+        corridor_half_width_m=0.08,
+        slow_distance_m=0.25,
+        stop_distance_m=0.04,
+        slow_speed_mps=0.08,
+    )
+
+
+def test_retained_obstacle_keeps_slow_gate_during_sensor_dropout():
+    limit = _retained_limit((0.0, 0.0, 0.0), [(0.20, 0.01)])
+
+    assert limit is not None
+    assert 0.0 < limit < 0.08
+
+
+def test_retained_obstacle_stops_inside_safety_distance():
+    assert _retained_limit((0.0, 0.0, 0.0), [(0.06, 0.0)]) == 0.0
+
+
+def test_retained_obstacle_releases_after_robot_turns_to_detour():
+    endpoint = (0.18, 0.0)
+
+    assert _retained_limit((0.0, 0.0, 0.0), [endpoint]) is not None
+    assert _retained_limit((0.0, 0.0, math.pi / 2.0), [endpoint]) is None
+
+
+def test_retained_obstacle_outside_swept_width_does_not_block_detour():
+    assert _retained_limit((0.0, 0.0, 0.0), [(0.18, 0.12)]) is None
+
+
+def test_same_sensor_pose_replaces_evidence_instead_of_accumulating():
+    first = ObstacleCone(0.0, 0.0, 0.0, 0.20, 0.26)
+    noisy_repeat = ObstacleCone(0.01, 0.0, math.radians(2), 0.22, 0.26)
+    new_view = ObstacleCone(0.05, 0.0, math.radians(6), 0.21, 0.26)
+
+    assert not observation_pose_distinct(first, noisy_repeat)
+    assert observation_pose_distinct(first, new_view)
+
+
+def test_two_cones_narrow_to_an_overlap_candidate():
+    # Both observations describe the same object near (0.20, 0.0).
+    cones = [
+        ObstacleCone(0.0, 0.0, 0.0, 0.20, math.radians(20)),
+        ObstacleCone(0.0, 0.05, math.atan2(-0.05, 0.20),
+                     math.hypot(0.20, 0.05), math.radians(20)),
+    ]
+
+    estimate = observation_overlap_estimate(cones)
+
+    assert estimate is not None
+    assert estimate[0] == pytest.approx(0.20, abs=0.05)
+    assert estimate[1] == pytest.approx(0.0, abs=0.05)
+    assert 0.0 < estimate[2] <= 0.10
+
+
+def test_inconsistent_moving_observations_are_not_claimed_as_one_point():
+    cones = [
+        ObstacleCone(0.0, 0.0, 0.0, 0.12, math.radians(15)),
+        ObstacleCone(0.0, 0.08, 0.0, 0.40, math.radians(15)),
+    ]
+
+    assert observation_overlap_estimate(cones) is None
+
+
+def test_retained_cone_blocks_corridor_but_releases_after_detour_turn():
+    clusters = [[ObstacleCone(0.0267, 0.0, 0.0, 0.12, 0.26)]]
+    common = {
+        'sensor_offset_m': 0.0267,
+        'corridor_half_width_m': 0.08,
+        'slow_distance_m': 0.25,
+        'stop_distance_m': 0.04,
+        'slow_speed_mps': 0.08,
+    }
+
+    forward = retained_cone_speed_limit(
+        (0.0, 0.0, 0.0), clusters, **common)
+    turned = retained_cone_speed_limit(
+        (0.0, 0.0, math.pi / 2), clusters, **common)
+
+    assert forward is not None
+    assert turned is None
+
+
 def test_stale_lidar_does_not_clear_or_create_obstacle():
     filter_ = LowObstacleFilter()
 
@@ -215,6 +375,24 @@ def test_wider_lidar_context_reports_nearby_side_wall():
 
     assert narrow == pytest.approx(2.14)
     assert guarded == pytest.approx(0.18)
+
+
+def test_narrow_and_wall_cones_share_one_scan_transformation():
+    ranges = [0.18, 2.14, 0.18]
+    narrow, wall = nearest_lidar_in_ultrasonic_cones(
+        ranges,
+        angle_min=-math.pi / 4.0,
+        angle_increment=math.pi / 4.0,
+        range_min=0.02,
+        range_max=3.0,
+        scan_to_ultrasonic_x=0.0,
+        scan_to_ultrasonic_y=0.0,
+        scan_to_ultrasonic_yaw=0.0,
+        ultrasonic_fovs=(math.radians(15.0), math.radians(90.0)),
+    )
+
+    assert narrow == pytest.approx(2.14)
+    assert wall == pytest.approx(0.18)
 
 
 def test_forward_limiter_preserves_reverse_and_only_caps_forward():
