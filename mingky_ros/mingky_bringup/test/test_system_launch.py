@@ -13,6 +13,10 @@ ROBOT_LAUNCH_FILE = (
 ROBOT_INSTALL_SCRIPT = (
     Path(__file__).resolve().parents[3] / 'deploy' / 'robot' / 'install.sh'
 )
+PRIVATE_RUNTIME_SCRIPT = (
+    Path(__file__).resolve().parents[3]
+    / 'deploy' / 'robot' / 'bin' / 'mingky-private-runtime'
+)
 ROBOT_SYSTEMD_UNIT = (
     Path(__file__).resolve().parents[3]
     / 'deploy' / 'robot' / 'systemd' / 'mingky-system.service'
@@ -33,6 +37,20 @@ REAR_CAMERA_CONFIG_FILE = (
 
 def _root():
     return ET.parse(LAUNCH_FILE).getroot()
+
+
+def test_private_runtime_switch_is_ordered_and_observable() -> None:
+    script = PRIVATE_RUNTIME_SCRIPT.read_text(encoding='utf-8')
+
+    assert 'stop_order=(mingky-system mingky-gateway' in script
+    assert 'start_order=(fg-teleop mingky-gateway' in script
+    assert "grep -Eq '/home/pinky/[^/]+/mingky_care_pro'" in script
+    assert 'wait_for_topic "$validation_repo" /mode 20' in script
+    assert 'wait_for_topic "$validation_repo" /guide_manager/state 60' in script
+    assert 'transition_active_units "$private_repo"' in script
+    assert 'transition_active_units "$public_repo"' in script
+    assert r'robot_id:=\${MINGKY_ROBOT_ID}' in script
+    assert 'verify_private_exec_paths' in script
 
 
 def _argument(root, name: str):
