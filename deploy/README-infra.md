@@ -76,23 +76,29 @@ sudo ./install.sh pinky-01        # 2호기는 pinky-02
 ### 개인 브랜치 실기 시험
 
 평상시 모든 유닛은 공용 운영 경로 `/home/pinky/mingky_care_pro`를 사용한다.
-개인 브랜치를 시험할 때 전체 유닛을 개인 경로로 바꾸지 않는다. 시험 대상
-유닛에만 systemd drop-in을 두고, 시험이 끝나면 반드시 제거한다.
-
-예를 들어 `fg-teleop`만 `/home/pinky/wmk/mingky_care_pro`에서 시험한다.
+개인 브랜치를 시험할 때는 저장소의 전환 헬퍼를 개인 홈에 설치해 사용한다.
+손으로 drop-in을 추가하면 다른 팀원의 파일과 함께 적용되어 마지막 파일이
+실행 경로를 다시 덮을 수 있다.
 
 ```bash
-sudo systemctl edit fg-teleop.service
-# [Service]
-# ExecStart=
-# ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/wmk/mingky_care_pro/install/local_setup.bash && exec ros2 launch mingky_bringup teleop.launch.py robot_id:=${MINGKY_ROBOT_ID}'
+install -m 755 deploy/robot/bin/mingky-private-runtime \
+  /home/pinky/wmk/mingky-private-runtime
 
-sudo systemctl daemon-reload
-sudo systemctl restart fg-teleop.service
-systemctl cat fg-teleop.service
+# 개인 경로 전환. 실행 중이던 서비스만 다시 올린다.
+/home/pinky/wmk/mingky-private-runtime start
+
+# 실제 ExecStart와 상태 확인
+/home/pinky/wmk/mingky-private-runtime status
+
+# 시험 종료 후 공용 경로 복귀
+/home/pinky/wmk/mingky-private-runtime stop
 ```
 
-시험 종료 후에는 drop-in을 되돌리고 공용 운영 경로가 다시 보이는지 확인한다.
+`MINGKY_PRIVATE_REPO` 환경변수로 다른 개인 경로를 지정할 수 있다. 헬퍼는
+기존 개인 drop-in을 삭제하지 않고 `service-overrides-backup`에 백업한다.
+네 서비스를 완전히 내린 뒤 제어 모드 → 게이트웨이/브리지 → 통합
+시스템 순으로 올린다. `active` 표시만 믿지 않고 `/mode`와
+`/guide_manager/state` 실데이터를 받아야 성공한다.
 
 ```bash
 sudo rm /etc/systemd/system/fg-teleop.service.d/override.conf

@@ -681,6 +681,13 @@ class QrObservationIn(BaseModel):
     ] | None = None
     qr_visible: bool = False
     visual_visible: bool = False
+    # Guide Manager가 단조 시계로 계산한 실제 값. 구버전 로봇은 보내지 않는다.
+    patient_wait_remaining_sec: float | None = Field(
+        default=None,
+        ge=0,
+        le=300,
+        allow_inf_nan=False,
+    )
 
     @model_validator(mode="after")
     def visible_has_distance(self):
@@ -705,6 +712,7 @@ class QrObservationOut(BaseModel):
     ] | None = None
     qr_visible: bool = False
     visual_visible: bool = False
+    patient_wait_remaining_sec: float | None = None
     observed_at: datetime | None = None
 
 

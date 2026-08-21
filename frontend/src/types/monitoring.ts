@@ -334,6 +334,8 @@ export interface QrObservation {
   follow_source: 'none' | 'qr' | 'visual' | 'partial_near' | 'acquiring' | 'grace' | 'stale' | 'unknown' | null
   qr_visible: boolean
   visual_visible: boolean
+  /** Guide Manager가 계산한 실제 환자 대기 잔여 시간. 구버전 로봇은 null. */
+  patient_wait_remaining_sec: number | null
   observed_at: string | null
 }
 
