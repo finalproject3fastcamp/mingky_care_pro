@@ -115,6 +115,18 @@ export function PharmacyDashboard() {
   const [tray, setTray] = useState<TrayReading | null>(null);
   const [trayBusy, setTrayBusy] = useState(false);
   const [stepState, setStepState] = useState<StepState[]>([]);
+  // 포장 중 로봇이 도는 단계의 진행률. null 이면 막대를 그리지 않는다.
+  const [packProg, setPackProg] = useState<{ 이름: string; 값: number } | null>(
+    null,
+  );
+  // 수령 안내 — 모든 작업이 끝났을 때 뜨는 배너. 시연에서 제일 크게 보여야 하는
+  // 화면이라 진행·알림 카드보다 위, 화면 전체 폭으로 둔다. null 이면 안 뜬다.
+  const [pickup, setPickup] = useState<{
+    환자: string;
+    병명: string;
+    처방: string;
+    시각: string;
+  } | null>(null);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [job, setJob] = useState<JobState>("idle");
   const [stateText, setStateText] = useState("대기");
@@ -125,6 +137,8 @@ export function PharmacyDashboard() {
   rxRef.current = rx;
   const rxSelRef = useRef<string | null>(null);
   rxSelRef.current = rxSel;
+  const ptRef = useRef<Patient | null>(null);
+  ptRef.current = pt;
 
   const log = useCallback((msg: string, kind: LogKind = "") => {
     const d = new Date();
@@ -187,8 +201,12 @@ export function PharmacyDashboard() {
   // 부르지만, cleanup 이 EventSource 를 닫고 서버가 fan-out 이라 중복 이벤트도
   // 없다.
   useEffect(() => {
-    const es = new EventSource(progressUrl());
-    es.onmessage = (ev) => {
+    let es: EventSource | null = null;
+    let 마지막수신 = Date.now();
+    let 정리됨 = false;
+
+    const onMessage = (ev: MessageEvent) => {
+      마지막수신 = Date.now();
       let e: ProgressEvent;
       try {
         e = JSON.parse(ev.data) as ProgressEvent;
@@ -237,10 +255,18 @@ export function PharmacyDashboard() {
             });
           }
           setState("포장 중", "running");
+          setPackProg(null);
+          setPickup(null);
           log("포장을 시작합니다");
           break;
         case "포장단계":
+          // 다음 단계로 넘어갔으면 앞 단계의 막대는 지운다. 시뮬레이션 단계는
+          // 진행률이 없으므로 막대 없이 로그만 남는다.
+          setPackProg(null);
           log(`포장 — ${e.이름}`);
+          break;
+        case "포장진행":
+          setPackProg({ 이름: e.이름, 값: e.진행 });
           break;
         case "완료":
           if (pNow) {
@@ -251,16 +277,49 @@ export function PharmacyDashboard() {
             });
           }
           setState("완료", "done");
+          setPackProg(null);
+          setPickup({
+            환자: ptRef.current?.이름 ?? "",
+            병명: ptRef.current?.병명 ?? "",
+            처방: pNow?.설명 ?? "",
+            시각: e.시각,
+          });
           log(`모든 작업 완료 (${e.시각})`, "ok");
           break;
         case "중단":
           setState("중단됨", "bad");
+          setPackProg(null);
           log("중단: " + e.이유, "bad");
           break;
       }
     };
-    es.onerror = () => log("서버 연결이 끊겼습니다", "warn");
-    return () => es.close();
+    const 붙이기 = () => {
+      es = new EventSource(progressUrl());
+      마지막수신 = Date.now();
+      es.onmessage = onMessage;
+      es.onerror = () => log("서버 연결이 끊겼습니다", "warn");
+    };
+
+    // **조용히 죽은 스트림 워치독.** 백엔드를 재시작하면 vite 프록시가 클라이언트
+    // 소켓을 붙잡은 채 남아, 브라우저는 스트림이 열린 줄 안다 — onerror 도
+    // EventSource 자동 재연결도 오지 않고 화면만 영영 멈춘다. 새로고침 전까지
+    // 조제 단계도 포장 진행률도 올라오지 않는다.
+    //
+    // 서버가 20초마다 `핑` 을 보내므로, 45초(핑 두 번을 놓친 것) 넘게 아무것도
+    // 없으면 직접 다시 붙는다. 새로고침과 달리 고른 환자·처방은 그대로 남는다.
+    const 감시 = setInterval(() => {
+      if (정리됨 || Date.now() - 마지막수신 < 45_000) return;
+      log("진행 상황 연결이 조용히 끊겼습니다 — 다시 붙습니다", "warn");
+      es?.close();
+      붙이기();
+    }, 5_000);
+
+    붙이기();
+    return () => {
+      정리됨 = true;
+      clearInterval(감시);
+      es?.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -331,6 +390,7 @@ export function PharmacyDashboard() {
     const r = rx?.처방.find((p) => p.코드 === rxSel);
     if (!r) return;
     setStepState([]);
+    setPickup(null);
     try {
       const d = await startDispense({
         환자: {
@@ -379,6 +439,8 @@ export function PharmacyDashboard() {
       clearPatient();
       setRxSel(null);
       setStepState([]);
+      setPackProg(null);
+      setPickup(null);
       setLogs([]);
       setState("대기", "idle");
       await refreshTray();
@@ -675,6 +737,33 @@ export function PharmacyDashboard() {
           </div>
         </section>
 
+        {/* 수령 안내 — 시연의 마지막 장면. 진행·알림 카드 위에 화면 전체 폭으로
+            둔다. 멀리서도 환자 이름이 읽혀야 해서 이름을 제일 크게 쓴다. */}
+        {pickup && (
+          <section className="pharm-pickup" role="status" aria-live="polite">
+            <div className="mark">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            </div>
+            <div className="body">
+              {/* **"잘 담겼습니다" 로 쓰지 않는다.** ACT 는 성공 신호를 내놓지
+                  않아서 이 배너는 제한 시간이 지나면 무조건 뜬다 — 팔이 약통을
+                  놓쳐도 똑같이 뜬다. 로봇이 확인할 수 없는 것을 로봇 입으로
+                  보증하게 만들지 않는다. 성공 판정은 사람이 한다
+                  (omx/il/TASK.md 의 성공 기준). */}
+              <p className="head">조제 · 포장이 끝났습니다</p>
+              <p className="who">
+                <strong>{pickup.환자 || "환자"}</strong> 님, 약 찾아가세요
+              </p>
+              <p className="meta">
+                {[pickup.병명, pickup.처방].filter(Boolean).join(" · ")}
+                {pickup.시각 ? ` · ${pickup.시각}` : ""}
+              </p>
+            </div>
+          </section>
+        )}
+
         {/* 진행 · 알림 — 한 행에 나란히. 진행 상황이 주 시선, 알림은 로그 요약. */}
         <div
           className="pharm-grid pharm-g2 pharm-g2--tall"
@@ -703,6 +792,29 @@ export function PharmacyDashboard() {
                 ))
               )}
             </div>
+            {/* 로봇이 도는 단계의 진행 막대. 이것이 없으면 실제 모드에서 팔이
+                움직이는 내내(기본 60초) 화면이 멈춘 것처럼 보인다.
+                시간 기준이라 성공 여부가 아니다 — 그래서 % 를 크게 쓰지 않고
+                단계 이름 옆에 작게만 붙인다. */}
+            {packProg && (
+              <div className="pharm-packprog">
+                <div className="lb">
+                  <span>{packProg.이름}</span>
+                  <span className="pct">
+                    {Math.round(packProg.값 * 100)}%
+                  </span>
+                </div>
+                <div className="track">
+                  <div
+                    className="fill"
+                    style={{ width: `${Math.round(packProg.값 * 100)}%` }}
+                  />
+                </div>
+                <p className="pharm-hint">
+                  진행률은 시간 기준입니다 — 성공 여부는 눈으로 확인하세요.
+                </p>
+              </div>
+            )}
             <div
               className="pharm-actions"
               style={{ marginTop: "auto", paddingTop: 18 }}

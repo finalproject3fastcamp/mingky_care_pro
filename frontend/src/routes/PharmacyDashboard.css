@@ -589,6 +589,125 @@
   color: var(--accent-strong);
 }
 
+/* 수령 안내 — 시연의 마지막 장면. 다른 카드와 달리 화면 전체 폭을 쓰고 채도를
+   올린다. "이제 끝났다" 가 멀리서 한눈에 읽혀야 하기 때문이다. 색은 이 화면이
+   이미 쓰는 success 토큰 그대로 — 여기만 새 색을 들이지 않는다. */
+.pharm-pickup {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 30px 34px;
+  border-radius: 16px;
+  background: var(--success-bg);
+  border: 2px solid var(--success);
+  animation: pharm-pickup-in 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pharm-pickup-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+}
+.pharm-pickup .mark {
+  flex: none;
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  background: var(--success);
+  display: grid;
+  place-items: center;
+}
+.pharm-pickup .mark svg {
+  width: 42px;
+  height: 42px;
+  fill: none;
+  stroke: var(--surface);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pharm-pickup .body {
+  min-width: 0;
+}
+.pharm-pickup .head {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--success);
+}
+/* 환자 이름이 이 배너에서 제일 큰 글자다 — 약국 카운터에서 떨어져 보는 화면. */
+.pharm-pickup .who {
+  margin: 6px 0 0;
+  font-size: 2.5rem;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--text);
+}
+.pharm-pickup .who strong {
+  font-weight: 800;
+}
+.pharm-pickup .meta {
+  margin: 10px 0 0;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+@media (max-width: 720px) {
+  .pharm-pickup {
+    gap: 18px;
+    padding: 22px;
+  }
+  .pharm-pickup .mark {
+    width: 56px;
+    height: 56px;
+  }
+  .pharm-pickup .mark svg {
+    width: 30px;
+    height: 30px;
+  }
+  .pharm-pickup .who {
+    font-size: 1.8rem;
+  }
+}
+
+/* 포장 진행 막대 — 로봇이 도는 단계에만 뜬다. 스텝퍼 바로 아래에 붙여 어느
+   단계가 도는 중인지와 같은 시선에 두었다. */
+.pharm-packprog {
+  margin-top: 18px;
+  padding: 0 4px;
+}
+.pharm-packprog .lb {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+  margin-bottom: 8px;
+}
+.pharm-packprog .pct {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.pharm-packprog .track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.pharm-packprog .fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  /* 러너가 1초에 한 번 올린다. 그 사이를 이어 줘야 막대가 튀지 않는다. */
+  transition: width 1s linear;
+}
+.pharm-packprog .pharm-hint {
+  margin-top: 8px;
+}
+
 /* 알림 — 로그가 몇 개든 각 아이템은 자기 콘텐츠 만큼만 (grid 는 남는 공간을 행에
    배분해 아이템이 부풀어 보였다). align-content: start 로 위에서부터 자연 높이.
    scrollbar-gutter: stable 로 스크롤이 생겨도 오른쪽 콘텐츠가 밀리지 않는다. */

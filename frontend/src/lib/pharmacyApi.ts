@@ -89,11 +89,17 @@ export type ProgressEvent =
   | { 종류: '조제완료'; job: string; 시각: string }
   | { 종류: '포장시작'; job: string }
   | { 종류: '포장단계'; 이름: string }
+  // 로봇이 실제로 도는 단계("약 투입")만 진행률이 온다. 시간 기준이라 성공
+  // 여부가 아니다 — ACT 는 "끝났다" 를 알려주지 않는다 (omx/il/TASK.md).
+  | { 종류: '포장진행'; 이름: string; 진행: number }
   | { 종류: '완료'; job: string; 시각: string }
   | { 종류: '중단'; 이유: string }
   | { 종류: '중단요청' }
   | { 종류: '리셋' }
   | { 종류: '알림'; 글: string; 급?: 'warn' | 'bad' | 'ok' | '' }
+  // 20초마다 오는 하트비트. 화면에 그릴 것은 없고, **끊김 감지용**이다 —
+  // 자세한 이유는 PharmacyDashboard 의 워치독 주석.
+  | { 종류: '핑' }
 
 export async function getPrescriptions(): Promise<PrescriptionsResponse> {
   const { data } = await api.get<PrescriptionsResponse>('/pharmacy/prescriptions')
