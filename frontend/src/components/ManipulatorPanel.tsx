@@ -131,12 +131,12 @@ export function ManipulatorPanel({ robot }: { robot: ManipulatorRobot }) {
       </section>
 
       <section className="card manipulator-performance" aria-label="조제 성능">
-        <div className="card-title">조제 성능 — 직전 {detail.window} 사이클</div>
+        <div className="card-title">조제 성능 · 최근 {detail.window}사이클</div>
 
         {silent ? (
           <p className="manipulator-empty">
-            아직 조제 보고가 없습니다. 정본(§6.2)과 검증 경로는 서 있고,
-            OMX 게이트웨이가 붙으면 이 카드가 채워집니다.
+            아직 조제 기록이 없습니다. OMX 게이트웨이가 연결되면 이 자리에
+            조제 성능이 표시됩니다.
           </p>
         ) : (
           <>
@@ -187,7 +187,7 @@ export function ManipulatorPanel({ robot }: { robot: ManipulatorRobot }) {
             </div>
 
             <small>
-              pick 실패는 확률적 실패라 경고 등급입니다. 사람을 불러야 하는 것은
+              pick 실패는 가끔 생기는 일이라 경고로만 표시합니다. 사람이 나서야 하는 건
               사이클 포기와 서보 결함입니다.
             </small>
           </>

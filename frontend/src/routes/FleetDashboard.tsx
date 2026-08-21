@@ -59,7 +59,7 @@ function SloPanel({ slo }: { slo: SloWindow }) {
 
   return (
     <section className="card fleet-slo" aria-label="SLO 현황">
-      <div className="card-title">세션 완주율 — 직전 {slo.window}세션</div>
+      <div className="card-title">세션 완주율 · 최근 {slo.window}세션</div>
 
       <div className="fleet-slo__headline">
         <strong
@@ -100,7 +100,7 @@ function SloPanel({ slo }: { slo: SloWindow }) {
         </div>
         {slo.budget_exhausted && (
           <p className="fleet-budget__alert" role="alert">
-            예산을 다 썼습니다. §1.2 에 따라 기능 배포를 멈추고 원인부터 잡습니다.
+            예산을 다 썼습니다. 새 기능 배포를 멈추고 원인부터 잡아야 합니다.
           </p>
         )}
         {!slo.budget_exhausted && slo.budget_remaining === 0 && (
