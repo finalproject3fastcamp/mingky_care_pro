@@ -50,6 +50,10 @@ def test_private_runtime_switch_is_ordered_and_observable() -> None:
     assert 'transition_active_units "$private_repo"' in script
     assert 'transition_active_units "$public_repo"' in script
     assert r'robot_id:=\${MINGKY_ROBOT_ID}' in script
+    assert (
+        r'low_obstacle_fusion_enabled:='
+        r'\${MINGKY_LOW_OBSTACLE_FUSION_ENABLED:-true}' in script
+    )
     assert 'verify_private_exec_paths' in script
 
 
