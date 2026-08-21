@@ -76,10 +76,10 @@ export interface HospitalMap3DProps extends DiagLayers {
    * 환자 추종 상태. 로봇 쪽 `follow_state` 를 그대로 받는다.
    * 안 넘기면 이 화면은 예전과 똑같이 움직인다.
    */
-  follow?: Pick<
-    QrObservation,
-    'follow_state' | 'follow_distance' | 'follow_source'
-  > | null
+  follow?: (
+    Pick<QrObservation, 'follow_state' | 'follow_distance' | 'follow_source'>
+    & Partial<Pick<QrObservation, 'patient_wait_remaining_sec'>>
+  ) | null
   /**
    * 충전소로 돌아가는 중인지.
    *
@@ -1169,26 +1169,34 @@ export function HospitalMap3D({
    * 기다리는 것만 보여주면 보는 사람은 "언제까지 기다리나" 를 모른다.
    * 남은 시간이 보이면 **곧 무슨 일이 일어날지 알고 지켜볼 수 있다.**
    *
-   * 로봇은 남은 시간을 내보내지 않으므로 화면에서 센다. 그래서 **언제부터
-   * 세느냐가 전부다.** 화면에 오는 두 신호는 속도가 다르다.
+   * Guide Manager가 단조 시계로 계산한 실제 남은 시간을 우선 표시한다.
+   * 브라우저를 새로고침해도 로봇의 시계는 계속되므로 숫자가 20초로
+   * 되돌아가지 않는다.
    *
-   * | 신호 | 주기 | 여기서 맡는 일 |
+   * | 신호 | 여기서 맡는 일 |
    * |---|---|---|
-   * | `follow_state` | 0.5초 | **언제** 시작할지 |
-   * | `guide_robot_state` | 3초 | **세도 되는지** |
+   * | `patient_wait_remaining_sec` | 실제 남은 시간 |
+   * | `follow_state` | 기다리는 상태인지 |
+   * | `guide_robot_state` | 실제 복귀 시계가 도는지 |
    *
-   * 느린 쪽으로 시작을 잡으면 최대 3초를 늦게 세기 시작한다. 그러면 로봇이
-   * 이미 떠난 뒤에도 화면에 시간이 남아 있고, 숫자는 0 에 닿지도 못한 채
-   * 사라진다. 관객은 "2초 남았다" 는 화면을 보면서 로봇이 굴러가는 것을
-   * 본다. 그래서 시작은 빠른 쪽에서 잡고, 느린 쪽은 보여줄지 말지만 정한다.
+   * 배포 중 구버전 로봇은 새 값을 보내지 않는다. 그 경우에만 기존의
+   * 브라우저 타이머를 fallback으로 사용해 화면 자체가 사라지지 않게 한다.
    */
   const waitStartedAt = useRef<number | null>(null)
   const [waitSec, setWaitSec] = useState<number | null>(null)
+  const authoritativeWaitLeft =
+    followNow?.patient_wait_remaining_sec ?? null
 
   useEffect(() => {
     if (mapState !== 'waiting') {
       // 환자가 돌아오면 로봇도 `_patient_wait_started_at` 을 0 으로 되돌린다.
       // 짧게 여러 번 놓친 것을 합산하면 잘 따라오는데도 복귀해 버린다.
+      waitStartedAt.current = null
+      setWaitSec(null)
+      return
+    }
+    if (authoritativeWaitLeft !== null) {
+      // 로봇의 실제 시계가 있으면 브라우저가 별도 시계를 만들지 않는다.
       waitStartedAt.current = null
       setWaitSec(null)
       return
@@ -1210,7 +1218,7 @@ export function HospitalMap3D({
     tick()
     id = window.setInterval(tick, 250)
     return () => window.clearInterval(id)
-  }, [mapState, paused, waitLimitSec])
+  }, [authoritativeWaitLeft, mapState, paused, waitLimitSec])
 
   /**
    * `paused` 는 **"시계가 돈다" 보다 넓다.** 노드를 띄워 재 보니, 이미 멈춰
@@ -1221,7 +1229,10 @@ export function HospitalMap3D({
    * 지나도 상태가 안 바뀌면 **화면이 스스로 말을 바꾼다.** 예고한 일이 안
    * 일어났을 때 조용히 틀린 채로 있는 것보다 낫다.
    */
-  const waitLeft = waitSec === null ? null : waitLimitSec - waitSec
+  const fallbackWaitLeft = waitSec === null ? null : waitLimitSec - waitSec
+  const waitLeft = mapState === 'waiting' && paused
+    ? authoritativeWaitLeft ?? fallbackWaitLeft
+    : null
   const waitOverdue = waitLeft !== null && waitLeft <= -WAIT_OVERDUE_SEC
 
   /**

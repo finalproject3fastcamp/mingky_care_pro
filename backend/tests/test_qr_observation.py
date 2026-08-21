@@ -40,6 +40,7 @@ def test_patient_follow_status_is_returned(monkeypatch):
             follow_distance=0.18,
             follow_source='qr',
             qr_visible=True,
+            patient_wait_remaining_sec=12.5,
         )))
     output = asyncio.run(robots.get_qr_observation('pinky-01'))
 
@@ -48,6 +49,7 @@ def test_patient_follow_status_is_returned(monkeypatch):
     assert output.follow_source == 'qr'
     assert output.qr_visible is True
     assert output.visual_visible is False
+    assert output.patient_wait_remaining_sec == pytest.approx(12.5)
 
 
 def test_patient_acquisition_status_is_returned(monkeypatch):
@@ -98,6 +100,7 @@ def test_stale_observation_is_hidden():
         qr_visible=True,
         visual_visible=False,
         observed_at=datetime.now(timezone.utc) - timedelta(seconds=3),
+        patient_wait_remaining_sec=10.0,
     )
 
     output = asyncio.run(robots.get_qr_observation('pinky-01'))
@@ -107,6 +110,7 @@ def test_stale_observation_is_hidden():
     assert output.follow_state == 'waiting'
     assert output.follow_distance is None
     assert output.follow_source == 'stale'
+    assert output.patient_wait_remaining_sec is None
 
 
 def test_unconnected_robot_cannot_report(monkeypatch):

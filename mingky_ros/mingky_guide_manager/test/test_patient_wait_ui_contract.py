@@ -1,8 +1,8 @@
-"""관제 화면이 "복귀까지 몇 초" 를 세도 되는지 판단하는 근거를 못박는다.
+"""관제 화면이 "복귀까지 몇 초" 를 정확히 표시하는 계약을 못박는다.
 
-로봇은 남은 시간을 토픽으로 내보내지 않는다. 그래서 관제 화면은 직접 세고,
-**세도 되는지**를 `guide_robot_state` 가 `paused` 인지로 판단한다. 그 판단이
-성립하는 이유는 여기서 검증하는 한 가지뿐이다.
+로봇이 단조 시계로 계산한 실제 남은 시간을 `GuideState`로 보낸다.
+관제는 이 값을 쓰므로 새로고침해도 20초로 돌아가지 않는다. 대기 시계와
+`ROBOT_PAUSED` 상태의 쌍도 계속 검증한다.
 
     환자 대기 시계가 돌기 시작한다  <->  robot_state 가 ROBOT_PAUSED 가 된다
 
@@ -188,3 +188,30 @@ def test_wait_limit_default_matches_the_dashboard(node) -> None:
         assert fresh.patient_follow_wait_limit_sec == 20.0
     finally:
         fresh.destroy_node()
+
+
+def test_state_reports_authoritative_wait_remaining(node, monkeypatch) -> None:
+    """로봇의 시계를 실제 남은 시간으로 바꿔 보낸다."""
+    published = []
+    node.state_pub.publish = published.append
+    node.patient_follow_wait_limit_sec = 20.0
+    node._patient_wait_started_at = 100.0
+    monkeypatch.setattr(
+        'mingky_guide_manager.guide_manager_node.time.monotonic',
+        lambda: 107.5,
+    )
+
+    node._publish_state()
+
+    assert published[-1].patient_wait_remaining_sec == pytest.approx(12.5)
+
+
+def test_state_marks_wait_clock_inactive(node) -> None:
+    """대기 시계가 없으면 -1을 보내 구버전/null과 구분한다."""
+    published = []
+    node.state_pub.publish = published.append
+    node._patient_wait_started_at = 0.0
+
+    node._publish_state()
+
+    assert published[-1].patient_wait_remaining_sec == pytest.approx(-1.0)

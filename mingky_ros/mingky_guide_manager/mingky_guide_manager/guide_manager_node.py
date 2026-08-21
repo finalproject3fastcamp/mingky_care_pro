@@ -2209,6 +2209,13 @@ class GuideManager(Node):
         msg.battery_voltage = float(self.voltage)
         msg.returning_to_dock = self._dock_reason is not None
         msg.battery_percent = self.percent
+        msg.patient_wait_remaining_sec = -1.0
+        if self._patient_wait_started_at > 0.0:
+            msg.patient_wait_remaining_sec = float(max(
+                0.0,
+                self.patient_follow_wait_limit_sec
+                - (time.monotonic() - self._patient_wait_started_at),
+            ))
         self.state_pub.publish(msg)
 
 

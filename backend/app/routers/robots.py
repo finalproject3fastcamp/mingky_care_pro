@@ -699,6 +699,7 @@ async def post_qr_observation(
         follow_source=observation.follow_source,
         qr_visible=observation.qr_visible,
         visual_visible=observation.visual_visible,
+        patient_wait_remaining_sec=observation.patient_wait_remaining_sec,
     )
     return Response(status_code=204)
 
@@ -718,5 +719,6 @@ async def get_qr_observation(robot_id: str) -> QrObservationOut:
         follow_source=observation.follow_source,
         qr_visible=observation.qr_visible,
         visual_visible=observation.visual_visible,
+        patient_wait_remaining_sec=observation.patient_wait_remaining_sec,
         observed_at=observation.observed_at,
     )
