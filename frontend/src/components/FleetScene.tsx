@@ -206,6 +206,11 @@ export function FleetScene() {
         const omxYaw = mapYawToModel(PHARMACY_GOAL.yaw)
         OMX_IDS.forEach((id, i) => {
           const { root, joints } = buildArm(THREE)
+          // buildArm 은 카드 썸네일용이라 원본 크기로 맵에 올리면 방 높이만큼
+          // 커진다. 실제 데스크톱 팔(~0.5m)로 정규화해 핑키와 비율을 맞춘다.
+          const bb = new THREE.Box3().setFromObject(root)
+          const nativeH = bb.getSize(new THREE.Vector3()).y || 1
+          root.scale.setScalar(0.5 / nativeH)
           const offset = (i === 0 ? -1 : 1) * OMX_SPREAD_M
           root.position.set(base.u + offset, 0, -base.v)
           root.rotation.y = omxYaw
