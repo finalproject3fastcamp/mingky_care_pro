@@ -44,6 +44,10 @@ services:
       # 비어 있으면 원격 프록시를 쓰지 않고 기존 로컬/시뮬 동작 그대로다.
       MINGKY_OMX_DISPENSE_URL: ${MINGKY_OMX_DISPENSE_URL:-}
       MINGKY_OMX_PACK_URL: ${MINGKY_OMX_PACK_URL:-}
+      # 원격 프록시(위 URL)로 조제하려면 이 값이 1 이어야 _dispense_worker 가
+      # SIM 분기를 건너뛰고 _run_sequence→원격 러너로 간다.
+      PHARMACY_REAL: ${PHARMACY_REAL:-0}
+      PACK_REAL: ${PACK_REAL:-0}
     # 컨테이너의 127.0.0.1 은 컨테이너 자신이라, host 에 뜬 역터널 포트에 닿지
     # 못한다. host-gateway 로 host 를 가리켜 위 URL(host.docker.internal:2203x)이
     # 실제 host 의 터널 포트로 나가게 한다.

@@ -176,6 +176,103 @@ def test_remote_error_surfaces(monkeypatch):
     assert ok is False and "연결" in memo
 
 
+# ── 원격 프록시가 manipulator 사이클 이벤트를 직접 INSERT 한다 ────────────────────
+# 클라우드 백엔드는 MINGKY_OMX_ROBOT_ID 게이트(_report)가 꺼져 있어 이벤트가
+# 0건이었다. 원격 경로는 events 에 직접 넣어 관제 조제 패널을 채운다.
+# (_FakeConn/_FakePool/_emitted 는 아래 세션 절에서 정의 — 런타임에 해소된다.)
+def test_remote_dispense_emits_cycle_events(monkeypatch, _fast_sim):
+    """원격 조제가 policy_loaded → cycle_started → cycle_completed 를 남긴다.
+
+    robot_id 는 조제 스테이션(omx-01)로 태깅되고, pick_* 는 발행하지 않는다
+    (ACT 는 pick ground truth 를 주지 않는다)."""
+    monkeypatch.setenv("MINGKY_OMX_DISPENSE_URL", "http://box:8800")
+    rec = []
+    conn = _FakeConn(rec)
+    monkeypatch.setattr(pharmacy, "get_pool", lambda: _FakePool(conn))
+
+    def _fake_http(url, method, body=None):
+        if url.endswith("/dispense/start"):
+            return {"상태": "진행"}
+        if url.endswith("/dispense/state"):
+            return {"상태": "완료", "완료단계": 2}
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    pharmacy._job("omx-01")["id"] = "d42"
+    ok, memo = asyncio.run(pharmacy._run_sequence(["red", "green"], "xy", "omx-01"))
+    assert (ok, memo) == (True, "완료")
+
+    emitted = _emitted(rec)
+    codes = [c for c, _ in emitted]
+    assert codes == ["manipulator.policy_loaded",
+                     "manipulator.cycle_started",
+                     "manipulator.cycle_completed"]
+    assert not any("pick" in c for c in codes)        # pick 은 발행하지 않는다
+    # 조제 스테이션(omx-01)에 태깅된다. robot_id 는 args[1].
+    assert all(a[1] == "omx-01" for sql, a in rec if "events" in sql)
+
+    by = dict(emitted)
+    assert by["manipulator.cycle_started"] == {
+        "dispense_id": "d42", "medication_id": "red+green"}
+    assert by["manipulator.cycle_completed"]["dispense_id"] == "d42"
+    assert isinstance(by["manipulator.cycle_completed"]["duration_ms"], int)
+    # payload 키가 정본 스키마(event_codes.yaml)와 정확히 일치.
+    for code, payload in emitted:
+        assert set(payload) == set(_CODES[code]["payload"]), code
+
+
+def test_remote_dispense_error_emits_cycle_aborted(monkeypatch, _fast_sim):
+    """원격 조제가 실패하면 cycle_aborted(reason) 를 남긴다 — 완료는 없다."""
+    monkeypatch.setenv("MINGKY_OMX_DISPENSE_URL", "http://box:8800")
+    rec = []
+    conn = _FakeConn(rec)
+    monkeypatch.setattr(pharmacy, "get_pool", lambda: _FakePool(conn))
+
+    def _fake_http(url, method, body=None):
+        if url.endswith("/dispense/start"):
+            return {"오류": "러너에 연결하지 못했습니다"}
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    ok, _ = asyncio.run(pharmacy._run_sequence(["red"], "xy", "omx-01"))
+    assert ok is False
+    codes = [c for c, _ in _emitted(rec)]
+    assert "manipulator.cycle_aborted" in codes
+    assert "manipulator.cycle_completed" not in codes
+    aborted = dict(_emitted(rec))["manipulator.cycle_aborted"]
+    assert "연결" in aborted["reason"]
+    assert set(aborted) == set(_CODES["manipulator.cycle_aborted"]["payload"])
+
+
+def test_remote_pack_emits_cycle_events_on_pack_station(monkeypatch, _fast_sim):
+    """원격 포장은 포장 박스(omx-02)에 사이클 이벤트를 남긴다 (dispense_id …-pack)."""
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box2:8800")
+    rec = []
+    conn = _FakeConn(rec)
+    monkeypatch.setattr(pharmacy, "get_pool", lambda: _FakePool(conn))
+
+    def _fake_http(url, method, body=None):
+        if url.endswith("/pack/start"):
+            return {"상태": "진행"}
+        if url.endswith("/pack/state"):
+            return {"상태": "완료"}
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    pharmacy._job("omx-02")["id"] = "p7"
+    ok, _ = asyncio.run(pharmacy._run_pack("omx-02"))
+    assert ok is True
+
+    emitted = _emitted(rec)
+    codes = [c for c, _ in emitted]
+    assert "manipulator.cycle_started" in codes
+    assert "manipulator.cycle_completed" in codes
+    assert all(a[1] == "omx-02" for sql, a in rec if "events" in sql)
+    assert dict(emitted)["manipulator.cycle_started"]["dispense_id"] == "p7-pack"
+    for code, payload in emitted:
+        assert set(payload) == set(_CODES[code]["payload"]), code
+
+
 # ── 세션 연결 조제 (pharmacy_link) ────────────────────────────────────────────
 class _FakeConn:
     def __init__(self, recorder, fail_insert_job=False):
