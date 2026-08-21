@@ -10,9 +10,10 @@ def should_dim_display(
 ) -> bool:
     """Return whether the LCD may enter its low-power brightness.
 
-    Warnings, manual control and every active clinical session stay bright.  Only
-    an idle/charging robot with no session is dimmed.
+    Warnings, manual control and every active clinical session stay bright.  An
+    idle, charging or waiting robot with no session is dimmed.  ``waiting`` with
+    an active session stays bright because the session check runs first.
     """
     if evacuating or mode != 'auto' or session_state != 'none':
         return False
-    return robot_state in ('idle', 'charging')
+    return robot_state in ('idle', 'charging', 'waiting')
