@@ -67,7 +67,16 @@ def test_rotation_shim_wraps_mppi_for_heading_then_dynamic_avoidance() -> None:
     assert local_costmap['low_obstacle_layer']['clear_on_max_reading'] is True
     assert local_costmap['low_obstacle_layer']['no_readings_timeout'] == (
         pytest.approx(0.0))
-    assert 'low_obstacle_layer' not in global_costmap['plugins']
+    assert global_costmap['plugins'] == [
+        'static_layer', 'obstacle_layer', 'low_obstacle_layer',
+        'inflation_layer']
+    assert global_costmap['low_obstacle_layer']['plugin'] == (
+        'nav2_costmap_2d::RangeSensorLayer')
+    assert global_costmap['low_obstacle_layer']['topics'] == [
+        '/low_obstacle/range']
+    assert global_costmap['low_obstacle_layer']['clear_on_max_reading'] is True
+    assert global_costmap['low_obstacle_layer']['no_readings_timeout'] == (
+        pytest.approx(0.0))
     assert local_costmap['inflation_layer']['inflation_radius'] == pytest.approx(
         0.10)
 

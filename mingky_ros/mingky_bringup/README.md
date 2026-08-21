@@ -136,12 +136,24 @@ ros2 param set /navigation_manager low_obstacle_mode disabled
 
 별도로 `low_obstacle_fusion_enabled:=true`가 기본 적용됩니다. 전방 초음파를
 median 3개와 최근 5개 중 3개로 확인하고, 같은 부채꼴의 LiDAR보다 물체가 충분히
-가까울 때만 `/low_obstacle/range`에 발행합니다. 이 정보는 **local costmap에만**
-추가되어 MPPI와 기존 Adaptive Recovery가 함께 사용합니다. 같은 거리에서
-LiDAR도 물체를 보고 있으면 벽으로 판단해 저상 장애물로 확정하지 않습니다.
+가까울 때만 `/low_obstacle/range`에 발행합니다. 10cm 이상 떨어져 회피 공간이
+있는 확정 장애물은 local·global costmap의 임시 레이어에 함께 추가됩니다.
+MPPI가 가까이 피하지 못하면 Smac2D가 복도 단위 우회 경로를 다시 만들며,
+PGM/YAML 지도에는 저장되지 않습니다. 같은 거리에서 LiDAR도 물체를 보고 있으면
+벽으로 판단해 저상 장애물로 확정하지 않습니다.
+좌우 90° LiDAR 최솟값은 옆 벽 문맥을 관제에 설명하기 위한 진단값이며, 그
+값만으로 실제 저상 장애물을 무시하지 않습니다. 로봇이 등록 위치에서 10cm
+이동하거나 20도 회전하면 과거 부채꼴은 local·global costmap에서 즉시 지우고,
+계속 보이는 장애물만 현재 자세에서 다시 등록합니다. 같은 수명의 실시간
+부채꼴이 엔지니어·의료진 3D 지도에도 표시됩니다.
 15cm 이내에서는 전진을 0.08m/s로 제한하고, 저상 장애물 확정 후 7cm 이내가
 반복 확인되면 전진 성분만 막습니다. 회전과 후퇴는 기존 Nav2 판단을 유지합니다.
 관제는 이 자동 판정 상태만 표시하며 알고리즘을 선택하지 않습니다.
+
+10cm 미만 값은 footprint 바로 옆을 lethal cost로 만들어 모든 MPPI·복구
+궤적을 막을 수 있으므로 costmap에는 넣지 않고 기존 cone을 지웁니다. 이때도
+전진 속도 게이트는 유지되어 장애물 쪽으로 전진하지 않지만 회전과 Adaptive
+Recovery는 실행할 수 있습니다.
 
 센서 또는 융합 노드가 끊겨도 기존 LiDAR costmap을 `not current`로 만들지
 않습니다. 대신 `/low_obstacle/state`가 `STALE_RANGE` 또는 `STALE_LIDAR`를

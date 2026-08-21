@@ -17,12 +17,13 @@ class FusionConfig:
     clear_distance_m: float = 0.35
     slow_distance_m: float = 0.15
     stop_distance_m: float = 0.07
+    costmap_min_range_m: float = 0.10
     slow_speed_mps: float = 0.08
     lidar_margin_m: float = 0.15
     median_samples: int = 3
     confirmation_window: int = 5
     confirmations_required: int = 3
-    clear_confirmations: int = 3
+    clear_confirmations: int = 2
     near_window: int = 3
     near_confirmations: int = 2
 
@@ -31,6 +32,12 @@ class FusionConfig:
             raise ValueError('stop_distance_m은 slow_distance_m보다 작아야 합니다.')
         if not self.slow_distance_m < self.detect_distance_m:
             raise ValueError('slow_distance_m은 detect_distance_m보다 작아야 합니다.')
+        if not self.stop_distance_m < self.costmap_min_range_m:
+            raise ValueError(
+                'costmap_min_range_m은 stop_distance_m보다 커야 합니다.')
+        if self.costmap_min_range_m >= self.slow_distance_m:
+            raise ValueError(
+                'costmap_min_range_m은 slow_distance_m보다 작아야 합니다.')
         if self.clear_distance_m <= self.detect_distance_m:
             raise ValueError('clear_distance_m은 detect_distance_m보다 커야 합니다.')
         for value, name in (
@@ -107,6 +114,20 @@ def nearest_lidar_in_ultrasonic_cone(
     return min(candidates) if candidates else None
 
 
+def observation_pose_expired(
+        anchor: tuple[float, float, float],
+        current: tuple[float, float, float], *,
+        distance_m: float, yaw_rad: float) -> bool:
+    """Return whether a robot-relative obstacle observation became obsolete."""
+    dx = current[0] - anchor[0]
+    dy = current[1] - anchor[1]
+    yaw_delta = math.atan2(
+        math.sin(current[2] - anchor[2]),
+        math.cos(current[2] - anchor[2]),
+    )
+    return math.hypot(dx, dy) >= distance_m or abs(yaw_delta) >= yaw_rad
+
+
 class LowObstacleFilter:
     """Filter noisy sonar without inventing an exact obstacle bearing."""
 
@@ -146,14 +167,25 @@ class LowObstacleFilter:
             comparable
             and lidar_range_m >= filtered + self.config.lidar_margin_m)
         candidate = mismatch and filtered <= self.config.detect_distance_m
+        present_now = mismatch and filtered < self.config.clear_distance_m
+        raw_mismatch = bool(
+            comparable
+            and lidar_range_m >= (
+                ultrasonic_range_m + self.config.lidar_margin_m))
+        present_in_raw_sample = (
+            raw_mismatch
+            and ultrasonic_range_m < self.config.clear_distance_m)
         self._evidence.append(candidate)
         self._near_evidence.append(
             mismatch and ultrasonic_range_m <= self.config.stop_distance_m)
 
         if self._confirmed:
             # The wider clear threshold prevents chatter at the detection edge.
-            still_present = mismatch and filtered < self.config.clear_distance_m
-            self._clear_streak = 0 if still_present else self._clear_streak + 1
+            # Clear on two consecutive raw absences. Using the raw sample here
+            # makes the hold deterministic (about 0.2 s at the deployed 10 Hz),
+            # while the median handles distance and initial confirmation.
+            self._clear_streak = (
+                0 if present_in_raw_sample else self._clear_streak + 1)
             if self._clear_streak >= self.config.clear_confirmations:
                 self._confirmed = False
                 self._clear_streak = 0
@@ -167,24 +199,34 @@ class LowObstacleFilter:
         near = (
             self._confirmed
             and comparable
+            and present_now
             and len(self._near_evidence) >= self.config.near_confirmations
             and sum(self._near_evidence) >= self.config.near_confirmations)
 
         if not comparable:
             state = 'STALE_LIDAR'
-            output = filtered if self._confirmed else None
+            output = (
+                self._costmap_output(filtered, max_range_m)
+                if self._confirmed else None)
             limit = self._confirmed_limit(filtered)
         elif near:
             state = 'FORWARD_BLOCKED'
-            output = filtered
+            output = self._costmap_output(filtered, max_range_m)
             limit = 0.0
+        elif self._confirmed and not present_now:
+            # Keep the old costmap cone during the short clear hold. Publishing
+            # nothing avoids moving it to a noisy one-frame distance. The
+            # second raw absence reaches CLEAR and publishes max range.
+            state = 'UNCERTAIN'
+            output = None
+            limit = self._confirmed_limit(filtered)
         elif self._confirmed and filtered <= self.config.slow_distance_m:
             state = 'SLOW'
-            output = filtered
+            output = self._costmap_output(filtered, max_range_m)
             limit = self.config.slow_speed_mps
         elif self._confirmed:
             state = 'CONFIRMED'
-            output = filtered
+            output = self._costmap_output(filtered, max_range_m)
             limit = None
         elif candidate:
             state = 'UNCERTAIN'
@@ -227,6 +269,18 @@ class LowObstacleFilter:
         if distance_m <= self.config.slow_distance_m:
             return self.config.slow_speed_mps
         return None
+
+    def _costmap_output(self, distance_m: float, max_range_m: float) -> float:
+        """Keep a near echo from making the robot collide with its own layer.
+
+        A RangeSensorLayer endpoint immediately against the padded footprint
+        makes every MPPI trajectory start in collision.  The velocity gate
+        still handles that close range, while max-range explicitly clears the
+        cone so rotation and recovery remain executable.
+        """
+        if distance_m < self.config.costmap_min_range_m:
+            return max_range_m
+        return distance_m
 
 
 def limit_forward_velocity(
