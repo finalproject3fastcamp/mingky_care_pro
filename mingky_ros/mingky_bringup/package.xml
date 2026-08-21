@@ -18,6 +18,7 @@
   <exec_depend>mingky_guide_manager</exec_depend>
   <exec_depend>mingky_interfaces</exec_depend>
   <exec_depend>mingky_lcd_status</exec_depend>
+  <exec_depend>mingky_low_obstacle</exec_depend>
   <exec_depend>mingky_navigation_manager</exec_depend>
   <exec_depend>mingky_person_follow</exec_depend>
   <exec_depend>mingky_battery_guard</exec_depend>

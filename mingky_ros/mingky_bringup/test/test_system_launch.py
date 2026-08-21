@@ -235,6 +235,11 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
     assert 'low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled}' in unit
     assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
+    assert (
+        'low_obstacle_fusion_enabled:='
+        '${MINGKY_LOW_OBSTACLE_FUSION_ENABLED:-true}' in unit
+    )
+    assert 'MINGKY_LOW_OBSTACLE_FUSION_ENABLED=true' in env_example
 
 
 def test_patient_distance_guidance_is_enabled_for_test() -> None:
@@ -452,6 +457,9 @@ def test_systemd_owned_publishers_are_not_duplicated() -> None:
 def test_nav2_and_teleop_are_arbitrated_before_safety_gate() -> None:
     root = _root()
 
+    assert _argument(
+        root, 'low_obstacle_fusion_enabled').get('default') == 'true'
+
     navigation = next(
         item for item in root.findall('include')
         if item.get('file', '').endswith('/launch/bringup_launch.xml')
@@ -468,6 +476,26 @@ def test_nav2_and_teleop_are_arbitrated_before_safety_gate() -> None:
     }
     assert 'twist_mux.launch.py' in includes
     assert 'teleop.launch.py' not in includes
+    twist_mux_args = {
+        item.get('name'): item.get('value')
+        for item in includes['twist_mux.launch.py'].findall('arg')
+    }
+    assert twist_mux_args['output_topic'] == 'cmd_vel_low_obstacle_input'
+
+    low_obstacle = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'low_obstacle_supervisor'
+    )
+    assert low_obstacle.get('pkg') == 'mingky_low_obstacle'
+    low_obstacle_params = {
+        item.get('name'): item.get('value')
+        for item in low_obstacle.findall('param')
+    }
+    assert low_obstacle_params['cmd_vel_input_topic'] == (
+        'cmd_vel_low_obstacle_input')
+    assert low_obstacle_params['cmd_vel_output_topic'] == 'cmd_vel_safety_input'
+    assert low_obstacle_params['enabled'] == (
+        '$(var low_obstacle_fusion_enabled)')
 
     emergency_stop = next(
         item for item in root.findall('node')

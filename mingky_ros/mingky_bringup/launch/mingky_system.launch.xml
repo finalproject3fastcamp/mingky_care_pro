@@ -14,6 +14,8 @@
     <arg name="recovery_retry_delay_sec" default="0.3"/>
     <!-- 실로봇 검증 전까지 기존 주행을 유지한다. 지원값: disabled, sidestep -->
     <arg name="low_obstacle_mode" default="disabled"/>
+    <!-- 기존 목표 취소형 sidestep과 독립된 local costmap 기반 저상 장애물 대응. -->
+    <arg name="low_obstacle_fusion_enabled" default="true"/>
     <arg name="backend_url" default="http://192.168.0.10:8000"/>
 
     <arg name="start_robot_base" default="true"/>
@@ -89,7 +91,20 @@
 
     <!-- 자동주행과 수동조작 중 하나만 안전 게이트로 전달한다. 원격 조작의
          mode_manager와 teleop_limiter는 fg-teleop.service가 상시 실행한다. -->
-    <include file="$(find-pkg-share mingky_bringup)/launch/twist_mux.launch.py"/>
+    <include file="$(find-pkg-share mingky_bringup)/launch/twist_mux.launch.py">
+        <!-- 저상 장애물 감독을 통과한 뒤 기존 비상정지 단일 게이트로 보낸다. -->
+        <arg name="output_topic" value="cmd_vel_low_obstacle_input"/>
+    </include>
+
+    <!-- 낮은 물체는 목표를 즉시 취소하지 않고 Local RangeSensorLayer와 MPPI가
+         먼저 피한다. 7cm 이내의 반복 관측에서만 전진 성분을 0으로 제한하며,
+         제자리 회전과 안전한 후퇴 판단은 계속 허용한다. -->
+    <node pkg="mingky_low_obstacle" exec="low_obstacle_supervisor"
+          name="low_obstacle_supervisor" output="screen">
+        <param name="enabled" value="$(var low_obstacle_fusion_enabled)" type="bool"/>
+        <param name="cmd_vel_input_topic" value="cmd_vel_low_obstacle_input"/>
+        <param name="cmd_vel_output_topic" value="cmd_vel_safety_input"/>
+    </node>
 
     <!-- 환자 카드 인식은 안내 세션의 기본 입력이다. 카메라가 없는 개발 PC나
          Nav2 단독 시험에서는 start_qr_reader:=false 로 끈다. -->

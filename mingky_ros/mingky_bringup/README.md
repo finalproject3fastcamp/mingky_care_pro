@@ -135,9 +135,24 @@ ros2 param set /navigation_manager low_obstacle_mode disabled
 확인한 뒤 보고합니다.
 
 `sidestep`은 안내 목표나 Waypoint 시험 목표를 취소하고 좌우 탐색과 단계 전진을
-완료한 뒤 원래 목표를 다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며,
-LiDAR가 오래됐거나 초음파가 끊기면 직접 회피를 시작하지 않습니다.
-`RangeSensorLayer` 방식은 넓은 환경에서 별도 검증한 뒤 후속 모드로 추가합니다.
+완료한 뒤 원래 목표를 다시 보내는 기존 실험 모드입니다. 기본값은 계속
+`disabled`입니다.
+
+별도로 `low_obstacle_fusion_enabled:=true`가 기본 적용됩니다. 전방 초음파를
+median 3개와 최근 5개 중 3개로 확인하고, 같은 부채꼴의 LiDAR보다 물체가 충분히
+가까울 때만 `/low_obstacle/range`에 발행합니다. 이 정보는 **local costmap에만**
+추가되어 MPPI와 기존 Adaptive Recovery가 함께 사용합니다. 15cm 이내에서는
+전진을 0.08m/s로 제한하고, 7cm 이내가 반복 확인되면 전진 성분만 막습니다.
+회전과 후퇴는 기존 Nav2 판단을 유지합니다.
+
+센서 또는 융합 노드가 끊겨도 기존 LiDAR costmap을 `not current`로 만들지
+않습니다. 대신 `/low_obstacle/state`가 `STALE_RANGE` 또는 `STALE_LIDAR`를
+보고합니다. 실로봇 비교 시험에서만 다음과 같이 끌 수 있습니다.
+
+```bash
+ros2 launch mingky_bringup mingky_system.launch.xml \
+  low_obstacle_fusion_enabled:=false
+```
 
 카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
 카메라로 QR을 읽을 때는 소스만 바꿉니다.
@@ -148,9 +163,10 @@ ros2 launch mingky_bringup mingky_system.launch.xml qr_source:=usb
 ```
 
 Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`에서
-중재된 뒤 `cmd_vel_safety_input`으로 연결됩니다. 실제 `/cmd_vel`은 안전
-게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
-실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
+중재된 뒤 저상 장애물 감독을 거쳐 `cmd_vel_safety_input`으로 연결됩니다.
+실제 `/cmd_vel`은 기존 비상정지 안전 게이트만 발행합니다. 일반 운영에서
+`pinky_navigation bringup_launch.xml`을 직접 실행하면 이 연결을 우회하므로
+통합 launch를 사용하세요.
 
 원격 조작의 `teleop_bridge`는 `mingky-teleop-bridge.service`,
 `mode_manager`와 `teleop_limiter`는 `fg-teleop.service`가 상시 실행합니다.

@@ -31,6 +31,7 @@ def test_rotation_shim_wraps_mppi_for_heading_then_dynamic_avoidance() -> None:
     controller = params['controller_server']['ros__parameters']
     follow_path = controller['FollowPath']
     local_costmap = params['local_costmap']['local_costmap']['ros__parameters']
+    global_costmap = params['global_costmap']['global_costmap']['ros__parameters']
 
     assert follow_path['plugin'] == (
         'nav2_rotation_shim_controller::RotationShimController')
@@ -55,9 +56,18 @@ def test_rotation_shim_wraps_mppi_for_heading_then_dynamic_avoidance() -> None:
     assert controller['failure_tolerance'] == pytest.approx(1.0)
     assert local_costmap['update_frequency'] == pytest.approx(5.0)
     assert local_costmap['publish_frequency'] == pytest.approx(1.0)
-    assert local_costmap['plugins'] == ['obstacle_layer', 'inflation_layer']
+    assert local_costmap['plugins'] == [
+        'obstacle_layer', 'low_obstacle_layer', 'inflation_layer']
     assert local_costmap['obstacle_layer']['plugin'] == (
         'nav2_costmap_2d::ObstacleLayer')
+    assert local_costmap['low_obstacle_layer']['plugin'] == (
+        'nav2_costmap_2d::RangeSensorLayer')
+    assert local_costmap['low_obstacle_layer']['topics'] == [
+        '/low_obstacle/range']
+    assert local_costmap['low_obstacle_layer']['clear_on_max_reading'] is True
+    assert local_costmap['low_obstacle_layer']['no_readings_timeout'] == (
+        pytest.approx(0.0))
+    assert 'low_obstacle_layer' not in global_costmap['plugins']
     assert local_costmap['inflation_layer']['inflation_radius'] == pytest.approx(
         0.10)
 
