@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { FleetConfigCard } from '../components/FleetConfigCard'
 import { ManipulatorPanel } from '../components/ManipulatorPanel'
+import { OmxModel } from '../components/OmxModel'
 import { PinkyModel } from '../components/PinkyModelCard'
 import { TopicWatchCard } from '../components/TopicWatchCard'
 import { getFleetConfig, getRobots, sendOrder, type RobotCommand } from '../lib/api'
@@ -162,11 +163,11 @@ export function SystemDashboard() {
             <button key={robot.robot_id} type="button"
               className={`waypoint-robot-card${robot.robot_id === selectedRobotId ? ' selected' : ''}`}
               onClick={() => setSelectedRobotId(robot.robot_id)}>
-              {/* OMX 3D 모델이 없다. 핑키 모델을 팔 자리에 놓으면 어느 쪽을
-                  고르는지가 화면에서 거짓이 된다. */}
+              {/* 주행 로봇은 핑키 glb, 조제 로봇팔은 절차적 OMX 모델을 얹는다.
+                  OmxModel 은 실패 시 내부에서 "OMX" 글자로 폴백한다. */}
               {isMobile(robot)
                 ? <PinkyModel />
-                : <span className="waypoint-robot-card__glyph">OMX</span>}
+                : <OmxModel />}
               <span className="waypoint-robot-card__content">
                 <span className="waypoint-robot-card__top">
                   <strong>{robot.display_name}</strong>
