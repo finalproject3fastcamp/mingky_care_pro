@@ -13,7 +13,10 @@ import { LazyHospitalMap3D, type PeerMarker } from '../components/LazyHospitalMa
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
-import { getActiveSessions, getBatteryForecast, getRobots, sendOrder } from '../lib/api'
+import {
+  getActiveSessions, getBatteryForecast, getFleetCoordination, getRobots,
+  sendOrder,
+} from '../lib/api'
 import type { BatteryForecast } from '../lib/api'
 import { deriveCurrentDestination, deriveRobotState } from '../lib/derivedStatus'
 import { toNotification } from '../lib/eventMessages'
@@ -110,6 +113,9 @@ export function MedicalDashboard() {
   // 진단 레이어(라이다·파티클)는 얹지 않는다. 두 대분을 겹쳐 그리면 어느
   // 점이 누구 것인지 알 수 없어 위치추정 판정 자체가 불가능해진다.
   const fleet = useFleetPoses(Boolean(selectedRobotId))
+  // 왜 멈췄는가. 위치와 달리 초당 몇 번씩 바뀌는 값이 아니라 폴링으로 족하다.
+  const coordination = usePolling(
+    (signal) => getFleetCoordination({ signal }), POLL_MS)
   const [fleetNow, setFleetNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setFleetNow(Date.now()), PEER_CLOCK_MS)
@@ -339,6 +345,10 @@ export function MedicalDashboard() {
                 estop={teleop.appliedMode === 'estop'}
                 selected
                 peers={peers}
+                coordination={
+                  (coordination.data ?? []).find(
+                    (c) => c.robot_id === selectedRobotId) ?? null
+                }
                 robotId={selectedRobotId}
                 returning={selectedRobot?.returning_to_dock ?? false}
                 paused={selectedRobot?.guide_robot_state === 'paused'}

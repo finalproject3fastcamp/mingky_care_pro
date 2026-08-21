@@ -192,6 +192,41 @@ def decision_message(decision: fleet_reserve.Decision,
     return message
 
 
+async def coordination() -> list[dict]:
+    """화면이 "왜 멈췄나" 를 말할 수 있게 지금의 판정을 펴 준다.
+
+    로봇에게 되묻지 않는다 — 이 판정을 만든 것이 서버다. 로봇을 거쳐
+    돌아오게 하면 같은 사실이 두 경로로 흘러 갈라지고, 그때 어느 쪽이
+    맞는지 판단할 근거가 없다 (§7.3 과 같은 규칙).
+
+    붙어 있지 않은 로봇도 목록에 남긴다. 다만 `linked=False` 로 표시해
+    **화면이 "양보 중" 이라고 말하지 못하게** 한다 — 판정을 못 받은 로봇은
+    그냥 달리고 있고, 서버 혼자 그렇게 생각하고 있을 뿐이다.
+    """
+    plan = current_plan()
+    choices = await room_choices()
+    linked = set(_links)
+
+    out = []
+    for robot_id in sorted(set(plan.decisions) | set(choices) | linked):
+        decision = plan.decisions.get(robot_id)
+        choice = choices.get(robot_id)
+        segments = sorted(decision.holds) if decision else []
+        out.append({
+            "robot_id": robot_id,
+            "linked": robot_id in linked,
+            "proceed": decision.proceed if decision else True,
+            "reason": decision.reason if decision else None,
+            "blocked_by": decision.blocked_by if decision else None,
+            "segment": segments[0] if segments else None,
+            "reordered": bool(choice and choice.reordered),
+            "next_visit": choice.visit_name if choice else None,
+            "skipped_visit": choice.skipped_visit if choice else None,
+            "room_blocked_by": choice.blocked_by if choice else None,
+        })
+    return out
+
+
 async def push(now: datetime | None = None) -> int:
     """붙어 있는 로봇들에게 현재 판정을 보낸다. 보낸 대수를 돌려준다."""
     if not _links:

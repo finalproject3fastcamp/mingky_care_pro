@@ -28,8 +28,8 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import fleet_pose
-from ..schemas import FleetPosesOut
+from .. import fleet_link, fleet_pose
+from ..schemas import FleetCoordinationSetOut, FleetPosesOut
 
 router = APIRouter(prefix="/fleet", tags=["fleet"])
 log = logging.getLogger("mingky")
@@ -43,6 +43,20 @@ async def get_fleet_poses() -> FleetPosesOut:
     아래 스트림을 쓴다. 이 경로는 첫 로딩·진단·테스트용이다.
     """
     return FleetPosesOut(**fleet_pose.snapshot_message())
+
+
+@router.get("/coordination", response_model=FleetCoordinationSetOut)
+async def get_fleet_coordination() -> FleetCoordinationSetOut:
+    """지금 누가 왜 멈춰 있고, 누구의 방문 순서가 바뀌었는가.
+
+    화면이 "그냥 멈춰 있다" 대신 "핑키 2호가 지날 때까지 기다립니다" 를 말할
+    수 있게 하는 값이다. 로봇이 멈춘 이유가 안 보이면 의료진은 고장으로
+    읽고 사람을 부른다 — 그 호출 하나하나가 §1.1 의 개입이다.
+
+    폴링용이다. 위치와 달리 초당 몇 번씩 바뀌는 값이 아니라, 화면의 다른
+    상태(`/robots`)와 같은 주기로 물으면 된다.
+    """
+    return FleetCoordinationSetOut(robots=await fleet_link.coordination())
 
 
 @router.websocket("/poses/stream")

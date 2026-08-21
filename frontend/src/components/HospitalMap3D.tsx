@@ -49,7 +49,7 @@ import { MapRearCam } from './MapRearCam'
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
 import { ROBOT_STALE_COLOR } from '../lib/robotColors'
-import type { QrObservation } from '../types/monitoring'
+import type { FleetCoordination, QrObservation } from '../types/monitoring'
 import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
@@ -103,6 +103,13 @@ export interface HospitalMap3DProps extends DiagLayers {
   selected?: boolean
   /** `pose` 외에 함께 그릴 로봇들. 전체 위치 화면은 전부 여기로 넘긴다. */
   peers?: PeerMarker[]
+  /**
+   * 이 로봇에 대한 지금의 군집 판정. 없으면 예전과 똑같이 움직인다.
+   *
+   * 로봇이 멈춘 이유가 안 보이면 의료진은 고장으로 읽고 사람을 부른다 —
+   * 그 호출 하나하나가 §1.1 의 개입이라 완주율을 깎는다.
+   */
+  coordination?: FleetCoordination | null
   /**
    * 이 지도가 무엇을 하는 화면인가.
    *
@@ -172,7 +179,8 @@ export interface HospitalMap3DProps extends DiagLayers {
   paused?: boolean
 }
 
-type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
+type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'yielding'
+  | 'rerouted' | 'returning' | 'estop'
 
 /**
  * 화면에 보이는 상태는 여섯 개뿐이다. 세 가지가 각자 한 가지만 맡는다.
@@ -210,6 +218,11 @@ const MAP_STATE: Record<
   escort: { text: '안내 중', tone: 'normal', pulseMs: null, ring: false },
   slow: { text: '감속 중', tone: 'slow', pulseMs: null, ring: false },
   waiting: { text: '기다리는 중', tone: 'wait', pulseMs: 2000, ring: false },
+  // 군집 조정. 장애가 아니라 로봇이 스스로 양보한 것이라 tone 도 경보가
+  // 아니다 — 붉게 칠하면 의료진이 고장으로 읽고 사람을 부르는데, 그 호출
+  // 하나하나가 §1.1 의 개입이다.
+  yielding: { text: '길 양보 중', tone: 'wait', pulseMs: 2000, ring: false },
+  rerouted: { text: '순서 변경', tone: 'normal', pulseMs: null, ring: false },
   returning: { text: '충전소로 복귀 중', tone: 'wait', pulseMs: null, ring: true },
   estop: { text: '비상정지', tone: 'alarm', pulseMs: 500, ring: false },
 }
@@ -416,6 +429,7 @@ export function HospitalMap3D({
   waitLimitSec = 20,
   paused = false,
   peers = [],
+  coordination = null,
   variant = 'control',
 }: HospitalMap3DProps) {
   const overview = variant === 'overview'
@@ -1214,12 +1228,22 @@ export function HospitalMap3D({
   const mapState: MapState = useMemo(() => {
     if (estop) return 'estop'
     if (returning) return 'returning'
-    if (!pose) return 'idle'
+    // 위치를 모른다고 '대기' 로 떨어지면 안 된다 — **멈춘 이유를 아는데도**
+    // 화면이 모른 척하게 된다. 조작 브리지가 죽어도 군집 링크는 살아 있을 수
+    // 있고, 그때가 바로 의료진이 이유를 알아야 하는 상황이다.
+    const held = Boolean(coordination?.linked && !coordination.proceed)
+    if (!pose && !held) return 'idle'
+    // 환자 대기가 군집 양보보다 위다. 둘 다 걸려 있으면 환자가 뒤처진 것이
+    // 더 급한 사실이고, 그쪽은 시간이 지나면 안내를 접는다.
     if (followNow?.follow_state === 'waiting' && followNow.follow_source !== 'grace') return 'waiting'
+    if (held) return 'yielding'
     if (followNow?.follow_state === 'slow') return 'slow'
+    // 순서가 바뀐 것은 상태가 아니라 사실이라, 안내 중일 때만 곁들여 보여준다.
+    if (coordination?.reordered && followNow?.follow_state === 'normal') return 'rerouted'
     if (followNow?.follow_state === 'normal') return 'escort'
     return 'idle'
-  }, [estop, returning, pose, followNow?.follow_state, followNow?.follow_source])
+  }, [estop, returning, pose, followNow?.follow_state, followNow?.follow_source,
+      coordination])
 
   /**
    * 박동을 정하는 **유일한 곳**.
@@ -1644,6 +1668,15 @@ export function HospitalMap3D({
         <span className={`map3d__state map3d__state--${MAP_STATE[mapState].tone}`}>
           <i aria-hidden="true" />
           {MAP_STATE[mapState].text}
+          {/* 누구를/무엇을 기다리는지가 없으면 "길 양보 중" 은 여전히
+              "왜인지 모르게 멈춰 있다" 다. 상대 이름이 붙어야 의료진이
+              기다릴지 손댈지 판단할 수 있다. */}
+          {mapState === 'yielding' && coordination?.blocked_by && (
+            <b>{coordination.blocked_by} 먼저</b>
+          )}
+          {mapState === 'rerouted' && coordination?.skipped_visit && (
+            <b>{coordination.skipped_visit} 사용 중 · {coordination.next_visit} 먼저</b>
+          )}
           {/* 거리는 실제로 환자를 잡고 있을 때만 쓴다. 놓친 뒤에도 마지막
               숫자가 남아 있으면 아직 보고 있는 것으로 잘못 읽힌다. */}
           {typeof followNow?.follow_distance === 'number' &&

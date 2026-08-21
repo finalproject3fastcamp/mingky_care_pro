@@ -376,6 +376,15 @@
 }
 
 /* 스텝 아래 시간 라인 ("10:23 완료 · QR"). name 과 붙여서 표시. */
+/* 계획과 실제 방문 순서가 갈렸을 때만 붙는다 (013). 늘 보이는 번호는
+   정보가 아니므로, 계획대로 간 단계에는 아무것도 안 나온다. */
+.step-reorder {
+  font-size: 0.7rem;
+  color: var(--warning);
+  text-align: center;
+  margin-top: -2px;
+}
+
 .step-time {
   font-size: 0.75rem;
   color: var(--text-subtle);

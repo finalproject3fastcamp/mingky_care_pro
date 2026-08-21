@@ -81,7 +81,7 @@ _OUTPATIENT_STEPS = ["수납", "약국", "약수령"]
 _INPATIENT_STEPS = ["병동"]
 
 _STEPS_SQL = """
-    SELECT step_order, visit_name, arrived_at, completed_at
+    SELECT step_order, visit_name, arrived_at, completed_at, visit_seq
     FROM session_steps
     WHERE session_id = $1
     ORDER BY step_order

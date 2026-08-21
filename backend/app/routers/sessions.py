@@ -54,7 +54,7 @@ _ONE_SQL = f"""
 
 _STEPS_SQL = """
     SELECT session_id, step_order, visit_name,
-           arrived_at, completed_at, completed_source
+           arrived_at, completed_at, completed_source, visit_seq
     FROM session_steps
     WHERE session_id = ANY($1::bigint[])
     ORDER BY session_id, step_order
@@ -109,6 +109,7 @@ def _group_steps(step_rows) -> dict[int, list[SessionStep]]:
                 arrived_at=row["arrived_at"],
                 completed_at=row["completed_at"],
                 completed_source=row["completed_source"],
+                visit_seq=row["visit_seq"],
             )
         )
     return grouped

@@ -41,9 +41,13 @@ from dataclasses import dataclass
 # 로봇별로 나눠 묻지 않고 한 번에 가져온다. 판정은 두 대를 같이 봐야 하고,
 # 로봇마다 따로 물으면 그 사이에 상대 세션이 바뀔 수 있다.
 CURRENT_SQL = """
-    SELECT gs.robot_id, gs.session_id, cs.visit_name
+    SELECT gs.robot_id, gs.session_id,
+           (SELECT ss.visit_name FROM session_steps ss
+            WHERE ss.session_id = gs.session_id
+              AND ss.completed_at IS NULL
+              AND ss.visit_seq IS NOT NULL
+            ORDER BY ss.visit_seq DESC LIMIT 1) AS visit_name
     FROM guidance_sessions gs
-    LEFT JOIN session_current_step cs USING (session_id)
     WHERE gs.ended_at IS NULL
 """
 
@@ -144,11 +148,23 @@ def summarize(current_rows, remaining_rows) -> dict[str, Choice]:
             started=bool(row["started"]),
         ))
 
+    # **차례대로 고른다.** 한꺼번에 각자 고르게 하면 아직 출발 안 한 두 대가
+    # 서로 상대가 X-ray 를 쓸 것으로 보고 **둘 다 피한다** — 실측에서 정확히
+    # 그렇게 나왔다(둘 다 reordered=True 인데 X-ray 는 비어 있었다).
+    #
+    # 그래서 앞사람이 고른 방은 뒷사람에게 '차 있음' 이 된다. 순서는
+    # robot_id 순으로 고정한다. 임의지만 **결정적인** 것이 중요하다 —
+    # 서로 양보하다 둘 다 멈추는 것을 막는 것이 규칙의 목적이다
+    # (`fleet_reserve._priority` 와 같은 판단).
     out: dict[str, Choice] = {}
-    for robot_id, session_id in session_of.items():
-        # 남이 쓰는 방만 센다. 자기가 쓰는 방을 차 있다고 보면 자기 목적지를
-        # 자기가 막아 영원히 순서를 바꾸게 된다.
-        busy = {visit: owner for owner, visit in busy_by_robot.items()
+    claimed = dict(busy_by_robot)
+    for robot_id in sorted(session_of):
+        busy = {visit: owner for owner, visit in claimed.items()
+                # 자기가 쓰는 방을 차 있다고 보면 자기 목적지를 자기가 막아
+                # 영원히 순서를 바꾸게 된다.
                 if owner != robot_id}
-        out[robot_id] = choose_next(remaining.get(session_id, []), busy)
+        choice = choose_next(remaining.get(session_of[robot_id], []), busy)
+        out[robot_id] = choice
+        if choice.visit_name:
+            claimed[robot_id] = choice.visit_name
     return out

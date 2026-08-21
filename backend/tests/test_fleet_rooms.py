@@ -11,7 +11,7 @@
   4. 전부 차 있으면 계획대로 두고 기다린다 (갈 곳 없음과 기다림은 다르다)
 """
 
-from app.fleet_rooms import Choice, Step, choose_next
+from app.fleet_rooms import Choice, Step, choose_next, summarize
 
 
 def steps(*names, started_at=None):
@@ -133,3 +133,65 @@ def test_the_seeded_conditions_actually_collide():
     assert firsts, "examination_steps 시드를 못 읽었다"
     assert {visit for _, visit in firsts} == {'X-ray'}, (
         f"1단계가 X-ray 만이 아니다: {firsts}")
+
+
+# ------------------------------------------------------------- 여러 대 배정
+
+class Row(dict):
+    """asyncpg Record 처럼 대괄호로 읽히기만 하면 된다."""
+    __getattr__ = dict.get
+
+
+def test_two_idle_robots_do_not_both_avoid_the_same_room():
+    """실측으로 잡은 버그 — 서로 양보하다 둘 다 X-ray 를 피했다.
+
+    아직 아무도 출발하지 않았으면 X-ray 는 비어 있다. 그런데 각자 따로
+    판정하면 둘 다 '상대가 쓸 것' 으로 보고 피한다. 한 대는 가야 한다.
+    """
+    current = [Row(robot_id='pinky-01', session_id=1, visit_name=None),
+               Row(robot_id='pinky-02', session_id=2, visit_name=None)]
+    remaining = [
+        Row(session_id=1, step_order=1, visit_name='X-ray', started=False),
+        Row(session_id=1, step_order=2, visit_name='임상병리실', started=False),
+        Row(session_id=2, step_order=1, visit_name='X-ray', started=False),
+        Row(session_id=2, step_order=2, visit_name='CT', started=False),
+    ]
+    out = summarize(current, remaining)
+
+    assert out['pinky-01'].visit_name == 'X-ray', '아무도 X-ray 에 안 갔다'
+    assert out['pinky-01'].reordered is False
+    assert out['pinky-02'].visit_name == 'CT'
+    assert out['pinky-02'].reordered is True
+    assert out['pinky-02'].blocked_by == 'pinky-01'
+
+
+def test_a_started_room_is_busy_for_the_other_robot():
+    """이미 출발한 방은 확실히 차 있다."""
+    current = [Row(robot_id='pinky-01', session_id=1, visit_name='X-ray'),
+               Row(robot_id='pinky-02', session_id=2, visit_name=None)]
+    remaining = [
+        Row(session_id=1, step_order=1, visit_name='X-ray', started=True),
+        Row(session_id=2, step_order=1, visit_name='X-ray', started=False),
+        Row(session_id=2, step_order=2, visit_name='CT', started=False),
+    ]
+    out = summarize(current, remaining)
+
+    assert out['pinky-01'].visit_name == 'X-ray'
+    assert out['pinky-02'].visit_name == 'CT'
+    assert out['pinky-02'].skipped_visit == 'X-ray'
+
+
+def test_assignment_is_deterministic():
+    """순서를 바꿔 넣어도 같은 답이라야 서로 양보하다 멈추지 않는다."""
+    current = [Row(robot_id='pinky-02', session_id=2, visit_name=None),
+               Row(robot_id='pinky-01', session_id=1, visit_name=None)]
+    remaining = [
+        Row(session_id=2, step_order=1, visit_name='X-ray', started=False),
+        Row(session_id=2, step_order=2, visit_name='CT', started=False),
+        Row(session_id=1, step_order=1, visit_name='X-ray', started=False),
+        Row(session_id=1, step_order=2, visit_name='임상병리실', started=False),
+    ]
+    out = summarize(current, remaining)
+
+    assert out['pinky-01'].visit_name == 'X-ray'
+    assert out['pinky-02'].visit_name == 'CT'

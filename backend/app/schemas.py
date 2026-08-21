@@ -33,6 +33,9 @@ class ScheduleStep(BaseModel):
     visit_name: str
     arrived_at: datetime | None = None
     completed_at: datetime | None = None
+    # 실제로 몇 번째로 방문했는가 (013). 계획과 다르면 다른 것이 사실이다 —
+    # 검사실이 겹치면 관제가 순서를 바꾼다. NULL 은 아직 안 간 단계다.
+    visit_seq: int | None = None
 
 
 class TodaySchedule(BaseModel):
@@ -96,6 +99,8 @@ class SessionStep(BaseModel):
     arrived_at: datetime | None = None
     completed_at: datetime | None = None
     completed_source: str | None = None
+    # 실제 방문 순번 (013). 계획 순서(step_order)와 다를 수 있다.
+    visit_seq: int | None = None
 
 
 class SessionOut(BaseModel):
@@ -838,6 +843,37 @@ class FleetPoseOut(BaseModel):
     y: float
     yaw: float
     observed_at: datetime
+
+
+class FleetCoordinationOut(BaseModel):
+    """로봇 한 대에 대한 지금의 군집 판정 — 화면이 "왜 멈췄나" 를 말할 근거.
+
+    로봇에게 물어보지 않는다. 이 판정을 만든 것이 서버이므로 서버가 정본이고,
+    로봇을 거쳐 돌아오게 하면 같은 사실이 두 경로로 흘러 갈라진다.
+
+    `linked` 가 거짓이면 그 로봇은 판정을 **받지 못하고 있다.** 그때는 화면이
+    양보 중이라고 말하면 안 된다 — 서버 혼자 그렇게 생각하고 있을 뿐이고,
+    로봇은 그냥 달리고 있다.
+    """
+
+    robot_id: str
+    linked: bool = False
+    proceed: bool = True
+    # peer_in_segment | peer_at_goal | no_route
+    reason: str | None = None
+    blocked_by: str | None = None
+    # 못 쓰고 있는 외길 하나. 어디서 헛대기가 잦은지 추적할 실마리다.
+    segment: str | None = None
+
+    # 검사실 겹침으로 방문 순서가 바뀌었는가.
+    reordered: bool = False
+    next_visit: str | None = None
+    skipped_visit: str | None = None
+    room_blocked_by: str | None = None
+
+
+class FleetCoordinationSetOut(BaseModel):
+    robots: list[FleetCoordinationOut] = Field(default_factory=list)
 
 
 class FleetPosesOut(BaseModel):
