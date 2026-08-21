@@ -7,6 +7,8 @@ import json
 import math
 
 from geometry_msgs.msg import Twist
+from mingky_interfaces.msg import GuideState
+from nav2_msgs.srv import ClearEntireCostmap
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.duration import Duration
@@ -21,15 +23,17 @@ from rclpy.qos import (
 )
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan, Range
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from .fusion import (
     CostmapObservationRetention,
     FusionConfig,
     FusionDecision,
+    guide_navigation_segment_active,
     limit_forward_velocity,
     LowObstacleFilter,
+    NavigationScope,
     nearest_lidar_in_ultrasonic_cone,
     observation_pose_expired,
 )
@@ -50,6 +54,8 @@ class LowObstacleSupervisor(Node):
             'observation_topic': '/low_obstacle/observation',
             'cmd_vel_input_topic': 'cmd_vel_low_obstacle_input',
             'cmd_vel_output_topic': 'cmd_vel_safety_input',
+            'guide_state_topic': '/guide_manager/state',
+            'waypoint_test_active_topic': '/navigation_manager/active',
             'scan_stale_sec': 0.5,
             'range_stale_sec': 0.5,
             'transform_timeout_sec': 0.05,
@@ -95,6 +101,7 @@ class LowObstacleSupervisor(Node):
             0.05, float(get('observation_expiry_yaw_rad').value))
         self.observation_retention = CostmapObservationRetention(
             float(get('observation_clear_hold_sec').value))
+        self.navigation_scope = NavigationScope()
         self.filter = LowObstacleFilter(FusionConfig(
             detect_distance_m=float(get('detect_distance_m').value),
             clear_distance_m=float(get('clear_distance_m').value),
@@ -148,6 +155,12 @@ class LowObstacleSupervisor(Node):
             String, str(get('observation_topic').value), latched)
         self.cmd_pub = self.create_publisher(
             Twist, str(get('cmd_vel_output_topic').value), 10)
+        self.local_costmap_clear = self.create_client(
+            ClearEntireCostmap,
+            '/local_costmap/clear_entirely_local_costmap')
+        self.global_costmap_clear = self.create_client(
+            ClearEntireCostmap,
+            '/global_costmap/clear_entirely_global_costmap')
         self.create_subscription(
             Range, str(get('range_topic').value), self._on_range,
             qos_profile_sensor_data)
@@ -158,6 +171,18 @@ class LowObstacleSupervisor(Node):
             Odometry, '/odom', self._on_odom, qos_profile_sensor_data)
         self.create_subscription(
             Twist, str(get('cmd_vel_input_topic').value), self._on_cmd, 10)
+        self.create_subscription(
+            GuideState,
+            str(get('guide_state_topic').value),
+            self._on_guide_state,
+            latched,
+        )
+        self.create_subscription(
+            Bool,
+            str(get('waypoint_test_active_topic').value),
+            self._on_waypoint_test_active,
+            latched,
+        )
         self.create_timer(0.1, self._check_stale)
 
         self._publish_state('STARTING' if self.enabled else 'DISABLED')
@@ -230,6 +255,9 @@ class LowObstacleSupervisor(Node):
         )
         self.observation_retention.on_detection(
             decision.low_obstacle_confirmed)
+        costmap_marking_enabled = (
+            self.navigation_scope.active
+            and not self.observation_retention.suppress_until_sensor_clear)
         if decision.output_range_m is not None:
             output = Range()
             output.header.stamp = msg.header.stamp
@@ -242,21 +270,74 @@ class LowObstacleSupervisor(Node):
             if math.isclose(
                     output.range, output.max_range,
                     rel_tol=0.0, abs_tol=1e-6):
-                if self._marked_observations:
+                if (
+                        self._marked_observations
+                        and not self.navigation_scope.active):
                     self.observation_retention.request_clear(
                         self.get_clock().now().nanoseconds,
                         '센서 해제 확인')
-                else:
+                elif not self._marked_observations:
                     # Preserve the normal RangeSensorLayer clearing stream and
                     # also clean a cone that may predate this node process.
                     self.range_pub.publish(output)
-            elif not self.observation_retention.suppress_until_sensor_clear:
+            elif costmap_marking_enabled:
                 # RangeSensorLayer uses volatile sensor QoS. Publish throughout
                 # confirmation so a costmap activated after this node also
                 # receives the obstacle instead of missing a one-shot mark.
                 self.range_pub.publish(output)
                 self._remember_marked_observation(output)
         self._set_decision(decision)
+
+    def _on_guide_state(self, msg: GuideState) -> None:
+        active = guide_navigation_segment_active(
+            msg.session_state,
+            msg.robot_state,
+            bool(msg.returning_to_dock),
+        )
+        self._update_navigation_scope('guidance', active)
+
+    def _on_waypoint_test_active(self, msg: Bool) -> None:
+        self._update_navigation_scope('waypoint_test', bool(msg.data))
+
+    def _update_navigation_scope(self, source: str, active: bool) -> None:
+        transition = self.navigation_scope.update(source, active)
+        if transition == 'started':
+            self.observation_retention.cancel_pending_clear()
+            self.observation_retention.suppress_until_sensor_clear = False
+            self.get_logger().info(
+                '저상 장애물 costmap 보존 시작: 현재 주행 작업이 끝날 때까지 유지')
+        elif transition == 'finished':
+            self._clear_navigation_observations('주행 작업 종료')
+
+    def _clear_navigation_observations(self, reason: str) -> None:
+        had_observations = bool(self._marked_observations)
+        self._clear_marked_observations(reason)
+        self.observation_retention.mark_cleared()
+        self.observation_retention.suppress_until_sensor_clear = False
+        if had_observations:
+            # RangeSensorLayer의 오래된 TF 시각은 개별 max-range 메시지만으로
+            # 지워지지 않을 수 있어, 실제 표식이 있었던 작업만 전체 초기화한다.
+            self._request_costmap_clear(self.local_costmap_clear, 'local')
+            self._request_costmap_clear(self.global_costmap_clear, 'global')
+        self._publish_observation(self._decision, force_active=False)
+
+    def _request_costmap_clear(self, client, label: str) -> None:
+        if not client.service_is_ready():
+            self.get_logger().warn(
+                f'{label} costmap 초기화 서비스를 사용할 수 없습니다.',
+                throttle_duration_sec=2.0)
+            return
+        future = client.call_async(ClearEntireCostmap.Request())
+        future.add_done_callback(
+            lambda done, name=label: self._on_costmap_cleared(done, name))
+
+    def _on_costmap_cleared(self, future, label: str) -> None:
+        try:
+            future.result()
+        except Exception as exc:  # noqa: BLE001 - 서비스 실패는 주행을 막지 않는다.
+            self.get_logger().warn(f'{label} costmap 초기화 실패: {exc}')
+            return
+        self.get_logger().info(f'{label} costmap 저상 장애물 표식 초기화 완료')
 
     def _on_odom(self, msg: Odometry) -> None:
         orientation = msg.pose.pose.orientation
@@ -274,7 +355,8 @@ class LowObstacleSupervisor(Node):
             self._mark_anchor_pose = self._latest_odom_pose
             return
         if (
-                self._mark_anchor_pose is not None
+                not self.navigation_scope.active
+                and self._mark_anchor_pose is not None
                 and observation_pose_expired(
                     self._mark_anchor_pose,
                     self._latest_odom_pose,
@@ -314,7 +396,8 @@ class LowObstacleSupervisor(Node):
                 return
         self._marked_observations.append(stored)
         self._marked_observation_poses.append(pose)
-        # 10cm/20도 만료 전에 도달할 수 없는 방어 상한이다.
+        # 종료 시 costmap 전체 초기화가 누락된 RangeSensorLayer 셀까지 지운다.
+        # 여기서는 메모리만 제한하고 주행 중 costmap 표식은 삭제하지 않는다.
         if len(self._marked_observations) > 32:
             self._marked_observations.pop(0)
             self._marked_observation_poses.pop(0)

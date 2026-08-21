@@ -8,7 +8,9 @@
   <license>Apache-2.0</license>
 
   <depend>geometry_msgs</depend>
+  <depend>mingky_interfaces</depend>
   <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>

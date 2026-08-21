@@ -3,8 +3,10 @@ import math
 from mingky_low_obstacle.fusion import (
     CostmapObservationRetention,
     FusionConfig,
+    guide_navigation_segment_active,
     limit_forward_velocity,
     LowObstacleFilter,
+    NavigationScope,
     nearest_lidar_in_ultrasonic_cone,
     observation_pose_expired,
 )
@@ -143,7 +145,8 @@ def test_near_wall_seen_by_lidar_never_blocks_forward():
     decisions = [_update(filter_, 0.06, lidar=0.08) for _ in range(8)]
 
     assert all(decision.state == 'CLEAR' for decision in decisions)
-    assert all(decision.forward_speed_limit_mps is None for decision in decisions)
+    assert all(
+        decision.forward_speed_limit_mps is None for decision in decisions)
 
 
 def test_stale_lidar_does_not_clear_or_create_obstacle():
@@ -174,8 +177,8 @@ def test_stale_sensor_keeps_confirmed_near_forward_limit():
 
 
 def test_scan_points_are_transformed_before_cone_comparison():
-    # Scan zero degrees points along +x. Rotating the scan frame by pi puts that
-    # point behind the ultrasonic sensor, while the pi ray becomes its front.
+    # Rotating the scan frame by pi puts its zero-degree point behind the
+    # ultrasonic sensor, while the pi ray becomes its front.
     ranges = [0.20, 0.80]
     result = nearest_lidar_in_ultrasonic_cone(
         ranges,
@@ -270,6 +273,26 @@ def test_avoidance_clear_suppresses_remarking_until_sensor_clears():
     retention.mark_cleared()
     retention.on_detection(False)
     assert not retention.suppress_until_sensor_clear
+
+
+def test_guidance_segment_stays_active_during_patient_pause():
+    assert guide_navigation_segment_active('guiding', 'paused', False)
+    assert guide_navigation_segment_active('guiding', 'moving', False)
+    assert guide_navigation_segment_active('arrived', 'moving', False)
+    assert guide_navigation_segment_active('none', 'returning_to_dock', True)
+    assert not guide_navigation_segment_active('arrived', 'waiting', False)
+    assert not guide_navigation_segment_active('confirmed', 'idle', False)
+
+
+def test_navigation_scope_finishes_only_after_all_navigation_sources_end():
+    scope = NavigationScope()
+
+    assert scope.update('guidance', True) == 'started'
+    assert scope.update('waypoint_test', True) is None
+    assert scope.update('guidance', False) is None
+    assert scope.active
+    assert scope.update('waypoint_test', False) == 'finished'
+    assert not scope.active
 
 
 def test_invalid_configuration_is_rejected():

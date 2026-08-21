@@ -9,6 +9,45 @@ import statistics
 from typing import Sequence
 
 
+def guide_navigation_segment_active(
+        session_state: str, robot_state: str, returning_to_dock: bool) -> bool:
+    """Return whether Guide Manager owns one in-progress navigation segment."""
+    return bool(
+        returning_to_dock
+        or session_state == 'guiding'
+        or (session_state == 'arrived' and robot_state == 'moving')
+    )
+
+
+class NavigationScope:
+    """Combine guidance and Waypoint Test lifecycles into one costmap scope."""
+
+    def __init__(self) -> None:
+        """Start with no managed navigation source active."""
+        self._sources = {
+            'guidance': False,
+            'waypoint_test': False,
+        }
+
+    @property
+    def active(self) -> bool:
+        """Return whether any managed navigation task is active."""
+        return any(self._sources.values())
+
+    def update(self, source: str, active: bool) -> str | None:
+        """Update one source and return an aggregate lifecycle transition."""
+        if source not in self._sources:
+            raise ValueError(f'지원하지 않는 주행 소스입니다: {source}')
+        was_active = self.active
+        self._sources[source] = bool(active)
+        is_active = self.active
+        if is_active and not was_active:
+            return 'started'
+        if was_active and not is_active:
+            return 'finished'
+        return None
+
+
 @dataclass(frozen=True)
 class FusionConfig:
     """Thresholds for conservative low-obstacle confirmation."""
@@ -282,7 +321,7 @@ class LowObstacleFilter:
             limit = None
         else:
             state = 'CLEAR'
-            # An exact max-range reading explicitly clears the RangeSensorLayer.
+            # An exact max-range reading explicitly clears RangeSensorLayer.
             output = max_range_m
             limit = None
 
@@ -295,7 +334,8 @@ class LowObstacleFilter:
             low_obstacle_confirmed=self._confirmed,
         )
 
-    def stale_decision(self, lidar_range_m: float | None = None) -> FusionDecision:
+    def stale_decision(
+            self, lidar_range_m: float | None = None) -> FusionDecision:
         """Report missing input without falsely clearing accumulated costs."""
         filtered = (
             float(statistics.median(self._ranges)) if self._ranges else None)
@@ -326,7 +366,8 @@ class LowObstacleFilter:
         return None
 
     def _costmap_output(self, distance_m: float, max_range_m: float) -> float:
-        """Clamp a near echo just outside the padded footprint.
+        """
+        Clamp a near echo just outside the padded footprint.
 
         A RangeSensorLayer endpoint immediately against the padded footprint
         makes every MPPI trajectory start in collision.  Clearing that echo,
