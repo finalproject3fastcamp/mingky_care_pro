@@ -11,6 +11,8 @@ Nav2/teleop 은 ``cmd_vel_safety_input`` 으로 명령하고, 이 노드만 실�
 """
 
 from pathlib import Path
+import subprocess
+import threading
 
 from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import Twist
@@ -32,6 +34,11 @@ class EmergencyStop(Node):
         self.declare_parameter('command_timeout', 0.5)
         self.declare_parameter('blink_period', 0.5)
         self.declare_parameter('use_led', True)
+        self.declare_parameter('use_buzzer', True)
+        self.declare_parameter(
+            'fire_buzzer_script', '/home/pinky/ap/battery_buzzer.py')
+        self.declare_parameter('fire_buzzer_level', 'danger')
+        self.declare_parameter('fire_buzzer_repeat_seconds', 5.0)
         self.declare_parameter('cancel_nav2', True)
         self.declare_parameter('input_topic', 'cmd_vel_safety_input')
         self.declare_parameter('output_topic', 'cmd_vel')
@@ -42,6 +49,11 @@ class EmergencyStop(Node):
         self.rate = float(get('publish_rate').value)
         self.command_timeout = float(get('command_timeout').value)
         self.use_led = bool(get('use_led').value)
+        self.use_buzzer = bool(get('use_buzzer').value)
+        self.fire_buzzer_script = str(get('fire_buzzer_script').value)
+        self.fire_buzzer_level = str(get('fire_buzzer_level').value)
+        self.fire_buzzer_repeat_seconds = max(
+            1.0, float(get('fire_buzzer_repeat_seconds').value))
         self.cancel_nav2 = bool(get('cancel_nav2').value)
         self.state_file = Path(get('state_file').value).expanduser()
 
@@ -50,6 +62,9 @@ class EmergencyStop(Node):
         self.last_input_at = None
         self.blink_on = False
         self.blink_timer = None
+        self.fire_alarm_active = None
+        self.fire_buzzer_timer = None
+        self._fire_buzzer_running = False
 
         latched = QoSProfile(
             depth=1,
@@ -69,6 +84,8 @@ class EmergencyStop(Node):
             Bool, 'emergency_stop/obstacle', self.on_obstacle, 10)
         self.create_subscription(
             Bool, 'emergency_stop/communication', self.on_communication, 10)
+        self.create_subscription(
+            Bool, '/fire_evac/alarm_active', self.on_fire_alarm, latched)
         self.create_service(Trigger, 'emergency_stop/release', self.on_release)
 
         self.cancel_client = self.create_client(
@@ -124,6 +141,24 @@ class EmergencyStop(Node):
         if msg.data:
             self.engage('communication_loss')
 
+    def on_fire_alarm(self, msg: Bool):
+        active = bool(msg.data)
+        if active == self.fire_alarm_active:
+            return
+        self.fire_alarm_active = active
+        if active:
+            self._stop_blink()
+            self.set_led('fill', 255, 0, 0)
+            self._start_fire_buzzer()
+            self.get_logger().error('화재 경보 표시 시작 — 빨간 LED / 부저')
+            return
+        self._stop_fire_buzzer()
+        if self.engaged:
+            self._start_blink()
+        else:
+            self.set_led('clear')
+        self.get_logger().info('화재 경보 표시 해제')
+
     def on_release(self, request, response):
         if not self.engaged:
             response.success = False
@@ -161,7 +196,10 @@ class EmergencyStop(Node):
         self.engaged = False
         self.reason = None
         self._stop_blink()
-        self.set_led('clear')
+        if self.fire_alarm_active:
+            self.set_led('fill', 255, 0, 0)
+        else:
+            self.set_led('clear')
         self.publish_cmd(Twist())
         self.publish_state(previous_reason or 'manual_release')
         self.get_logger().info('비상정지 해제 — 새 속도 명령을 기다립니다.')
@@ -179,6 +217,9 @@ class EmergencyStop(Node):
         self.cmd_pub.publish(msg)
 
     def _start_blink(self):
+        if self.fire_alarm_active:
+            self.set_led('fill', 255, 0, 0)
+            return
         if self.led_client is not None and self.blink_timer is None:
             self.blink_timer = self.create_timer(
                 float(self.get_parameter('blink_period').value), self.tick_blink)
@@ -192,6 +233,45 @@ class EmergencyStop(Node):
     def tick_blink(self):
         self.blink_on = not self.blink_on
         self.set_led('fill', 255, 0, 0) if self.blink_on else self.set_led('clear')
+
+    def _start_fire_buzzer(self):
+        if not self.use_buzzer:
+            return
+        self._beep_fire_alarm()
+        if self.fire_buzzer_timer is None:
+            self.fire_buzzer_timer = self.create_timer(
+                self.fire_buzzer_repeat_seconds, self._beep_fire_alarm)
+
+    def _stop_fire_buzzer(self):
+        if self.fire_buzzer_timer is not None:
+            self.fire_buzzer_timer.cancel()
+            self.destroy_timer(self.fire_buzzer_timer)
+            self.fire_buzzer_timer = None
+
+    def _beep_fire_alarm(self):
+        if (not self.fire_alarm_active or not self.use_buzzer
+                or self._fire_buzzer_running):
+            return
+        self._fire_buzzer_running = True
+
+        def run():
+            try:
+                result = subprocess.call(
+                    [
+                        'python3', self.fire_buzzer_script, 'beep',
+                        self.fire_buzzer_level,
+                    ],
+                    timeout=15,
+                )
+                if result not in (0, 3):
+                    self.get_logger().warn(
+                        f'화재 부저 실패 (종료코드 {result})')
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                self.get_logger().warn(f'화재 부저 실행 실패: {exc}')
+            finally:
+                self._fire_buzzer_running = False
+
+        threading.Thread(target=run, daemon=True).start()
 
     def set_led(self, command, red=0, green=0, blue=0):
         if self.led_client is None or not self.led_client.service_is_ready():
@@ -214,6 +294,10 @@ class EmergencyStop(Node):
         reason = self.reason if self.engaged else release_reason
         self.reason_pub.publish(String(data=reason or ''))
         self.state_pub.publish(Bool(data=self.engaged))
+
+    def destroy_node(self):
+        self._stop_fire_buzzer()
+        return super().destroy_node()
 
 
 def main(args=None):

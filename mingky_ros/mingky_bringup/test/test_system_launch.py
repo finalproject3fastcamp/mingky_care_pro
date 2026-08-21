@@ -79,6 +79,7 @@ def test_qr_reader_is_enabled_for_robot_operation() -> None:
         'preview_max_fps': '$(var camera_preview_max_fps)',
         'preview_max_width': '$(var camera_preview_max_width)',
         'preview_jpeg_quality': '$(var camera_preview_jpeg_quality)',
+        'camera_idle_timeout_seconds': '$(var camera_idle_timeout)',
     }
 
 
@@ -104,6 +105,7 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
     }
     assert forwarded['robot_id'] == '$(var robot_id)'
     assert forwarded['camera_profile'] == '$(var camera_profile)'
+    assert forwarded['start_rear_camera'] == 'false'
     assert forwarded['wait_for_front_camera'] == '$(var start_qr_reader)'
     assert (
         forwarded['front_camera_ready_timeout']
@@ -114,6 +116,13 @@ def test_low_bandwidth_camera_streams_are_integrated() -> None:
         == '$(var start_rear_qr_distance)'
     )
     assert forwarded['qr_size'] == '$(var rear_qr_size)'
+
+    power_manager = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'camera_power_manager'
+    )
+    assert power_manager.get('pkg') == 'mingky_bringup'
+    assert power_manager.get('if') == '$(var start_rear_camera_stream)'
 
 
 def test_rear_camera_defaults_to_color_for_yolo() -> None:
@@ -385,6 +394,16 @@ def test_fire_evacuation_is_configurable_in_integrated_launch() -> None:
         'robot_id': '$(var robot_id)',
         'infer_server_url': '$(var fire_infer_server_url)',
     }
+    safety_gate = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'emergency_stop'
+    )
+    safety_params = {
+        item.get('name'): item.get('value')
+        for item in safety_gate.findall('param')
+    }
+    assert safety_params['use_led'] == '$(var use_led)'
+    assert safety_params['use_buzzer'] == '$(var use_buzzer)'
 
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
     assert 'start_fire_evac:=${MINGKY_FIRE_EVAC_ENABLED:-false}' in unit

@@ -53,6 +53,7 @@ def _rear_camera_actions(context):
         launch_arguments={
             'camera_info_url': camera_info_url,
         }.items(),
+        condition=IfCondition(LaunchConfiguration('start_rear_camera')),
     )
     qr_distance = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution([
@@ -89,6 +90,8 @@ def _rear_stream_action() -> Node:
             'max_fps': LaunchConfiguration('preview_max_fps'),
             'max_width': LaunchConfiguration('preview_max_width'),
             'jpeg_quality': LaunchConfiguration('preview_jpeg_quality'),
+            'viewer_active_topic': LaunchConfiguration(
+                'viewer_active_topic'),
         }],
         prefix=['nice -n 5'],
     )
@@ -124,6 +127,11 @@ def generate_launch_description() -> LaunchDescription:
             ),
         ),
         DeclareLaunchArgument('start_qr_distance', default_value='true'),
+        DeclareLaunchArgument('start_rear_camera', default_value='true'),
+        DeclareLaunchArgument(
+            'viewer_active_topic',
+            default_value='/rear_camera/preview_active',
+        ),
         DeclareLaunchArgument(
             'qr_process_only_while_guiding',
             default_value='false',
