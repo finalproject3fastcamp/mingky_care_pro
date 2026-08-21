@@ -530,3 +530,61 @@ system.robot_type_mismatch:
   robot_types: [mobile, manipulator]
   level: warning
   payload: { received_code: string, actual_type: string, allowed_types: [string] }
+
+
+# === 안내 분기 (item 2) =====================================================
+# 검사 뒤 외래/입원 경로. 수납·약수령은 실제 결제/수령 시스템이 없으므로
+# 도착·확인 사건만 남긴다 — 안내가 그 지점까지 왔다는 사실이 전부다.
+
+payment.arrived:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 수납 창구 도착. 안내가 갈림길을 지나 외래 경로로 들어섰다는 첫 신호다.
+
+payment.completed:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 수납 확인. 실제 결제 연동은 없고 도착 후 진행 확인만 기록한다.
+
+pharmacy.arrived:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 약국 도착. 조제(item 3)가 이 지점을 seam 으로 잡는다 — session_id 와
+  # patient_id 를 실어 어느 환자의 처방인지 잇는다.
+
+pickup.completed:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 약 수령 확인. 약국 창구에서 그대로 수령하므로 별도 이동 없이 확인만 남긴다.
+
+ward.arrived:
+  robot_types: [mobile]
+  level: info
+  payload: { session_id: int, patient_id: string }
+  # 병동 도착. 입원 경로의 종착이다.
+# === 조제-세션 연결 (item 3) ===============================================
+#
+# 안내 로봇이 약국에 도착하면(pharmacy.arrived — item 2 가 정의) 백엔드가 그
+# 세션·환자로 조제를 조제 스테이션(omx-01)에서 시작한다. 아래 둘은 그 연결을
+# 타임라인에 남기는 코드로, 백엔드가 직접 발행한다(source_node: backend.pharmacy).
+#
+# robot_types 는 manipulator — 이벤트의 robot_id 가 조제한 OMX 박스이기 때문이다.
+# session_id 는 events 컬럼에 채워 세션 타임라인에 붙는다(pharmacy.arrived 와 짝).
+
+pharmacy.dispense_requested:
+  robot_types: [manipulator]
+  level: info
+  payload: { session_id: int, patient_id: string, omx_robot_id: string }
+  # 도착 → 세션 연결 조제 시작. 어느 박스가 맡았는지(omx_robot_id)를 함께 남겨
+  # 세션에서 조제 스테이션으로 바로 넘어갈 수 있게 한다.
+
+pharmacy.dispense_completed:
+  robot_types: [manipulator]
+  level: info
+  payload: { session_id: int, dispense_id: string }
+  # 세션 연결 조제가 끝났다. 약국 세션 스텝을 완료시키는 것은 item 2 담당이고,
+  # 여기는 그 신호를 세션에 실어 발행하는 데까지다.

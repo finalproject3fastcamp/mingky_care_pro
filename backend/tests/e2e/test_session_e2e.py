@@ -196,8 +196,10 @@ def test_a_guidance_session_runs_to_completion(backend):
         FROM session_steps WHERE session_id = $1 ORDER BY step_order
     """, session["session_id"])
 
-    # 마스터를 조인하지 않고 스냅샷을 복사하므로 3행이 그대로 있어야 한다.
-    assert [s["visit_name"] for s in steps] == ["X-ray", "임상병리실", "물리치료실"]
+    # p001 은 외래(outpatient)라 검사 3단계 뒤 수납·약국·약수령이 이어 붙는다
+    # (qr.py 분기 · migration 013). 스냅샷을 복사하므로 이 6행이 그대로 있어야 한다.
+    assert [s["visit_name"] for s in steps] == [
+        "X-ray", "임상병리실", "물리치료실", "수납", "약국", "약수령"]
     for step in steps:
         assert step["arrived_at"] is not None, step["visit_name"]
         assert step["completed_at"] is not None, step["visit_name"]
@@ -737,3 +739,288 @@ def test_the_same_fact_is_not_announced_twice(backend):
 
     repeated = {key: count for key, count in per_key.items() if count > 1}
     assert repeated == {}, repeated
+
+
+def test_two_pinkies_run_concurrent_sessions_kept_independent(backend):
+    """핑키 2대가 동시에 안내를 돌려도 관제가 두 세션을 독립적으로 유지한다.
+
+    백엔드 구조상 멀티 로봇은 가능했지만(로봇당 활성 세션 1개), 두 대를 실제로
+    인터리브해서 돌려본 시나리오가 없었다. 하네스가 세션을 로봇별로 추적하지
+    않으면 pinky-02 의 스캔이 pinky-01 의 session_id 를 덮어써서, 이후 pinky-01
+    이벤트가 엉뚱한 세션에 붙는다 — 여기서 그 교차 오염이 없음을 잠근다.
+
+    이 파일의 앞선 테스트가 만든 완주 세션 수(SLO 절대값)를 흔들지 않도록
+    맨 끝에 둔다. 여기서는 델타로만 판정한다.
+    """
+    before = get_json(backend, "/slo/completion")
+
+    play("two_pinky_concurrent.yaml", backend)
+
+    # 세션 2개가 각각 다른 로봇으로, 서로 다른 session_id 로 생겼다.
+    sessions = query("""
+        SELECT session_id, patient_id, robot_id, end_reason, ended_at
+        FROM guidance_sessions
+        WHERE robot_id IN ('pinky-01', 'pinky-02')
+          AND patient_id IN ('p001', 'p002')
+        ORDER BY session_id DESC LIMIT 2
+    """)
+    by_robot = {row["robot_id"]: row for row in sessions}
+
+    assert set(by_robot) == {"pinky-01", "pinky-02"}, sessions
+    one, two = by_robot["pinky-01"], by_robot["pinky-02"]
+    assert one["session_id"] != two["session_id"]
+    assert one["patient_id"] == "p001"
+    assert two["patient_id"] == "p002"
+
+    # 둘 다 completed 로 정상 종료.
+    for row in (one, two):
+        assert row["end_reason"] == "completed", row["robot_id"]
+        assert row["ended_at"] is not None, row["robot_id"]
+
+    # 각자 단계 수만큼 session_steps 가 모두 완료됐다. 둘 다 외래(outpatient)라
+    # 검사 뒤 수납·약국·약수령이 붙어 p001=6, p002=5 단계다 (migration 013).
+    expected_steps = {
+        one["session_id"]: [
+            "X-ray", "임상병리실", "물리치료실", "수납", "약국", "약수령"],
+        two["session_id"]: ["X-ray", "CT", "수납", "약국", "약수령"],
+    }
+    for session_id, names in expected_steps.items():
+        steps = query("""
+            SELECT step_order, visit_name, arrived_at, completed_at, completed_source
+            FROM session_steps WHERE session_id = $1 ORDER BY step_order
+        """, session_id)
+        assert [s["visit_name"] for s in steps] == names, session_id
+        for step in steps:
+            assert step["arrived_at"] is not None, (session_id, step["visit_name"])
+            assert step["completed_at"] is not None, (session_id, step["visit_name"])
+            assert step["completed_source"] == "qr", (session_id, step["visit_name"])
+
+    # 교차 오염이 없다. 각 세션에 붙은 이벤트의 robot_id 는 한 대뿐이어야 한다.
+    for robot_id, row in by_robot.items():
+        landed = query("""
+            SELECT DISTINCT robot_id FROM events
+            WHERE session_id = $1 AND source_node = 'fake_robot'
+        """, row["session_id"])
+        assert [r["robot_id"] for r in landed] == [robot_id], (robot_id, landed)
+
+    # 두 세션 모두 자기 마커로 뜬 session.started 를 갖는다(스캔이 안 섞였다).
+    marker_of = {
+        row["session_id"]: scalar("""
+            SELECT payload->>'marker_id' FROM events
+            WHERE session_id = $1 AND event_code = 'session.started'
+            LIMIT 1
+        """, row["session_id"])
+        for row in (one, two)
+    }
+    assert marker_of[one["session_id"]] == "30"
+    assert marker_of[two["session_id"]] == "31"
+
+    # SLO 판정이 두 세션을 모두 성공으로 포함한다. 앞선 세션 수에 무관하도록
+    # 델타로 본다 — 판정 세션 +2, 성공 +2, 실패는 그대로.
+    after = get_json(backend, "/slo/completion")
+    assert after["sessions_judged"] == before["sessions_judged"] + 2
+    assert after["success"] == before["success"] + 2
+    assert after["failure"] == before["failure"]
+
+    # 두 세션 모두 실패 목록에 없다(둘 다 success).
+    failed_ids = {f["session_id"] for f in after["failed_sessions"]}
+    assert one["session_id"] not in failed_ids
+    assert two["session_id"] not in failed_ids
+def _latest_session_for(patient_id: str):
+    return query("""
+        SELECT session_id, patient_id, end_reason, ended_at
+        FROM guidance_sessions
+        WHERE patient_id = $1 ORDER BY session_id DESC LIMIT 1
+    """, patient_id)[0]
+
+
+def test_outpatient_journey_snapshots_and_completes_branch_steps(backend):
+    """외래 환자는 검사 뒤 수납·약국·약수령까지 스냅샷되고 완주한다 (item 2).
+
+    p001 은 admission_type = 'outpatient' 다. 검사 3단계(X-ray → 임상병리실 →
+    물리치료실) 뒤에 qr.py 가 수납(4) → 약국(5) → 약수령(6) 을 이어 붙인다.
+    분기 스텝은 guide_manager 의 하드코딩이 아니라 session_steps 순회로 돈다 —
+    스냅샷이 6행이면 배관이 이어진 것이다.
+    """
+    play("outpatient_full_journey.yaml", backend)
+
+    session = _latest_session_for("p001")
+    assert session["end_reason"] == "completed"
+    assert session["ended_at"] is not None
+
+    steps = query("""
+        SELECT step_order, visit_name, arrived_at, completed_at
+        FROM session_steps WHERE session_id = $1 ORDER BY step_order
+    """, session["session_id"])
+
+    # 검사 3 + 외래 분기 3. step_order 는 검사 다음부터 연속이어야 한다.
+    assert [s["visit_name"] for s in steps] == [
+        "X-ray", "임상병리실", "물리치료실", "수납", "약국", "약수령"]
+    assert [s["step_order"] for s in steps] == [1, 2, 3, 4, 5, 6]
+    for step in steps:
+        assert step["arrived_at"] is not None, step["visit_name"]
+        assert step["completed_at"] is not None, step["visit_name"]
+
+    codes = [row["event_code"] for row in query("""
+        SELECT DISTINCT event_code FROM events
+        WHERE session_id = $1 AND source_node = 'fake_robot'
+    """, session["session_id"])]
+
+    # pharmacy.arrived 는 조제(item 3)가 잡는 seam 이다. 세션에 붙어야 어느
+    # 환자의 약국 도착인지 이어진다.
+    assert "pharmacy.arrived" in codes
+    assert "payment.arrived" in codes
+    assert "pickup.completed" in codes
+
+    # 새 분기 코드가 전부 정본에 실려 있어야 한다. 하나라도 빠지면 미등록
+    # 마커가 남는다.
+    assert scalar("""
+        SELECT count(*) FROM events
+        WHERE event_code = 'system.unknown_event_code'
+    """) == 0
+
+
+def test_inpatient_journey_snapshots_the_ward_step(backend):
+    """입원 환자는 검사 뒤 병동으로 안내된다 (item 2).
+
+    p003 은 admission_type = 'inpatient' 다. 외래와 달리 수납·약국이 아니라
+    병동 한 스텝이 붙는다 — 같은 배관이 admission_type 만으로 경로를 가른다.
+    """
+    play("inpatient_ward.yaml", backend)
+
+    session = _latest_session_for("p003")
+    assert session["end_reason"] == "completed"
+    assert session["ended_at"] is not None
+
+    steps = query("""
+        SELECT step_order, visit_name, completed_at
+        FROM session_steps WHERE session_id = $1 ORDER BY step_order
+    """, session["session_id"])
+
+    # 십자인대 파열 검사 3단계 + 입원 분기 병동 1단계.
+    assert [s["visit_name"] for s in steps] == [
+        "X-ray", "MRI", "물리치료실", "병동"]
+    for step in steps:
+        assert step["completed_at"] is not None, step["visit_name"]
+
+    codes = [row["event_code"] for row in query("""
+        SELECT DISTINCT event_code FROM events
+        WHERE session_id = $1 AND source_node = 'fake_robot'
+    """, session["session_id"])]
+
+    assert "ward.arrived" in codes
+    # 외래 분기는 입원 경로에 새면 안 된다.
+    assert "pharmacy.arrived" not in codes
+
+
+# ── 안내 세션 ↔ 조제 연결 (item 3/4) ──────────────────────────────────────────
+def _post_json(base_url: str, path: str, body):
+    import urllib.request as _u
+    data = json.dumps(body).encode("utf-8")
+    req = _u.Request(f"{base_url}{path}", data=data,
+                     headers={"Content-Type": "application/json"}, method="POST")
+    with _u.urlopen(req, timeout=10) as response:
+        raw = response.read().decode("utf-8")
+    return json.loads(raw) if raw else {}
+
+
+def test_pharmacy_arrival_triggers_a_session_linked_dispense(backend):
+    """도착 → 조제 시작 → 완료 배관 (§6.2 · item 4).
+
+    item 2 가 발행할 `pharmacy.arrived` 를 직접 넣어(SEAM 계약 payload) 백엔드가
+    세션·환자로 조제를 시작하고, 시뮬 조제가 끝나면 dispense_completed 를
+    세션에 실어 발행하는지 본다. 조제 실행은 시뮬(PHARMACY_REAL 없음)이다.
+    """
+    import datetime
+    import uuid
+
+    session = query("""
+        SELECT session_id, patient_id FROM guidance_sessions
+        WHERE patient_id = 'p001' ORDER BY session_id DESC LIMIT 1
+    """)[0]
+    sid = session["session_id"]
+
+    arrived = {
+        "event_id": str(uuid.uuid4()),
+        "robot_id": "pinky-01",
+        "session_id": sid,
+        "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "level": "info",
+        "event_code": "pharmacy.arrived",
+        "source_node": "fake_robot",
+        "payload": {"session_id": sid, "patient_id": "p001"},
+    }
+    _post_json(backend, "/events", [arrived])
+
+    # requested 는 곧, completed 는 시뮬 조제(2색)가 끝난 뒤. 조제 태스크는
+    # 적재 트랜잭션 밖에서 도므로 여기서 폴링한다.
+    deadline = time.monotonic() + 45
+    rows = []
+    while time.monotonic() < deadline:
+        rows = query("""
+            SELECT event_code, payload::text AS payload, session_id
+            FROM events WHERE session_id = $1 AND event_code LIKE 'pharmacy.dispense_%'
+            ORDER BY occurred_at
+        """, sid)
+        if any(r["event_code"] == "pharmacy.dispense_completed" for r in rows):
+            break
+        time.sleep(0.5)
+
+    codes = [r["event_code"] for r in rows]
+    assert "pharmacy.dispense_requested" in codes, codes
+    assert "pharmacy.dispense_completed" in codes, "조제 완료 이벤트가 오지 않았다"
+
+    requested = next(r for r in rows if r["event_code"] == "pharmacy.dispense_requested")
+    assert requested["session_id"] == sid           # 세션에 붙었다
+    assert '"omx_robot_id": "omx-01"' in requested["payload"]
+    assert '"patient_id": "p001"' in requested["payload"]
+
+    completed = next(r for r in rows if r["event_code"] == "pharmacy.dispense_completed")
+    assert completed["session_id"] == sid
+    assert '"dispense_id"' in completed["payload"]
+
+    # dispense_jobs 링크가 완료로 남았다 (마이그레이션 014).
+    job = query("""
+        SELECT session_id, patient_id, omx_robot_id, status, completed_at
+        FROM dispense_jobs WHERE session_id = $1 ORDER BY requested_at DESC LIMIT 1
+    """, sid)[0]
+    assert job["patient_id"] == "p001"
+    assert job["omx_robot_id"] == "omx-01"
+    assert job["status"] == "completed"
+    assert job["completed_at"] is not None
+
+    # 발행한 payload 가 event_codes.yaml 스키마와 정확히 일치한다.
+    import yaml
+    from pathlib import Path as _Path
+    codes_def = yaml.safe_load(
+        (_Path(__file__).resolve().parents[3] / "config" / "event_codes.yaml")
+        .read_text(encoding="utf-8"))
+    for row in rows:
+        spec = codes_def[row["event_code"]]
+        assert spec["robot_types"] == ["manipulator"]
+        assert set(json.loads(row["payload"])) == set(spec["payload"]), row["event_code"]
+
+
+def test_two_stations_hold_independent_jobs(backend):
+    """조제 스테이션(omx-01)과 포장 스테이션(omx-02)이 다른 job 으로 동시에 돈다.
+
+    앞 테스트가 omx-01 을 조제완료로 남겼다. omx-02 에서 포장을 시작해도 그 상태가
+    omx-01 로 새지 않아야 한다 — robot_id 별 job 분리의 계약(item 3).
+    """
+    started = _post_json(backend, "/pharmacy/pack?robot_id=omx-02", {})
+    assert started.get("robot_id") == "omx-02"
+
+    # 포장 태스크가 상태를 세우는 데 한 틱 걸린다. 짧게 폴링한다.
+    deadline = time.monotonic() + 10
+    s2 = {}
+    while time.monotonic() < deadline:
+        s2 = get_json(backend, "/pharmacy/state?robot_id=omx-02")
+        if s2["상태"] in ("포장중", "완료"):
+            break
+        time.sleep(0.2)
+    assert s2["상태"] in ("포장중", "완료"), s2
+
+    # omx-01 은 포장 상태가 아니다(직전 조제로 조제완료이거나 대기) — 스테이션이
+    # 서로 다른 job 을 들고 있다는 증거.
+    s1 = get_json(backend, "/pharmacy/state?robot_id=omx-01")
+    assert s1["상태"] != "포장중", s1
