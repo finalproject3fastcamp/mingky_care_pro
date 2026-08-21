@@ -32,7 +32,10 @@ class LcdStatusNode(Node):
         self.declare_parameter('robot_id', 'pinky-01')
         self.declare_parameter('font_path', '')
         self.declare_parameter('active_brightness', 100)
-        self.declare_parameter('idle_brightness', 10)
+        # Pinky LCD 백라이트는 GPIO 소프트웨어 PWM을 사용한다. 10%처럼 너무
+        # 낮은 duty cycle은 시스템 부하가 있을 때 눈에 띄는 깜빡임이 생길 수
+        # 있어, 절전 효과를 유지하면서 안정적인 25%를 기본값으로 사용한다.
+        self.declare_parameter('idle_brightness', 25)
         self.robot_id = str(self.get_parameter('robot_id').value)
         configured_font = str(self.get_parameter('font_path').value)
         self.font_path = resolve_font_path(configured_font)
