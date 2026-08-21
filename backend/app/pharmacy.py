@@ -529,6 +529,14 @@ async def read_tray() -> dict:
         return {"모드": "시뮬레이션", "시각": _now_hms(),
                 "개수": {"red": 1, "yellow": 1, "green": 1}}
 
+    # 원격 러너(item 4)가 있으면 트레이도 박스에서 읽는다. 카메라·조제 파트는
+    # OMX 박스에 있고 클라우드 백엔드에는 없으므로, 로컬 프리체크로 가면
+    # "조제 파트를 찾지 못했습니다" 로 막힌다.
+    remote = _dispense_runner_url()
+    if remote:
+        결과 = await asyncio.to_thread(_http_json, f"{remote}/tray", "GET")
+        return {"모드": "실제", "시각": _now_hms(), **결과}
+
     막힌이유 = _tray_preflight()
     if 막힌이유:
         return {"모드": "실제", "시각": _now_hms(), "오류": 막힌이유}
