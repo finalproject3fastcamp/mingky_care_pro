@@ -822,3 +822,116 @@ def test_two_pinkies_run_concurrent_sessions_kept_independent(backend):
     failed_ids = {f["session_id"] for f in after["failed_sessions"]}
     assert one["session_id"] not in failed_ids
     assert two["session_id"] not in failed_ids
+
+
+# ── 안내 세션 ↔ 조제 연결 (item 3/4) ──────────────────────────────────────────
+def _post_json(base_url: str, path: str, body):
+    import urllib.request as _u
+    data = json.dumps(body).encode("utf-8")
+    req = _u.Request(f"{base_url}{path}", data=data,
+                     headers={"Content-Type": "application/json"}, method="POST")
+    with _u.urlopen(req, timeout=10) as response:
+        raw = response.read().decode("utf-8")
+    return json.loads(raw) if raw else {}
+
+
+def test_pharmacy_arrival_triggers_a_session_linked_dispense(backend):
+    """도착 → 조제 시작 → 완료 배관 (§6.2 · item 4).
+
+    item 2 가 발행할 `pharmacy.arrived` 를 직접 넣어(SEAM 계약 payload) 백엔드가
+    세션·환자로 조제를 시작하고, 시뮬 조제가 끝나면 dispense_completed 를
+    세션에 실어 발행하는지 본다. 조제 실행은 시뮬(PHARMACY_REAL 없음)이다.
+    """
+    import datetime
+    import uuid
+
+    session = query("""
+        SELECT session_id, patient_id FROM guidance_sessions
+        WHERE patient_id = 'p001' ORDER BY session_id DESC LIMIT 1
+    """)[0]
+    sid = session["session_id"]
+
+    arrived = {
+        "event_id": str(uuid.uuid4()),
+        "robot_id": "pinky-01",
+        "session_id": sid,
+        "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "level": "info",
+        "event_code": "pharmacy.arrived",
+        "source_node": "fake_robot",
+        "payload": {"session_id": sid, "patient_id": "p001"},
+    }
+    _post_json(backend, "/events", [arrived])
+
+    # requested 는 곧, completed 는 시뮬 조제(2색)가 끝난 뒤. 조제 태스크는
+    # 적재 트랜잭션 밖에서 도므로 여기서 폴링한다.
+    deadline = time.monotonic() + 45
+    rows = []
+    while time.monotonic() < deadline:
+        rows = query("""
+            SELECT event_code, payload::text AS payload, session_id
+            FROM events WHERE session_id = $1 AND event_code LIKE 'pharmacy.dispense_%'
+            ORDER BY occurred_at
+        """, sid)
+        if any(r["event_code"] == "pharmacy.dispense_completed" for r in rows):
+            break
+        time.sleep(0.5)
+
+    codes = [r["event_code"] for r in rows]
+    assert "pharmacy.dispense_requested" in codes, codes
+    assert "pharmacy.dispense_completed" in codes, "조제 완료 이벤트가 오지 않았다"
+
+    requested = next(r for r in rows if r["event_code"] == "pharmacy.dispense_requested")
+    assert requested["session_id"] == sid           # 세션에 붙었다
+    assert '"omx_robot_id": "omx-01"' in requested["payload"]
+    assert '"patient_id": "p001"' in requested["payload"]
+
+    completed = next(r for r in rows if r["event_code"] == "pharmacy.dispense_completed")
+    assert completed["session_id"] == sid
+    assert '"dispense_id"' in completed["payload"]
+
+    # dispense_jobs 링크가 완료로 남았다 (마이그레이션 014).
+    job = query("""
+        SELECT session_id, patient_id, omx_robot_id, status, completed_at
+        FROM dispense_jobs WHERE session_id = $1 ORDER BY requested_at DESC LIMIT 1
+    """, sid)[0]
+    assert job["patient_id"] == "p001"
+    assert job["omx_robot_id"] == "omx-01"
+    assert job["status"] == "completed"
+    assert job["completed_at"] is not None
+
+    # 발행한 payload 가 event_codes.yaml 스키마와 정확히 일치한다.
+    import yaml
+    from pathlib import Path as _Path
+    codes_def = yaml.safe_load(
+        (_Path(__file__).resolve().parents[3] / "config" / "event_codes.yaml")
+        .read_text(encoding="utf-8"))
+    for row in rows:
+        spec = codes_def[row["event_code"]]
+        assert spec["robot_types"] == ["manipulator"]
+        assert set(json.loads(row["payload"])) == set(spec["payload"]), row["event_code"]
+
+
+def test_two_stations_hold_independent_jobs(backend):
+    """조제 스테이션(omx-01)과 포장 스테이션(omx-02)이 다른 job 으로 동시에 돈다.
+
+    앞 테스트가 omx-01 을 조제완료로 남겼다. omx-02 에서 포장을 시작해도 그 상태가
+    omx-01 로 새지 않아야 한다 — robot_id 별 job 분리의 계약(item 3).
+    """
+    started = _post_json(backend, "/pharmacy/pack?robot_id=omx-02", {})
+    assert started.get("robot_id") == "omx-02"
+
+    # 포장 태스크가 상태를 세우는 데 한 틱 걸린다. 짧게 폴링한다.
+    deadline = time.monotonic() + 10
+    s2 = {}
+    while time.monotonic() < deadline:
+        s2 = get_json(backend, "/pharmacy/state?robot_id=omx-02")
+        if s2["상태"] in ("포장중", "완료"):
+            break
+        time.sleep(0.2)
+    assert s2["상태"] in ("포장중", "완료"), s2
+
+    # omx-01 은 포장 상태가 아니다(직전 조제로 조제완료이거나 대기) — 스테이션이
+    # 서로 다른 job 을 들고 있다는 증거.
+    s1 = get_json(backend, "/pharmacy/state?robot_id=omx-01")
+    assert s1["상태"] != "포장중", s1

@@ -34,7 +34,7 @@ import uuid
 import asyncpg
 from asyncpg.exceptions import IntegrityConstraintViolationError
 
-from . import notify
+from . import notify, pharmacy_link
 from .event_codes import UNKNOWN_CODE, EventCodeRegistry
 from .schemas import EventIn, IngestResult
 
@@ -237,5 +237,16 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
         notify.notify(delivered)
     except Exception:
         log.exception("알림 발송 실패. 적재는 이미 커밋됐다.")
+
+    # 안내 로봇이 약국에 도착했으면 세션 연결 조제를 시작한다(item 4). notify 와
+    # 같은 이유로 트랜잭션 밖이다 — 조제는 오래 걸리므로 적재 커밋을 막으면 안 되고,
+    # 커밋된(재전송이 아닌 새) 도착에 대해서만 시작한다. schedule_from_event 가
+    # 백그라운드 태스크로 던지므로 여기서 조제 완료를 기다리지 않는다.
+    for event in delivered:
+        if event.event_code == pharmacy_link.ARRIVED_CODE:
+            try:
+                pharmacy_link.schedule_from_event(event.payload)
+            except Exception:
+                log.exception("세션 연결 조제 시작 실패. 적재는 이미 커밋됐다.")
 
     return result
