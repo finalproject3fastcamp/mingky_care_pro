@@ -176,6 +176,136 @@ def test_remote_error_surfaces(monkeypatch):
     assert ok is False and "연결" in memo
 
 
+# ── 포장 원격 러너 프록시 (조제와 같은 구조 · runner.py /pack/*) ────────────────
+# 조제 read_tray 가 겪은 것과 같은 계급의 버그(원격 모드인데 로컬 파일 존재 검사로
+# 막힘)를 포장 경로가 다시 밟지 않도록 못을 박는다. _run_pack 은 원격 URL 이 있으면
+# 로컬 pack_run.py·체크포인트 검사보다 먼저 러너로 프록시해야 한다.
+def test_pack_runner_url_from_env(monkeypatch):
+    monkeypatch.delenv("MINGKY_OMX_PACK_URL", raising=False)
+    assert pharmacy._pack_runner_url() is None
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box:8800/")
+    assert pharmacy._pack_runner_url() == "http://box:8800"   # 끝 슬래시 제거
+
+
+def test_pack_proxies_to_remote_runner(monkeypatch, _fast_sim):
+    """원격 URL 이 있으면 로컬 서브프로세스 대신 러너(/pack/start·/pack/state)로
+    프록시한다. 클라우드엔 pack_run.py·체크포인트가 없으므로 로컬 검사로 막히면
+    안 된다 (조제 read_tray 와 같은 계급의 버그 방지)."""
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box:8800")
+    # 러너 상태를 흉내 낸다: 진행 → 완료.
+    states = iter([
+        {"상태": "진행", "완료단계": 0, "총단계": 1, "메모": ""},
+        {"상태": "완료", "완료단계": 1, "총단계": 1, "메모": "완료"},
+    ])
+    calls = []
+
+    def _fake_http(url, method, body=None):
+        calls.append((method, url, body))
+        if url.endswith("/pack/start"):
+            return {"상태": "진행"}
+        if url.endswith("/pack/state"):
+            return next(states)
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    ok, memo = asyncio.run(pharmacy._run_pack("omx-02"))
+
+    assert (ok, memo) == (True, "완료")
+    assert calls[0][0] == "POST" and calls[0][1].endswith("/pack/start")
+    assert any(m == "GET" and u.endswith("/pack/state") for m, u, _ in calls)
+    # 러너가 대신했으니 로컬 서브프로세스는 생성되지 않았다.
+    assert pharmacy._get_proc("omx-02") is None
+
+
+def test_pack_remote_stop_forwards_to_runner(monkeypatch):
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box:8800")
+    seen = []
+
+    def _fake_http(url, method, body=None):
+        seen.append(url)
+        if url.endswith("/pack/start"):
+            return {"상태": "진행"}
+        if url.endswith("/pack/state"):
+            return {"상태": "진행", "완료단계": 0}
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    async def _run():
+        pharmacy._JOB_LOCK = asyncio.Lock()
+        pharmacy._job("omx-02")["중단요청"] = True   # 시작하자마자 중단
+        return await pharmacy._run_pack("omx-02")
+    ok, memo = asyncio.run(_run())
+
+    assert ok is False and memo == "사용자가 중단했습니다"
+    assert any(u.endswith("/pack/stop") for u in seen)
+
+
+def test_pack_remote_transport_error_surfaces(monkeypatch):
+    """러너에 못 닿으면(start 가 {오류}) 그 사유를 그대로 올린다."""
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box:8800")
+
+    def _fake_http(url, method, body=None):
+        if url.endswith("/pack/start"):
+            return {"오류": "러너에 연결하지 못했습니다"}
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    ok, memo = asyncio.run(pharmacy._run_pack("omx-02"))
+    assert ok is False and "연결" in memo
+
+
+def test_pack_remote_runner_failure_surfaces_memo(monkeypatch, _fast_sim):
+    """러너가 상태=오류 + 메모로 실패를 올리면(runner.py 계약) 메모를 surfaced."""
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box:8800")
+
+    def _fake_http(url, method, body=None):
+        if url.endswith("/pack/start"):
+            return {"상태": "진행"}
+        if url.endswith("/pack/state"):
+            return {"상태": "오류", "메모": "포장 러너가 종료 코드 1 로 끝났습니다"}
+        return {}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    ok, memo = asyncio.run(pharmacy._run_pack("omx-02"))
+    assert ok is False and "종료 코드" in memo
+
+
+def test_pack_worker_proxies_only_when_pack_real(monkeypatch, _fast_sim):
+    """게이팅 대칭: PACK_REAL 없으면 러너 미호출(시뮬), PACK_REAL=1 이면 '약 투입'
+    단계가 러너로 프록시된다 (조제 REAL_MODE 와 같은 게이팅)."""
+    monkeypatch.setenv("MINGKY_OMX_PACK_URL", "http://box:8800")
+    calls = []
+
+    def _fake_http(url, method, body=None):
+        calls.append(url)
+        if url.endswith("/pack/start"):
+            return {"상태": "진행"}
+        return {"상태": "완료", "완료단계": 1}
+    monkeypatch.setattr(pharmacy, "_http_json", _fake_http)
+
+    # PACK_REAL 이 꺼져 있으면 러너를 부르지 않고 시뮬로 완주한다.
+    monkeypatch.setattr(pharmacy, "PACK_REAL", False)
+
+    async def _sim():
+        pharmacy._JOB_LOCK = asyncio.Lock()
+        await pharmacy._pack_worker("p1", "omx-02")
+    asyncio.run(_sim())
+    assert calls == []
+    assert pharmacy._job("omx-02")["상태"] == "완료"
+
+    # PACK_REAL=1 이면 러너로 프록시한다.
+    calls.clear()
+    pharmacy._JOBS = {}
+    monkeypatch.setattr(pharmacy, "PACK_REAL", True)
+
+    async def _real():
+        pharmacy._JOB_LOCK = asyncio.Lock()
+        await pharmacy._pack_worker("p2", "omx-02")
+    asyncio.run(_real())
+    assert any(u.endswith("/pack/start") for u in calls)
+    assert pharmacy._job("omx-02")["상태"] == "완료"
+
+
 # ── 세션 연결 조제 (pharmacy_link) ────────────────────────────────────────────
 class _FakeConn:
     def __init__(self, recorder, fail_insert_job=False):
