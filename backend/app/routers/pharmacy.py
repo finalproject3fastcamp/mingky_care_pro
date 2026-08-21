@@ -58,39 +58,47 @@ async def get_tray() -> dict:
     return await pharmacy.read_tray()
 
 
+# robot_id 는 어느 OMX 스테이션인지다. 생략하면 조제 기본 스테이션(omx-01).
+# 조제 박스와 포장 박스가 서로 다른 job 으로 동시에 돌 수 있어야 하므로,
+# 조작 엔드포인트가 모두 robot_id 를 받는다 (기본값으로 하위호환 유지).
+def _robot(robot_id: str | None) -> str | None:
+    return robot_id or None
+
+
 @router.post("/dispense")
-async def post_dispense(request: Request) -> JSONResponse:
+async def post_dispense(request: Request,
+                        robot_id: str | None = Query(None)) -> JSONResponse:
     """조제 시작 — `{환자, 처방코드, 조합, 정책}`.
 
     조합이 비어 있으면 처방코드의 원본을 쓴다. 화면이 무작위로 다시 뽑았다면
     반드시 조합을 함께 보내야 한다 — 안 그러면 로봇이 화면과 다른 순서로 집는다.
     """
     body = await request.json()
-    result, status = await pharmacy.start_dispense(body)
+    result, status = await pharmacy.start_dispense(body, _robot(robot_id))
     return JSONResponse(result, status_code=status)
 
 
 @router.post("/stop")
-async def post_stop() -> dict:
+async def post_stop(robot_id: str | None = Query(None)) -> dict:
     """중단을 요청한다. 실제 워커는 홈 복귀 후 종료하므로 몇 초 걸린다."""
-    return await pharmacy.stop_dispense()
+    return await pharmacy.stop_dispense(_robot(robot_id))
 
 
 @router.post("/pack")
-async def post_pack() -> JSONResponse:
-    result, status = await pharmacy.start_pack()
+async def post_pack(robot_id: str | None = Query(None)) -> JSONResponse:
+    result, status = await pharmacy.start_pack(_robot(robot_id))
     return JSONResponse(result, status_code=status)
 
 
 @router.post("/reset")
-async def post_reset() -> JSONResponse:
-    result, status = await pharmacy.reset_state()
+async def post_reset(robot_id: str | None = Query(None)) -> JSONResponse:
+    result, status = await pharmacy.reset_state(_robot(robot_id))
     return JSONResponse(result, status_code=status)
 
 
 @router.get("/state")
-async def get_state() -> dict:
-    return await pharmacy.snapshot()
+async def get_state(robot_id: str | None = Query(None)) -> dict:
+    return await pharmacy.snapshot(_robot(robot_id))
 
 
 @router.get("/progress")

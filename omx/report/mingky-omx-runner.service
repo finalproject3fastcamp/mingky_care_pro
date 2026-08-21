@@ -1,0 +1,20 @@
+[Unit]
+Description=밍키케어 OMX 박스 러너 (조제/포장/트레이 HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 조제/포장 스크립트를 돌리는 계정과 같게 둔다.
+User=omx
+# `omx.report.runner` 를 임포트하려면 저장소 루트에서 실행한다. 러너는 표준
+# 라이브러리만 쓰므로 시스템 python3 로 충분하다(자식 run.sh 가 il venv 를 스스로
+# source 하고, count_tray·pack_run 은 OMX_PYTHON 으로 띄운다).
+WorkingDirectory=/home/omx/mingky_care_pro
+EnvironmentFile=/etc/mingky/omx-runner.env
+ExecStart=/usr/bin/python3 -m omx.report.runner
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

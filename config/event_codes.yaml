@@ -566,3 +566,25 @@ ward.arrived:
   level: info
   payload: { session_id: int, patient_id: string }
   # 병동 도착. 입원 경로의 종착이다.
+# === 조제-세션 연결 (item 3) ===============================================
+#
+# 안내 로봇이 약국에 도착하면(pharmacy.arrived — item 2 가 정의) 백엔드가 그
+# 세션·환자로 조제를 조제 스테이션(omx-01)에서 시작한다. 아래 둘은 그 연결을
+# 타임라인에 남기는 코드로, 백엔드가 직접 발행한다(source_node: backend.pharmacy).
+#
+# robot_types 는 manipulator — 이벤트의 robot_id 가 조제한 OMX 박스이기 때문이다.
+# session_id 는 events 컬럼에 채워 세션 타임라인에 붙는다(pharmacy.arrived 와 짝).
+
+pharmacy.dispense_requested:
+  robot_types: [manipulator]
+  level: info
+  payload: { session_id: int, patient_id: string, omx_robot_id: string }
+  # 도착 → 세션 연결 조제 시작. 어느 박스가 맡았는지(omx_robot_id)를 함께 남겨
+  # 세션에서 조제 스테이션으로 바로 넘어갈 수 있게 한다.
+
+pharmacy.dispense_completed:
+  robot_types: [manipulator]
+  level: info
+  payload: { session_id: int, dispense_id: string }
+  # 세션 연결 조제가 끝났다. 약국 세션 스텝을 완료시키는 것은 item 2 담당이고,
+  # 여기는 그 신호를 세션에 실어 발행하는 데까지다.
