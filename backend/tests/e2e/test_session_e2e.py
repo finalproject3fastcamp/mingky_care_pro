@@ -737,3 +737,88 @@ def test_the_same_fact_is_not_announced_twice(backend):
 
     repeated = {key: count for key, count in per_key.items() if count > 1}
     assert repeated == {}, repeated
+
+
+def test_two_pinkies_run_concurrent_sessions_kept_independent(backend):
+    """핑키 2대가 동시에 안내를 돌려도 관제가 두 세션을 독립적으로 유지한다.
+
+    백엔드 구조상 멀티 로봇은 가능했지만(로봇당 활성 세션 1개), 두 대를 실제로
+    인터리브해서 돌려본 시나리오가 없었다. 하네스가 세션을 로봇별로 추적하지
+    않으면 pinky-02 의 스캔이 pinky-01 의 session_id 를 덮어써서, 이후 pinky-01
+    이벤트가 엉뚱한 세션에 붙는다 — 여기서 그 교차 오염이 없음을 잠근다.
+
+    이 파일의 앞선 테스트가 만든 완주 세션 수(SLO 절대값)를 흔들지 않도록
+    맨 끝에 둔다. 여기서는 델타로만 판정한다.
+    """
+    before = get_json(backend, "/slo/completion")
+
+    play("two_pinky_concurrent.yaml", backend)
+
+    # 세션 2개가 각각 다른 로봇으로, 서로 다른 session_id 로 생겼다.
+    sessions = query("""
+        SELECT session_id, patient_id, robot_id, end_reason, ended_at
+        FROM guidance_sessions
+        WHERE robot_id IN ('pinky-01', 'pinky-02')
+          AND patient_id IN ('p001', 'p002')
+        ORDER BY session_id DESC LIMIT 2
+    """)
+    by_robot = {row["robot_id"]: row for row in sessions}
+
+    assert set(by_robot) == {"pinky-01", "pinky-02"}, sessions
+    one, two = by_robot["pinky-01"], by_robot["pinky-02"]
+    assert one["session_id"] != two["session_id"]
+    assert one["patient_id"] == "p001"
+    assert two["patient_id"] == "p002"
+
+    # 둘 다 completed 로 정상 종료.
+    for row in (one, two):
+        assert row["end_reason"] == "completed", row["robot_id"]
+        assert row["ended_at"] is not None, row["robot_id"]
+
+    # 각자 단계 수만큼(p001=3, p002=2) session_steps 가 모두 완료됐다.
+    expected_steps = {
+        one["session_id"]: ["X-ray", "임상병리실", "물리치료실"],
+        two["session_id"]: ["X-ray", "CT"],
+    }
+    for session_id, names in expected_steps.items():
+        steps = query("""
+            SELECT step_order, visit_name, arrived_at, completed_at, completed_source
+            FROM session_steps WHERE session_id = $1 ORDER BY step_order
+        """, session_id)
+        assert [s["visit_name"] for s in steps] == names, session_id
+        for step in steps:
+            assert step["arrived_at"] is not None, (session_id, step["visit_name"])
+            assert step["completed_at"] is not None, (session_id, step["visit_name"])
+            assert step["completed_source"] == "qr", (session_id, step["visit_name"])
+
+    # 교차 오염이 없다. 각 세션에 붙은 이벤트의 robot_id 는 한 대뿐이어야 한다.
+    for robot_id, row in by_robot.items():
+        landed = query("""
+            SELECT DISTINCT robot_id FROM events
+            WHERE session_id = $1 AND source_node = 'fake_robot'
+        """, row["session_id"])
+        assert [r["robot_id"] for r in landed] == [robot_id], (robot_id, landed)
+
+    # 두 세션 모두 자기 마커로 뜬 session.started 를 갖는다(스캔이 안 섞였다).
+    marker_of = {
+        row["session_id"]: scalar("""
+            SELECT payload->>'marker_id' FROM events
+            WHERE session_id = $1 AND event_code = 'session.started'
+            LIMIT 1
+        """, row["session_id"])
+        for row in (one, two)
+    }
+    assert marker_of[one["session_id"]] == "30"
+    assert marker_of[two["session_id"]] == "31"
+
+    # SLO 판정이 두 세션을 모두 성공으로 포함한다. 앞선 세션 수에 무관하도록
+    # 델타로 본다 — 판정 세션 +2, 성공 +2, 실패는 그대로.
+    after = get_json(backend, "/slo/completion")
+    assert after["sessions_judged"] == before["sessions_judged"] + 2
+    assert after["success"] == before["success"] + 2
+    assert after["failure"] == before["failure"]
+
+    # 두 세션 모두 실패 목록에 없다(둘 다 success).
+    failed_ids = {f["session_id"] for f in after["failed_sessions"]}
+    assert one["session_id"] not in failed_ids
+    assert two["session_id"] not in failed_ids

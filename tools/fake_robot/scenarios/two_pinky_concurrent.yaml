@@ -1,0 +1,75 @@
+# 핑키 2대 동시 안내 — 관제가 두 세션을 독립적으로 유지하는지 본다.
+#
+# 백엔드는 로봇당 활성 세션 1개(003 의 uq_active_session_robot)를 전제로 이미
+# 멀티 로봇을 지탱한다. 하지만 두 대를 실제로 인터리브해서 돌려본 시나리오가
+# 없었다. 이 시나리오가 그 공백을 메운다.
+#
+# pinky-01 → p001(윤동수, 퇴행성 무릎 관절염) X-ray → 임상병리실 → 물리치료실 3단계
+# pinky-02 → p002(권민수, 단순 팔 골절)     X-ray → CT 2단계
+# (단계 수·이름은 database/seeds/001_initial_data.sql 의 examination_steps 정본)
+#
+# marker_id 는 서로 달라야 한다. 003 의 uq_active_session_marker 가 활성 세션
+# 사이에서 전역 유니크라, 두 세션이 같은 마커를 동시에 들면 두 번째 스캔이
+# 409 로 막힌다. 그래서 30·31 로 갈라 준다.
+#
+# 스텝을 한 대씩 몰지 않고 번갈아 배치한다. 이렇게 해야 pinky-02 의 스캔이
+# pinky-01 의 진행 중간에 끼어들고, 이후 두 로봇의 이벤트가 교차한다 — 하네스가
+# 세션을 로봇별로 추적하지 않으면(과거 버그) 이 교차에서 이벤트가 엉뚱한 세션에
+# 붙는다.
+
+name: 핑키 2대 동시 안내 (p001 3단계 · p002 2단계)
+
+robots:
+  - id: pinky-01
+    type: mobile
+    battery_percent: 88
+    voltage: 11.9
+  - id: pinky-02
+    type: mobile
+    battery_percent: 84
+    voltage: 11.8
+
+steps:
+  # --- 두 대 모두 활성화 후 스캔 (인터리브) ---
+  - { robot: pinky-01, action: battery }
+  - { robot: pinky-02, action: battery }
+  - { robot: pinky-01, action: arm }
+  - { robot: pinky-02, action: arm }
+  - { robot: pinky-01, action: qr_scan, patient_id: p001, marker_id: 30 }
+  - { robot: pinky-02, action: qr_scan, patient_id: p002, marker_id: 31 }
+
+  - { robot: pinky-01, action: event, code: session.started, payload: { patient_id: p001, marker_id: 30 } }
+  - { robot: pinky-02, action: event, code: session.started, payload: { patient_id: p002, marker_id: 31 } }
+  - { robot: pinky-01, action: event, code: qr.scan_ok, payload: { patient_id: p001 } }
+  - { robot: pinky-02, action: event, code: qr.scan_ok, payload: { patient_id: p002 } }
+
+  # --- 1단계: 둘 다 X-ray (교차) ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: X-ray }, wait: 0.5 }
+  - { robot: pinky-02, action: event, code: nav.goal_succeeded, payload: { visit_name: X-ray }, wait: 0.5 }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 1, source: qr } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 1, source: qr } }
+
+  # --- 2단계: pinky-01 임상병리실 · pinky-02 CT (교차) ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 임상병리실 } }
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: CT } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 임상병리실 }, wait: 0.5 }
+  - { robot: pinky-02, action: event, code: nav.goal_succeeded, payload: { visit_name: CT }, wait: 0.5 }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 2, source: qr } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 2, source: qr } }
+
+  # --- pinky-02 는 여기서 완주. pinky-01 은 3단계가 남았다 ---
+  - { robot: pinky-02, action: event, code: session.ended, payload: { end_reason: completed } }
+  - { robot: pinky-02, action: event, code: dock.return_started, payload: { station_name: dock-2 } }
+
+  # --- pinky-01 3단계 물리치료실 (pinky-02 복귀 중에 진행) ---
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 물리치료실 } }
+  - { robot: pinky-02, action: event, code: dock.return_succeeded, payload: { station_name: dock-2 }, wait: 0.5 }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 물리치료실 }, wait: 0.5 }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 3, source: qr } }
+
+  # --- pinky-01 완주 후 충전소 복귀 ---
+  - { robot: pinky-01, action: event, code: session.ended, payload: { end_reason: completed } }
+  - { robot: pinky-01, action: event, code: dock.return_started, payload: { station_name: dock-1 } }
+  - { robot: pinky-01, action: event, code: dock.return_succeeded, payload: { station_name: dock-1 }, wait: 0.5 }
