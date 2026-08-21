@@ -55,6 +55,8 @@ import json
 import logging
 import os
 import random
+import sys
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +65,70 @@ from typing import AsyncIterator
 from .db import get_pool
 
 log = logging.getLogger("mingky.pharmacy")
+
+# ── 관제 리포터 (OMX 박스에서만 켜진다) ─────────────────────────────────
+# OMX 는 ROS 미사용(domain NULL)이라 게이트웨이가 없다. 이 워커가 조제/포장을
+# 실제로 돌리는 프로세스이므로, 여기서 직접 관제(백엔드)로 라이프사이클 이벤트를
+# 발행한다. 후크는 `MINGKY_OMX_ROBOT_ID` 가 설정된 OMX 박스에서만 켜진다 —
+# env 가 없으면(데모·CI·개발) 아무 것도 나가지 않아 기존 동작·기존 테스트가
+# 100% 그대로다.
+#
+# **pick 성공/실패는 발행하지 않는다.** ACT 정책은 성공 여부를 내놓지 않고
+# 진행률은 시간 기준이라, 우리에겐 pick 의 ground truth 가 없다(omx/web/README.md).
+# 근거 없는 성공 신호를 지어내지 않는다 — 발행하는 것은 시간으로 증명되는 사이클
+# 라이프사이클(started/completed/aborted)과 정책 로드뿐이다.
+#
+# 리포터는 저장소 밖(omx/report)에 있고 표준 라이브러리만 쓴다. 백엔드 venv 가
+# 그 경로를 못 볼 수 있어 저장소 루트를 sys.path 에 넣고 임포트한다. 실패해도
+# 후크가 조용히 꺼질 뿐이다.
+if str(_PROJECT_ROOT := Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+try:
+    from omx.report import reporter as _reporter
+except Exception:  # noqa: BLE001
+    _reporter = None
+
+
+def _report_robot_id() -> str | None:
+    """OMX 박스에서만 값이 있다. 없으면 후크 전체가 조용히 꺼진다."""
+    return os.environ.get("MINGKY_OMX_ROBOT_ID") or None
+
+
+async def _report(fn_name: str, *args) -> None:
+    """리포터 함수를 백그라운드 스레드에서 조용히 호출한다.
+
+    env 미설정이거나 리포터가 없으면 아무 것도 하지 않는다. urllib 은 블로킹이라
+    스레드로 밀어 이벤트 루프를 막지 않고, 네트워크 실패는 삼킨다 — 관제 보고가
+    조제 워커를 죽이면 안 된다(heartbeat 와 같은 원칙: routers/robots.py).
+    """
+    rid = _report_robot_id()
+    if not rid or _reporter is None:
+        return
+    try:
+        fn = getattr(_reporter, fn_name)
+        await asyncio.to_thread(fn, *args, rid=rid)
+    except Exception:  # noqa: BLE001
+        log.debug("관제 보고 실패(%s) — 무시", fn_name, exc_info=True)
+
+
+async def _report_policy_loaded(policy_id: str) -> None:
+    """선택된 정책의 체크포인트를 관제에 알린다 — '무엇이 돌고 있나'(§4.4).
+
+    조제 정책은 코드 SHA 가 아니라 체크포인트가 버전이다. 색별 정책은 체크포인트가
+    색마다 달라 하나로 접어 문자열로 남긴다. dataset_revision 자리에는 정책의 HF
+    Hub repo id 를 쓴다 — 저장소가 아는 유일한 '학습 산출물' 참조다.
+    """
+    if not _report_robot_id() or _reporter is None:
+        return
+    pol = _POLICIES.get(policy_id) or _POLICIES.get(DEFAULT_POLICY) or {}
+    ckpt = pol.get("ckpt")
+    repo = pol.get("repo", "")
+    if isinstance(ckpt, dict):
+        ckpt_str = ",".join(f"{k}={v}" for k, v in sorted(ckpt.items()))
+    else:
+        ckpt_str = "" if ckpt is None else str(ckpt)
+    checkpoint_id = f"{repo}@{ckpt_str}" if repo else ckpt_str
+    await _report("policy_loaded", checkpoint_id, repo)
 
 # ── 데이터/모듈 경로 ────────────────────────────────────────────────────
 # 학습된 정책 목록만 파일로 남는다 (pharmacy 전용 · 관제 DB 와 무관).
@@ -510,23 +576,39 @@ async def _dispense_worker(job_id: str, 처방: dict, policy_id: str) -> None:
     조합 = 처방["조합"]
     _push({"종류": "시작", "job": job_id, "총단계": len(조합)})
 
+    # 관제 보고(OMX 박스에서만). 정책 로드 → 사이클 시작. duration_ms 는 실제
+    # 경과로만 채운다 — 성공 판정이 아니라 시간이 정본이다(§4.4). 시뮬/실제 어느
+    # 쪽이든 조제 흐름·상태는 건드리지 않는 부수효과이고, env 없으면 전부 무동작.
+    await _report_policy_loaded(policy_id)
+    _시작 = time.monotonic()
+    await _report("cycle_started", job_id, "+".join(조합) or "(빈 조합)")
+
+    async def _완료() -> None:
+        await _조제완료(job_id)
+        await _report("cycle_completed", job_id,
+                      int((time.monotonic() - _시작) * 1000))
+
+    async def _포기(이유: str) -> None:
+        await _중단(이유)
+        await _report("cycle_aborted", job_id, 이유)
+
     if not REAL_MODE:
         for i, color in enumerate(조합, 1):
             await _단계시작(i, color)
             for _ in range(16):
                 if _JOB.get("중단요청"):
-                    await _중단("사용자가 중단했습니다")
+                    await _포기("사용자가 중단했습니다")
                     return
                 await asyncio.sleep(0.25)
             await _단계끝(i, color, True, "시뮬레이션")
-        await _조제완료(job_id)
+        await _완료()
         return
 
     ok, 메모 = await _run_sequence(조합, policy_id)
     if not ok:
-        await _중단(메모)
+        await _포기(메모)
         return
-    await _조제완료(job_id)
+    await _완료()
 
 
 async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
@@ -644,6 +726,12 @@ async def _pack_worker(job_id: str) -> None:
     async with _JOB_LOCK:
         _JOB["상태"] = "포장중"
 
+    # 포장 사이클도 관제로 보고한다(OMX 박스에서만). 조제와 job_id 가 같으므로
+    # dispense_id 에 접미사를 붙여 구분한다. 넷 중 로봇이 하는 것은 "약 투입"
+    # 하나지만, 사이클 시간은 포장 전체의 벽시계 소요다.
+    _시작 = time.monotonic()
+    await _report("cycle_started", f"{job_id}-pack", "pack")
+
     for 단계 in ("봉투 준비", "약 투입", "라벨 인쇄", "밀봉"):
         _push({"종류": "포장단계", "이름": 단계})
         # 로봇이 하는 것은 "약 투입" 하나다. 학습된 작업이 "약통을 집어 봉투에
@@ -653,6 +741,7 @@ async def _pack_worker(job_id: str) -> None:
             ok, 메모 = await _run_pack()
             if not ok:
                 await _중단(메모)
+                await _report("cycle_aborted", f"{job_id}-pack", 메모)
                 return
         else:
             await asyncio.sleep(1.2)
@@ -661,6 +750,8 @@ async def _pack_worker(job_id: str) -> None:
         _JOB["상태"] = "완료"
     _push({"종류": "완료", "job": job_id,
            "시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    await _report("cycle_completed", f"{job_id}-pack",
+                  int((time.monotonic() - _시작) * 1000))
 
 
 async def _run_pack() -> tuple[bool, str]:
