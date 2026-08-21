@@ -80,6 +80,9 @@ class FleetMap:
     origin: tuple[float, float]
     _rows: tuple[tuple[tuple[int, str | None], ...], ...] = field(repr=False,
                                                                  default=())
+    # 셀마다 '여기 서면 남은 길이 끊기는가'.
+    _blocking: tuple[tuple[tuple[int, int], ...], ...] = field(repr=False,
+                                                              default=())
 
     def area_at(self, x: float, y: float) -> str | None:
         """맵 좌표(m)가 속한 구간. 못 가는 곳이거나 맵 밖이면 None.
@@ -99,6 +102,36 @@ class FleetMap:
                 return area_id
             pos += length
         return None
+
+    def blocks_at(self, x: float, y: float) -> bool:
+        """여기 서 있는 로봇이 **실제로** 남의 길을 막는가.
+
+        구간에 있다는 것과 길을 막는다는 것은 다르다. 넓은 홀의 벽 가장자리는
+        여유가 좁아 구간(segment)으로 잡히지만, 거기 세워 둬도 홀 한복판으로
+        얼마든지 지나갈 수 있다.
+
+        그 둘을 섞었더니 실제 오판이 났다 — 충전소에 주차한 로봇이 옆 도크로
+        가는 길을 막는 것으로 판정돼, 갈 수 있는 로봇을 세웠다. 여유로 세면
+        23곳 중 11곳이 '막는다' 인데 실제로 막는 곳은 1곳뿐이다.
+
+        판정은 굽는 쪽이 한다 (`build_fleet_segments.py` 의 `blocking_cells`).
+        여기서는 읽기만 한다 — 같은 계산을 두 곳에서 하면 언젠가 갈라진다.
+
+        래스터가 없으면(구버전 파일) **막는 것으로 본다.** 모를 때는 보수적인
+        쪽이 맞다 — 안 막는다고 잘못 보면 두 대가 같은 외길에 들어간다.
+        """
+        if not self._blocking:
+            return True
+        cx = int((x - self.origin[0]) / self.resolution)
+        cy = self.height - 1 - int((y - self.origin[1]) / self.resolution)
+        if not (0 <= cx < self.width and 0 <= cy < self.height):
+            return False
+        pos = 0
+        for length, value in self._blocking[cy]:
+            if pos <= cx < pos + length:
+                return bool(value)
+            pos += length
+        return True
 
     def area_of_waypoint(self, name: str) -> str | None:
         for area in self.areas.values():
@@ -211,6 +244,14 @@ def parse(doc: dict) -> FleetMap:
             runs.append((int(length), legend.get(int(value))))
         rows.append(tuple(runs))
 
+    blocking = []
+    for row in (doc.get("blocking") or {}).get("rows") or ():
+        runs = []
+        for token in str(row).split():
+            length, value = token.split(":")
+            runs.append((int(length), int(value)))
+        blocking.append(tuple(runs))
+
     return FleetMap(
         map_name=str(doc.get("map") or ""),
         map_sha256=str(doc.get("map_sha256") or ""),
@@ -221,6 +262,7 @@ def parse(doc: dict) -> FleetMap:
         resolution=float(grid.get("resolution") or 0.0),
         origin=tuple(grid.get("origin") or (0.0, 0.0))[:2],
         _rows=tuple(rows),
+        _blocking=tuple(blocking),
     )
 
 

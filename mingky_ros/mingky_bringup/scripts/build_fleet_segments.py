@@ -49,6 +49,7 @@ zone 을 기다리는 자리로 쓰는 것이 요점이다. 외길 안에서 기
 import argparse
 import collections
 import hashlib
+import math
 import sys
 from pathlib import Path
 
@@ -509,6 +510,10 @@ def build(grid: Grid, waypoints: dict, pass_clear: float, solo_clear: float,
     for item in zones + segments:
         area_of[item["id"]] = len(item["cells"]) * cell_m2
 
+    # 셀마다 '여기 서면 길이 끊기는가'. 예약층이 이걸 보고 **실제로 막는
+    # 로봇만** 구간을 쥐게 한다 (blocking_cells 주석).
+    blocking = blocking_cells(grid, drivable, pass_clear, robot_width)
+
     # waypoint 를 구간에 붙인다. 정확히 그 셀이 어디 속하는지가 판정의 근거다.
     #
     # 주행 가능 판정에 못 미치는 waypoint 도 **버리지 않고** 가장 가까운
@@ -525,8 +530,12 @@ def build(grid: Grid, waypoints: dict, pass_clear: float, solo_clear: float,
         placed[name] = {
             "area": area,
             "clearance": round(clear, 3),
-            # 여기 로봇이 서 있으면 상대가 지나갈 수 없다.
-            "blocks_passage": bool(clear < pass_clear),
+            # 여기 로봇이 서 있으면 상대가 지나갈 수 없는가.
+            #
+            # **여유로 판정하지 않는다.** 그 기준은 넓은 홀의 벽 가장자리와
+            # 좁은 복도를 구분하지 못해, 홀 벽에 세운 로봇도 막는 것으로
+            # 잡혔다 — 충전소가 그 오판의 사례다 (blocking_cells 주석).
+            "blocks_passage": bool(k is not None and blocking[k]),
             # Nav2 가 통과 불가로 볼 수 있는 위치. check_waypoints.py 가
             # 같은 것을 더 정확히 본다 — 여기서는 표시만 한다.
             "marginal": bool(clear < solo_clear),
@@ -534,7 +543,8 @@ def build(grid: Grid, waypoints: dict, pass_clear: float, solo_clear: float,
     stats = {"absorbed_cells": absorbed,
              "footprint_cells": footprint_cells,
              "min_zone_cells": min_zone}
-    return zones, segments, placed, area_of, drivable, wide, narrow, stats
+    return (zones, segments, placed, area_of, drivable, wide, narrow, stats,
+            blocking)
 
 
 def _nearest_area(grid: Grid, zone_of: dict, start: int) -> str | None:
@@ -555,6 +565,99 @@ def _nearest_area(grid: Grid, zone_of: dict, start: int) -> str | None:
                 seen.add(nk)
                 queue.append(nk)
     return None
+
+
+def blocking_cells(grid: Grid, drivable, pass_clear: float, robot_width: float):
+    """여기 로봇이 서 있으면 **남은 공간이 끊기는가** 를 셀마다 판정한다.
+
+    ## 왜 여유(clearance)로는 안 되는가
+
+    처음에는 벽까지 여유가 좁으면 통행을 막는 것으로 봤다. 그런데 그 기준은
+    **넓은 홀의 벽 가장자리**와 **좁은 복도**를 구분하지 못한다 — 둘 다 여유가
+    작다. 그래서 홀 벽에 붙여 세운 로봇도 복도를 막는 것으로 잡혔다.
+
+    실제로 그 오판이 났다. 충전소 두 곳은 여유가 0.075 m 라 '막는다' 로
+    분류됐는데, 셀 단위로 세워 보면 한 대가 서 있어도 다른 대가 옆 도크까지
+    갈 수 있다. 예약층은 그 오판 때문에 멀쩡히 갈 수 있는 로봇을 세웠다.
+
+    ## 무엇을 재는가
+
+    로봇 하나를 그 자리에 놓고(중심 간 2R 안쪽을 막고) 남은 주행 공간이
+    여전히 하나로 이어져 있는지 본다. 끊기면 그 로봇은 실제로 길을 막는
+    것이고, 안 끊기면 옆으로 지나갈 수 있다.
+
+    여유가 교차 기준 이상인 셀은 시험하지 않는다 — 두 대가 스쳐 지날 수 있는
+    곳이라 정의상 막을 수 없고, 그 덕에 시험 대상이 3분의 1로 준다.
+    """
+    radius = 2 * (robot_width / 2 + 0.01)      # 두 로봇 중심 사이 최소 거리
+    span = int(math.ceil(radius / grid.res))
+    offsets = [(dx, dy)
+               for dy in range(-span, span + 1)
+               for dx in range(-span, span + 1)
+               if math.hypot(dx, dy) * grid.res <= radius]
+
+    total_drivable = sum(1 for k in range(grid.w * grid.h) if drivable[k])
+    # 몇 셀 떨어져 나가는 것은 계단 현상이다. 로봇 하나가 들어갈 넓이 이상이
+    # 끊겨야 진짜로 길이 막힌 것으로 본다.
+    noise = (robot_width * robot_width) / (grid.res * grid.res)
+
+    blocking = bytearray(grid.w * grid.h)
+    for k in range(grid.w * grid.h):
+        if not drivable[k]:
+            continue
+        if grid.clearance[k] >= pass_clear:
+            continue                    # 두 대가 스쳐 지나는 곳. 막을 수 없다.
+
+        cx, cy = k % grid.w, k // grid.w
+        blocked = set()
+        for dx, dy in offsets:
+            nx, ny = cx + dx, cy + dy
+            if 0 <= nx < grid.w and 0 <= ny < grid.h:
+                nk = ny * grid.w + nx
+                if drivable[nk]:
+                    blocked.add(nk)
+        blocked.discard(k)
+
+        # 로봇을 뺀 뒤 남는 주행 가능 셀 수. 여기에 못 닿는 셀이 많으면 끊긴 것이다.
+        available = total_drivable - 1 - len(blocked)
+        if available <= 0:
+            continue
+
+        start = next((c for c in range(grid.w * grid.h)
+                      if drivable[c] and c != k and c not in blocked), None)
+        seen = {start}
+        queue = collections.deque([start])
+        while queue:
+            c = queue.popleft()
+            x, y = c % grid.w, c // grid.w
+            for dx, dy in Grid.NEIGHBORS8:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < grid.w and 0 <= ny < grid.h:
+                    nc = ny * grid.w + nx
+                    if (drivable[nc] and nc != k and nc not in blocked
+                            and nc not in seen):
+                        seen.add(nc)
+                        queue.append(nc)
+        if available - len(seen) > noise:
+            blocking[k] = 1
+    return blocking
+
+
+def blocking_raster(grid: Grid, blocking) -> list[str]:
+    """막는 셀을 런렝스로 접는다. 1 이 '여기 서면 길이 끊긴다'."""
+    rows = []
+    for y in range(grid.h):
+        runs, value, length = [], blocking[y * grid.w], 0
+        for x in range(grid.w):
+            current = blocking[y * grid.w + x]
+            if current == value:
+                length += 1
+            else:
+                runs.append(f"{length}:{value}")
+                value, length = current, 1
+        runs.append(f"{length}:{value}")
+        rows.append(" ".join(runs))
+    return rows
 
 
 def grid_raster(grid: Grid, zones, segments) -> dict:
@@ -668,8 +771,9 @@ def main() -> int:
     pass_clear = args.robot_width + args.pass_margin / 2
     solo_clear = args.robot_width / 2 + args.solo_margin
 
-    zones, segments, placed, area_of, drivable, wide, narrow, stats = build(
-        grid, waypoints, pass_clear, solo_clear, args.robot_width)
+    (zones, segments, placed, area_of, drivable, wide, narrow, stats,
+     blocking) = build(grid, waypoints, pass_clear, solo_clear,
+                       args.robot_width)
 
     cell_m2 = grid.res * grid.res
     n_drive = sum(drivable)
@@ -758,6 +862,10 @@ def main() -> int:
         # 읽고도 "이 로봇이 지금 어느 구간인가" 를 답하지 못해, 결국 위
         # 알고리즘을 한 벌 더 구현하게 된다. 정본은 하나여야 한다.
         "grid": grid_raster(grid, zones, segments),
+        # 셀마다 '여기 서면 길이 끊기는가'. 예약층이 이걸 보고 실제로 막는
+        # 로봇만 구간을 쥐게 한다 — 없으면 안 막는 자리에 선 로봇 때문에
+        # 상대가 헛대기한다 (실측된 오판: 충전소).
+        "blocking": {"rows": blocking_raster(grid, blocking)},
         "zones": {
             z["id"]: {
                 "kind": "zone",

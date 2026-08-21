@@ -193,6 +193,155 @@ grid:
   - '192:0'
   - '192:0'
   - '192:0'
+blocking:
+  rows:
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - 179:0 1:1 12:0
+  - 175:0 1:1 2:0 2:1 12:0
+  - 175:0 5:1 12:0
+  - 174:0 6:1 12:0
+  - 174:0 7:1 11:0
+  - 174:0 6:1 12:0
+  - 175:0 4:1 13:0
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - 143:0 1:1 48:0
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - 182:0 2:1 8:0
+  - 182:0 3:1 7:0
+  - 182:0 1:1 9:0
+  - 179:0 2:1 11:0
+  - '192:0'
+  - '192:0'
+  - 162:0 1:1 29:0
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - 75:0 3:1 114:0
+  - 75:0 4:1 113:0
+  - 72:0 8:1 112:0
+  - 72:0 6:1 114:0
+  - 72:0 6:1 114:0
+  - 75:0 3:1 114:0
+  - 75:0 3:1 114:0
+  - 75:0 3:1 114:0
+  - 75:0 3:1 114:0
+  - 75:0 6:1 111:0
+  - 75:0 6:1 111:0
+  - 73:0 8:1 111:0
+  - 74:0 4:1 114:0
+  - 75:0 3:1 114:0
+  - 77:0 2:1 113:0
+  - '192:0'
+  - '192:0'
+  - 111:0 3:1 78:0
+  - 111:0 3:1 78:0
+  - 111:0 3:1 78:0
+  - 108:0 6:1 78:0
+  - 108:0 6:1 78:0
+  - 108:0 11:1 73:0
+  - 113:0 6:1 73:0
+  - 113:0 6:1 73:0
+  - 113:0 4:1 75:0
+  - 113:0 4:1 75:0
+  - 113:0 4:1 75:0
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
 zones:
   zone-1:
     kind: zone
@@ -450,23 +599,23 @@ segments:
 waypoints:
   charging_station_1:
     area: seg-4
-    clearance: 0.125
-    blocks_passage: true
+    clearance: 0.075
+    blocks_passage: false
     marginal: false
   charging_station_2:
     area: seg-16
-    clearance: 0.125
-    blocks_passage: true
+    clearance: 0.075
+    blocks_passage: false
     marginal: false
   clinical_pathology_room_goal:
     area: seg-15
     clearance: 0.1
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   clinical_pathology_room_waiting:
     area: seg-15
     clearance: 0.075
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   ct_room_goal:
     area: zone-1
@@ -486,7 +635,7 @@ waypoints:
   mri_room_waiting:
     area: seg-5
     clearance: 0.075
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   payment_goal:
     area: zone-3
@@ -501,7 +650,7 @@ waypoints:
   pharmacy_waiting:
     area: seg-2
     clearance: 0.1
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   physical_therapy_goal:
     area: zone-1
@@ -521,7 +670,7 @@ waypoints:
   reception_payment_waiting:
     area: seg-7
     clearance: 0.1
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   restroom_goal:
     area: zone-1
@@ -536,7 +685,7 @@ waypoints:
   treatment_room_goal:
     area: seg-3
     clearance: 0.125
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   treatment_room_waiting:
     area: zone-1
@@ -556,10 +705,10 @@ waypoints:
   xray_room_goal:
     area: seg-6
     clearance: 0.1
-    blocks_passage: true
+    blocks_passage: false
     marginal: false
   xray_room_waiting:
     area: seg-6
     clearance: 0.1
-    blocks_passage: true
+    blocks_passage: false
     marginal: false

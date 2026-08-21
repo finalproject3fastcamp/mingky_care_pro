@@ -70,12 +70,35 @@ _INSERT = """
 
 # visit_name 으로 단계를 찾지 않는다. 한 세션에서 같은 장소를 두 번 방문할 수
 # 있어(진료실 초진·판독) 이름만으로는 어느 단계인지 결정되지 않는다.
-# 아직 도착하지 않은 가장 이른 단계가 곧 현재 단계다.
+#
+# **step_order 가 아니라 visit_seq 로 고른다** (013). 검사실이 겹치면 관제가
+# 순서를 바꾸므로, 계획 순서로 고르면 로봇은 CT 에 도착했는데 X-ray 에
+# 도착 시각이 찍힌다. 실제로 방문에 들어간 것 중 가장 최근 것이 지금 도착한
+# 단계다 — session_current_step 뷰와 같은 규칙이다.
 _ARRIVED = """
     UPDATE session_steps SET arrived_at = $1
     WHERE session_step_id = (
         SELECT session_step_id FROM session_steps
         WHERE session_id = $2 AND arrived_at IS NULL
+        ORDER BY (visit_seq IS NULL), visit_seq DESC, step_order
+        LIMIT 1
+    )
+"""
+
+# 로봇이 그 방으로 **출발할 때** 실제 방문 순번을 매긴다 (013).
+#
+# 도착이 아니라 출발에 매기는 것이 요점이다. 이동 중에도 "지금 어디로 가는
+# 중인가" 를 화면이 말할 수 있어야 하고, 도착 뒤에야 아는 값으로는 그걸
+# 그릴 수 없다.
+#
+# visit_name 으로 찾을 수밖에 없다 — nav.goal_sent 에는 step_order 가 없다.
+# 같은 방을 두 번 가는 일정이면 아직 순번이 없는 쪽에 매겨진다.
+_VISIT_SEQ = """
+    UPDATE session_steps SET visit_seq = COALESCE(
+        (SELECT MAX(visit_seq) + 1 FROM session_steps WHERE session_id = $1), 1)
+    WHERE session_step_id = (
+        SELECT session_step_id FROM session_steps
+        WHERE session_id = $1 AND visit_name = $2 AND visit_seq IS NULL
         ORDER BY step_order LIMIT 1
     )
 """
@@ -114,7 +137,13 @@ async def _apply_state(conn: asyncpg.Connection, event: EventIn) -> int:
     """이벤트에 따른 상태 갱신. 갱신된 행 수를 돌려준다."""
     payload = event.payload
 
-    if event.event_code == "nav.goal_succeeded":
+    if event.event_code == "nav.goal_sent":
+        # 출발 = 그 방을 실제로 몇 번째로 방문하는가가 정해지는 순간 (013).
+        visit_name = payload.get("visit_name")
+        if not visit_name:
+            return 0
+        result = await conn.execute(_VISIT_SEQ, event.session_id, visit_name)
+    elif event.event_code == "nav.goal_succeeded":
         result = await conn.execute(_ARRIVED, event.occurred_at, event.session_id)
     elif event.event_code == "session.step_completed":
         result = await conn.execute(

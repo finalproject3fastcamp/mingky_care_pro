@@ -94,6 +94,7 @@ systemctl enable --now \
     mingky-gateway \
     mingky-battery-pub \
     mingky-teleop-bridge \
+    mingky-fleet-agent \
     mingky-camera-tunnel \
     fg-teleop \
     mingky-system
@@ -102,7 +103,8 @@ cat <<EOF
 
 설치 끝. 확인:
     systemctl status mingky-ssh-tunnel mingky-gateway mingky-battery-pub \
-        mingky-teleop-bridge mingky-camera-tunnel fg-teleop mingky-system
+        mingky-teleop-bridge mingky-fleet-agent mingky-camera-tunnel \
+        fg-teleop mingky-system
 
 아직 남은 것 — 이 스크립트가 못 하는 일:
 

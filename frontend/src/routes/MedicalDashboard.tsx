@@ -9,7 +9,7 @@ import { NotificationArea } from '../components/NotificationArea'
 import { PatientInfoCard } from '../components/PatientInfoCard'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { RobotPicker } from '../components/RobotPicker'
-import { LazyHospitalMap3D } from '../components/LazyHospitalMap3D'
+import { LazyHospitalMap3D, type PeerMarker } from '../components/LazyHospitalMap3D'
 import { RobotModeControl } from '../components/RobotModeControl'
 import { RobotStatusBadge } from '../components/RobotStatusBadge'
 import { TeleopPad } from '../components/TeleopPad'
@@ -20,6 +20,9 @@ import { toNotification } from '../lib/eventMessages'
 import { listEvents } from '../lib/eventsApi'
 import { useRobotMode } from '../lib/useRobotMode'
 import { usePolling } from '../lib/usePolling'
+import { useFleetPoses } from '../lib/useFleetPoses'
+import { freshnessLevel } from '../lib/freshness'
+import { robotColor } from '../lib/robotColors'
 import { useTeleopSocket } from '../lib/useTeleopSocket'
 import type { EventOut } from '../types/events'
 import { isMobile, type ActiveSession, type MobileRobot } from '../types/monitoring'
@@ -30,6 +33,12 @@ const FORECAST_POLL_MS = 120000
 // 그냥 바뀌면 환자·의료진 모두 "인식이 된 건가?" 를 판단할 근거가 없다.
 // 너무 길면 안내 시작이 늦어지므로 읽고 넘어갈 만큼만 잡는다.
 const SCAN_FLASH_MS = 2200
+// 상대 로봇 위치의 나이 판정. 로봇은 0.5초마다 올리므로 3초면 여섯 번을
+// 걸렀다는 뜻이고, 10초면 브리지가 끊긴 것이다 (FleetPoseCard 와 같은 값).
+const PEER_FRESHNESS = { warnSec: 3, staleSec: 10 }
+// 좌표가 멈춰도 나이는 계속 흘러야 한다. 안 그러면 상대가 1분째 멈춰 있는데
+// 화면은 '방금' 인 채로 남는다.
+const PEER_CLOCK_MS = 1000
 export function MedicalDashboard() {
   // "지금 어떤 로봇을 담당하고 있는가" 는 URL 이 갖는다 (/medical/:robotId).
   // 서버 상태가 아니라 이 탭의 시야다 — 의료진이 탭을 각자 열어 각자 다른
@@ -91,6 +100,44 @@ export function MedicalDashboard() {
   // 그 effect 가 매 렌더 돈다.
   const robotList = useMemo(
     () => (robots.data ?? []).filter(isMobile), [robots.data])
+
+  // 담당 로봇 말고 **다른 핑키가 지금 어디 있는지.**
+  //
+  // 두 대를 동시에 돌리면 의료진이 제일 먼저 묻는 것이 "쟤는 지금 어디 있나"
+  // 다. 조작 소켓은 로봇 하나에 매여 있어 그 답을 못 하고, 그래서 위치 전용
+  // 채널을 따로 쓴다 (lib/useFleetPoses.ts).
+  //
+  // 진단 레이어(라이다·파티클)는 얹지 않는다. 두 대분을 겹쳐 그리면 어느
+  // 점이 누구 것인지 알 수 없어 위치추정 판정 자체가 불가능해진다.
+  const fleet = useFleetPoses(Boolean(selectedRobotId))
+  const [fleetNow, setFleetNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setFleetNow(Date.now()), PEER_CLOCK_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  const peers = useMemo<PeerMarker[]>(
+    // 색을 목록 순서로 정하는 것이 Fleet 탭과 같은 규칙이다. 두 화면에서
+    // 같은 로봇이 다른 색이면 색으로 알아보는 습관이 안 생긴다
+    // (lib/robotColors.ts). 그래서 **거르기 전에** 색을 정한다 — 담당 로봇을
+    // 먼저 빼고 세면 남은 로봇의 색이 담당이 누구냐에 따라 달라진다.
+    () => robotList.flatMap((robot, index) => {
+      if (robot.robot_id === selectedRobotId) return []
+      const pose = fleet.poses[robot.robot_id]
+      if (!pose) return []
+      return [{
+        robotId: robot.robot_id,
+        label: robot.display_name,
+        x: pose.x,
+        y: pose.y,
+        yaw: pose.yaw,
+        color: robotColor(index),
+        stale: freshnessLevel(pose.observed_at, PEER_FRESHNESS, fleetNow)
+          === 'stale',
+      }]
+    }),
+    [robotList, selectedRobotId, fleet.poses, fleetNow],
+  )
   const polledRobot = selectedRobotId
     ? robotList.find((r) => r.robot_id === selectedRobotId) ?? null
     : null
@@ -291,6 +338,7 @@ export function MedicalDashboard() {
                 onSetPose={teleop.setPose}
                 estop={teleop.appliedMode === 'estop'}
                 selected
+                peers={peers}
                 robotId={selectedRobotId}
                 returning={selectedRobot?.returning_to_dock ?? false}
                 paused={selectedRobot?.guide_robot_state === 'paused'}

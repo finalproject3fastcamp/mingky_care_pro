@@ -132,6 +132,65 @@ def test_two_robots_never_hold_the_same_segment():
                     assert one & two == set(), (a, b, ga, gb, one & two)
 
 
+# ------------------------------------------------------- 실제로 막는 자리만
+
+def test_parked_where_it_blocks_nothing_holds_nothing():
+    """구간에 있다는 것과 길을 막는다는 것은 다르다.
+
+    넓은 홀의 벽 가장자리는 여유가 좁아 구간으로 잡히지만, 거기 세워 둬도
+    홀 한복판으로 얼마든지 지나갈 수 있다. 둘을 섞었더니 충전소에 주차한
+    로봇이 옆 도크로 가는 길을 막는 것으로 판정돼, 갈 수 있는 로봇을 세웠다.
+    """
+    fleet = make_map()
+    result = fleet_reserve.plan(fleet, [
+        # seg-2 에 주차했지만 그 자리는 통행을 막지 않는다.
+        RobotIntent("pinky-01", area="seg-2", goal_area="seg-2",
+                    guiding=True, blocking=False),
+        RobotIntent("pinky-02", area="zone-A", goal_area="zone-B",
+                    guiding=True, blocking=False),
+    ])
+    assert result.held_by("pinky-01") == frozenset()
+    assert result.decisions["pinky-02"].proceed is True, (
+        "안 막는 자리에 선 로봇 때문에 헛대기가 났다")
+
+
+def test_parked_where_it_blocks_still_holds():
+    """진짜로 막는 자리는 그대로 막아야 한다. 완화가 과해지면 충돌이 난다."""
+    fleet = make_map()
+    result = fleet_reserve.plan(fleet, [
+        RobotIntent("pinky-01", area="seg-2", goal_area="seg-2",
+                    guiding=True, blocking=True),
+        RobotIntent("pinky-02", area="zone-A", goal_area="seg-2",
+                    guiding=True, blocking=False),
+    ])
+    assert "seg-2" in result.held_by("pinky-01")
+    assert result.decisions["pinky-02"].proceed is False
+
+
+def test_unknown_blocking_is_treated_as_blocking():
+    """모를 때는 보수적으로. 안 막는다고 잘못 보면 두 대가 같은 외길에 든다."""
+    assert RobotIntent("pinky-01", area="seg-1", goal_area=None).blocking is True
+
+
+def test_blocks_at_falls_back_to_blocking_without_a_raster():
+    """구버전 파일(래스터 없음)에서도 안전한 쪽으로 판정한다."""
+    fleet = make_map()
+    assert fleet.blocks_at(0.5, 0.5) is True
+
+
+def test_blocks_at_reads_the_raster():
+    fleet = fleet_map.parse({
+        "map": "t", "map_sha256": "x", "robot_width": 0.12,
+        "zones": {}, "segments": {},
+        "grid": {"width": 4, "height": 1, "resolution": 1.0,
+                 "origin": [0.0, 0.0], "legend": {}, "rows": ["4:0"]},
+        "blocking": {"rows": ["2:1 2:0"]},
+    })
+    assert fleet.blocks_at(0.5, 0.5) is True     # 막는 셀
+    assert fleet.blocks_at(2.5, 0.5) is False    # 안 막는 셀
+    assert fleet.blocks_at(99.0, 0.5) is False   # 맵 밖 — 조정 대상이 아니다
+
+
 # ------------------------------------------------------------------ 우선순위
 
 def test_guiding_robot_wins():
@@ -292,3 +351,14 @@ def test_real_segment_map_is_consistent():
     # 그리고 그 구간들은 서로 도달 가능해야 한다.
     assert fleet.route(docks["charging_station_1"],
                        docks["charging_station_2"]) is not None
+
+    # 실측으로 확인된 사실 — 충전소에 주차한 로봇은 옆 도크로 가는 길을
+    # 막지 않는다. 셀 단위로 로봇을 세우고 도달성을 직접 확인했다.
+    # 여기가 True 로 돌아오면 예약층이 다시 헛대기를 만든다.
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for name in ("charging_station_1", "charging_station_2"):
+        assert doc["waypoints"][name]["blocks_passage"] is False, (
+            f"{name} 이 통행을 막는 것으로 구워졌다 — "
+            "blocks_passage 를 여유(clearance)로 계산하고 있지 않은지 보라")
+    # 래스터가 실려 있어야 예약층이 좌표로 판정할 수 있다.
+    assert fleet._blocking, "blocking 래스터가 안 구워졌다"

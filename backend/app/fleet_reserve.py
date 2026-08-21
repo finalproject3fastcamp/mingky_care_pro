@@ -72,6 +72,15 @@ class RobotIntent:
     area: str | None                # 지금 있는 구간
     goal_area: str | None           # 목표가 있는 구간
     guiding: bool = False           # 환자 안내 중인가 (우선순위 1번)
+    # 지금 자리가 **실제로** 남의 길을 막는가 (`FleetMap.blocks_at`).
+    #
+    # 구간에 있다는 것과 길을 막는다는 것은 다르다. 넓은 홀의 벽 가장자리는
+    # 구간으로 잡히지만 거기 세워 둬도 홀 한복판으로 지나갈 수 있다. 이 둘을
+    # 섞었더니 충전소에 주차한 로봇이 옆 도크로 가는 길을 막는 것으로 판정돼
+    # 갈 수 있는 로봇을 세웠다.
+    #
+    # 기본값이 True 인 것은 **모를 때는 보수적으로** 가기 위해서다.
+    blocking: bool = True
 
 
 @dataclass(frozen=True)
@@ -150,6 +159,10 @@ def plan(fleet: FleetMap | None, intents: list[RobotIntent]) -> Plan:
     occupied: dict[str, str] = {}
     touching: dict[str, str] = {}       # 이미 맞닿아 버린 로봇 → 상대
     for intent in sorted(known, key=_priority):
+        # **실제로 막는 자리에 선 로봇만 구간을 쥔다.** 벽에 붙어 선 로봇이
+        # 홀 전체를 잠그면, 상대는 지나갈 수 있는데도 헛대기한다.
+        if not intent.blocking:
+            continue
         for area_id in fleet.blocked_by(intent.area):
             other = occupied.get(area_id)
             if other is None:

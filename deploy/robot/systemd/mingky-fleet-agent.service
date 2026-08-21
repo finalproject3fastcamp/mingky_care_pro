@@ -1,0 +1,19 @@
+[Unit]
+Description=군집 조정 링크 (관제 ↔ 로봇)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinky
+# 조작 브리지(800)보다 낮다. 이 링크가 늦어도 로봇은 데드맨으로 스스로 풀고
+# 계속 주행하지만, 조작이 늦으면 사람이 로봇을 못 세운다.
+CPUWeight=300
+EnvironmentFile=-/etc/environment
+EnvironmentFile=/etc/mingky/robot.env
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source /home/pinky/mingky_care_pro/install/local_setup.bash && exec ros2 run mingky_fleet_agent fleet_agent --ros-args -p backend_url:=${MINGKY_BACKEND_URL} -p robot_id:=${MINGKY_ROBOT_ID}'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

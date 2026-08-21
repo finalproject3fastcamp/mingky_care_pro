@@ -8,11 +8,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import (
-    db, fleet_map, heartbeat, inventory_rules, notify,
+    db, fleet_link, fleet_map, heartbeat, inventory_rules, notify,
     pharmacy as pharmacy_state, registry, servo_health, topic_watch)
 from .routers import (
-    events, fleet, fleet_poses, maps, orders, patients, pharmacy, qr, robots,
-    sessions, slo, teleop, waypoints)
+    events, fleet, fleet_agent, fleet_poses, maps, orders, patients, pharmacy,
+    qr, robots, sessions, slo, teleop, waypoints)
 
 log = logging.getLogger("mingky")
 
@@ -170,6 +170,9 @@ async def lifespan(app: FastAPI):
     # 살아 있는 로봇 안에서 데이터가 흐르는지는 다른 질문이다 (§7.2).
     topics = asyncio.create_task(topic_watch.monitor())
     lock_watch = asyncio.create_task(_hold_single_instance())
+    # 군집 판정을 주기적으로 밀어낸다. 침묵은 '서 있어라' 가 아니라
+    # '조정이 없다' 라서, 이 루프가 멈추면 로봇은 데드맨으로 스스로 푼다.
+    fleet_tick = asyncio.create_task(fleet_link.monitor())
     try:
         yield
     finally:
@@ -181,7 +184,7 @@ async def lifespan(app: FastAPI):
         # 아예 실행되지 않아서, 자식 쪽에도 PR_SET_PDEATHSIG 를 걸어 둔다
         # (pharmacy._die_with_parent).
         await pharmacy_state.shutdown_runner()
-        for task in (monitor, topics, lock_watch):
+        for task in (monitor, topics, lock_watch, fleet_tick):
             task.cancel()
             try:
                 await task
@@ -220,6 +223,9 @@ app.include_router(fleet.router)
 # 같은 /fleet 접두사지만 다루는 값의 수명이 다르다 — 저쪽은 시간 단위 형상,
 # 이쪽은 0.5초짜리 위치다 (routers/fleet_poses.py).
 app.include_router(fleet_poses.router)
+# 로봇이 목표를 올리고 판정을 받는 링크. robots.router 뒤에 둔다 —
+# 접두사가 같아 등록 순서가 매칭에 영향을 준다.
+app.include_router(fleet_agent.router)
 app.include_router(maps.router)
 app.include_router(waypoints.router)
 app.include_router(teleop.router)
