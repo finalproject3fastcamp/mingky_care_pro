@@ -25,6 +25,7 @@ import yaml
 
 import omx.report.reporter as reporter
 from app import pharmacy
+from app.schemas import RobotHeartbeatIn, ServoSampleIn
 
 # 정본. 리포터가 발행하는 코드·payload 키를 여기에 대조한다.
 _CODES = yaml.safe_load(
@@ -233,3 +234,130 @@ def test_worker_is_silent_without_env(server, monkeypatch, _fast_sim):
     monkeypatch.delenv("MINGKY_OMX_ROBOT_ID", raising=False)
     _run_dispense(monkeypatch, ["red", "green"])
     assert server.posts == []
+
+
+# ── 자원(CPU) ──────────────────────────────────────────────────────────────
+def test_cpu_total_pct_from_deltas():
+    # idle 이 50, total 이 200 만큼 늘면 유휴 25% → 사용률 75%.
+    prev = (1000, 4000)
+    cur = (1050, 4200)
+    assert reporter.cpu_total_pct(prev, cur) == 75.0
+
+
+def test_cpu_total_pct_needs_two_samples():
+    assert reporter.cpu_total_pct(None, (1, 2)) is None
+    # 델타가 0 이면(같은 표본) 나눗셈이 성립하지 않는다.
+    assert reporter.cpu_total_pct((10, 20), (10, 20)) is None
+
+
+def test_read_proc_stat_is_pair_or_none():
+    stat = reporter.read_proc_stat()
+    # 리눅스면 (idle, total), 아니면 None — 둘 다 정상이다.
+    assert stat is None or (isinstance(stat, tuple) and len(stat) == 2)
+
+
+def test_resource_heartbeat_body_matches_schema(server):
+    # 자원을 실은 heartbeat 는 로봇 경로로 가고, 본문이 RobotHeartbeatIn 과
+    # 일치한다. queue_pending 등 나머지는 생략한다.
+    status = reporter.heartbeat(body={"cpu_total_pct": 42.5})
+
+    assert status == 200
+    p = server.posts[0]
+    assert p["path"] == "/robots/omx-01/heartbeat"
+    body = json.loads(p["body"])
+    assert body == {"cpu_total_pct": 42.5}
+    # 스키마가 이 본문을 받아들이고, 자원 필드가 그대로 실린다.
+    parsed = RobotHeartbeatIn.model_validate(body)
+    assert parsed.cpu_total_pct == 42.5
+
+
+def test_empty_body_heartbeat_still_sends_no_body(server):
+    # body 가 없으면 순수 생존 핑 — 본문을 붙이지 않는다(기존 계약 불변).
+    reporter.heartbeat(body=None)
+    reporter.heartbeat(body={})
+    assert [p["body"] for p in server.posts] == ["", ""]
+
+
+# ── 서보(온도·전류) ─────────────────────────────────────────────────────────
+_FAKE_SERVOS = [
+    {"joint": "shoulder_lift", "temp_c": 41.0, "hardware_error": 0,
+     "voltage_v": 11.9},
+    {"joint": "gripper", "temp_c": 58.0, "hardware_error": 0, "voltage_v": 12.0},
+]
+
+
+def test_send_servos_body_matches_schema(server):
+    status = reporter.send_servos(_FAKE_SERVOS)
+
+    assert status == 200
+    p = server.posts[0]
+    assert p["path"] == "/robots/omx-01/servos"
+    body = json.loads(p["body"])
+    # 스키마가 payload 를 받아들인다 (joint·temp_c·hardware_error·voltage_v).
+    parsed = ServoSampleIn.model_validate(body)
+    assert [s.joint for s in parsed.servos] == ["shoulder_lift", "gripper"]
+    assert parsed.servos[0].temp_c == 41.0
+
+
+def test_send_servos_without_readings_sends_nothing(server):
+    assert reporter.send_servos([]) is None
+    assert server.posts == []
+
+
+class _RunnerState(BaseHTTPRequestHandler):
+    """조제/포장 상태를 흉내 내는 로컬 러너. busy 클래스 속성으로 상태를 정한다."""
+
+    busy = False
+
+    def do_GET(self):  # noqa: N802
+        state = {"상태": "진행" if self.busy else "대기"}
+        raw = json.dumps(state, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *a):
+        pass
+
+
+@pytest.fixture
+def runner(monkeypatch):
+    """리포터가 idle 을 확인하는 로컬 러너 목."""
+    _RunnerState.busy = False
+    httpd = HTTPServer(("127.0.0.1", 0), _RunnerState)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    monkeypatch.setenv("MINGKY_RUNNER_PORT", str(httpd.server_address[1]))
+    yield httpd
+    httpd.shutdown()
+
+
+def test_report_servos_skips_while_dispensing(server, runner, monkeypatch):
+    # 조제 중에는 시리얼 충돌을 피하려 서보를 읽지도, 보내지도 않는다.
+    _RunnerState.busy = True
+    called = []
+    monkeypatch.setattr(
+        reporter, "read_servos_via_subprocess",
+        lambda: called.append(1) or _FAKE_SERVOS)
+
+    assert reporter.report_servos() is None
+    assert called == []            # 읽기 자체를 시도하지 않는다
+    assert server.posts == []      # /servos 로 아무 것도 안 나간다
+
+
+def test_report_servos_sends_when_idle(server, runner, monkeypatch):
+    _RunnerState.busy = False
+    monkeypatch.setattr(
+        reporter, "read_servos_via_subprocess", lambda: _FAKE_SERVOS)
+
+    assert reporter.report_servos() == 200
+    assert len(server.posts) == 1
+    assert server.posts[0]["path"] == "/robots/omx-01/servos"
+
+
+def test_runner_idle_false_when_runner_unreachable(server, monkeypatch):
+    # 러너에 닿지 못하면 상태를 모르므로 안전하게 유휴가 아니라고 본다.
+    monkeypatch.setenv("MINGKY_RUNNER_PORT", "1")  # 아무도 안 듣는 포트
+    monkeypatch.setenv("MINGKY_OMX_HTTP_TIMEOUT", "1")
+    assert reporter._runner_idle() is False
