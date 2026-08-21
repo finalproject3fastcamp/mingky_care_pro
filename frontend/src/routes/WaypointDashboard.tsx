@@ -368,6 +368,7 @@ export function WaypointDashboard() {
             returning={selectedRobot?.returning_to_dock ?? false}
             paused={selectedRobot?.guide_robot_state === 'paused'}
             lowObstacleState={selectedRobot?.low_obstacle_state ?? null}
+            lowObstacle={teleop.lowObstacle}
             camera={null}
           />
         </section>

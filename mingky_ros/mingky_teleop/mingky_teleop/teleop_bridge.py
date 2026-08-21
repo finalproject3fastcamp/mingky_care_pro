@@ -3,7 +3,8 @@
     관제 wss ──→ teleop_bridge ──→ /cmd_vel_teleop_raw → teleop_limiter → twist_mux
     관제 wss ──→ teleop_bridge ──→ /initialpose  (지도에서 위치를 찍어줄 때)
     관제 wss ←── teleop_bridge ←── /amcl_pose, /scan, /particle_cloud,
-                                   /navigation_manager/{route,recovery}_plan
+                                   /navigation_manager/{route,recovery}_plan,
+                                   /low_obstacle/observation
 
 ## 왜 로봇이 서버로 거는가
 
@@ -58,6 +59,7 @@ PARTICLE_TOPIC = "/particle_cloud"
 ROUTE_PLAN_TOPIC = "/navigation_manager/route_plan"
 RECOVERY_PLAN_TOPIC = "/navigation_manager/recovery_plan"
 APPLIED_MODE_TOPIC = "/teleop_limiter/applied_mode"
+LOW_OBSTACLE_TOPIC = "/low_obstacle/observation"
 SCAN_BASE_FRAME = "base_footprint"
 
 # 무선 구간을 아끼려고 솎아 보낸다. 화면에서 "맵과 겹치나" 를 보는 데는
@@ -65,6 +67,36 @@ SCAN_BASE_FRAME = "base_footprint"
 SCAN_POINTS = 120
 PARTICLE_POINTS = 80
 PLAN_POINTS = 60
+
+
+def parse_low_obstacle_observation(data: str) -> dict | None:
+    """Validate the small JSON contract published by the fusion node."""
+    try:
+        raw = json.loads(data)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("active"), bool):
+        return None
+    active = raw["active"]
+    distance = raw.get("distance_m")
+    fov = raw.get("fov_rad")
+    state = raw.get("state")
+    if active:
+        if (
+                not isinstance(distance, (int, float))
+                or not math.isfinite(float(distance))
+                or float(distance) <= 0.0
+                or not isinstance(fov, (int, float))
+                or not math.isfinite(float(fov))
+                or not 0.0 < float(fov) < math.pi):
+            return None
+    return {
+        "type": "low_obstacle",
+        "active": active,
+        "distance_m": round(float(distance), 3) if active else None,
+        "fov_rad": round(float(fov), 4) if active else None,
+        "state": state if isinstance(state, str) else None,
+    }
 
 
 class TeleopBridge(Node):
@@ -155,12 +187,18 @@ class TeleopBridge(Node):
                 reliability=ReliabilityPolicy.RELIABLE,
             ),
         )
+        self.create_subscription(
+            String, LOW_OBSTACLE_TOPIC, self._on_low_obstacle_observation,
+            plan_qos)
         self._scan = None
         self._particles = None
         self._plan = None
         self._recovery_plan = None
         self._applied_mode = None
         self._applied_mode_at = None
+        self._low_obstacle = None
+        self._low_obstacle_revision = 0
+        self._low_obstacle_at = None
 
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -179,6 +217,14 @@ class TeleopBridge(Node):
         mode = msg.data.strip().lower()
         self._applied_mode = mode if mode in ("auto", "manual", "estop") else None
         self._applied_mode_at = time.monotonic()
+
+    def _on_low_obstacle_observation(self, msg: String):
+        observation = parse_low_obstacle_observation(msg.data)
+        if observation is None:
+            return
+        self._low_obstacle = observation
+        self._low_obstacle_revision += 1
+        self._low_obstacle_at = time.monotonic()
 
     def _mode_status(self, now: float) -> dict:
         fresh = (
@@ -320,6 +366,7 @@ class TeleopBridge(Node):
         # 첫 진단도 최신 센서 표본을 받을 시간을 둔 뒤 보낸다.
         last_diag = time.monotonic()
         last_mode_status = 0.0
+        last_low_obstacle_revision = -1
         while not self._stop.is_set():
             # pose 를 보내려면 수신에서 오래 막히면 안 되므로 짧게 끊어 받는다.
             socket.settimeout(0.1)
@@ -355,6 +402,30 @@ class TeleopBridge(Node):
             if now - last_mode_status >= self.mode_status_interval:
                 last_mode_status = now
                 socket.send(json.dumps(self._mode_status(now)))
+
+            if (
+                    self._low_obstacle_at is not None
+                    and now - self._low_obstacle_at > 1.0
+                    and self._low_obstacle is not None
+                    and self._low_obstacle.get("active") is True):
+                # 융합 노드가 죽었는데 마지막 부채꼴이 지도에 고정돼 있으면
+                # 현재 장애물처럼 보인다. 상태 배지는 별도 진단 경로가 맡고,
+                # 공간 표시는 1초 안에 내린다.
+                self._low_obstacle = {
+                    "type": "low_obstacle",
+                    "active": False,
+                    "distance_m": None,
+                    "fov_rad": None,
+                    "state": "STALE",
+                }
+                self._low_obstacle_revision += 1
+
+            revision = self._low_obstacle_revision
+            if (
+                    self._low_obstacle is not None
+                    and revision != last_low_obstacle_revision):
+                last_low_obstacle_revision = revision
+                socket.send(json.dumps(self._low_obstacle))
 
     def _handle(self, raw: str):
         try:

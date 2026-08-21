@@ -46,10 +46,14 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import { getQrObservation } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { MapRearCam } from './MapRearCam'
-import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
+import { FIT, mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
 import type { LowObstacleState, QrObservation } from '../types/monitoring'
-import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
+import type {
+  DiagLayers,
+  LowObstacleObservation,
+  RobotPose,
+} from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
 export interface WaypointMarker {
@@ -130,6 +134,8 @@ export interface HospitalMap3DProps extends DiagLayers {
   paused?: boolean
   /** 전방 초음파/LiDAR 저상 장애물 상태머신의 현재 상태. */
   lowObstacleState?: LowObstacleState | null
+  /** 실시간 조작 소켓으로 받는 로봇 전방 저상 장애물 추정 영역. */
+  lowObstacle?: LowObstacleObservation | null
 }
 
 type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
@@ -337,6 +343,9 @@ interface Handles {
   particles: THREE.Points
   plan: Line2
   recoveryPlan: Line2
+  lowObstacle: THREE.Group
+  lowObstacleFan: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
+  lowObstaclePoint: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
   waypoints: THREE.Group
   invalidate: () => void
   resetView: () => void
@@ -373,6 +382,7 @@ export function HospitalMap3D({
   waitLimitSec = 20,
   paused = false,
   lowObstacleState = null,
+  lowObstacle = null,
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -507,6 +517,37 @@ export function HospitalMap3D({
     contact.position.y = 0.002
     contact.renderOrder = 3
     robot.add(contact)
+
+    // 초음파에는 좌우 각도가 없으므로 장애물을 점으로 단정하지 않는다.
+    // 센서가 실제로 말할 수 있는 전방 부채꼴과 추정 거리만 표시한다.
+    const lowObstacleGroup = new THREE.Group()
+    const lowObstacleMat = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.38,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    })
+    const lowObstacleFan = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 32, -0.13, 0.26),
+      lowObstacleMat,
+    )
+    lowObstacleFan.rotation.x = -Math.PI / 2
+    lowObstacleFan.position.y = 0.024
+    lowObstacleFan.renderOrder = 7
+    lowObstacleGroup.add(lowObstacleFan)
+    const lowObstaclePoint = new THREE.Mesh(
+      new THREE.SphereGeometry(0.024, 16, 10),
+      lowObstacleMat.clone(),
+    )
+    lowObstaclePoint.position.y = 0.04
+    lowObstaclePoint.renderOrder = 8
+    lowObstacleGroup.add(lowObstaclePoint)
+    // URDF의 ultrasonic_link x=0.0267m를 모델 좌표계 배율로 옮긴다.
+    lowObstacleGroup.position.x = 0.0267 / FIT.scale
+    lowObstacleGroup.visible = false
+    robot.add(lowObstacleGroup)
 
     /**
      * 로봇 아래에서 번지는 원. 어제 2D 지도에서 쓰던 것과 같은 박동이다 —
@@ -1029,6 +1070,9 @@ export function HospitalMap3D({
       particles: particlePts,
       plan: planLine,
       recoveryPlan: recoveryPlanLine,
+      lowObstacle: lowObstacleGroup,
+      lowObstacleFan,
+      lowObstaclePoint,
       waypoints: wpGroup,
       invalidate,
       resetView,
@@ -1101,6 +1145,31 @@ export function HospitalMap3D({
     }
     h.invalidate()
   }, [pose, estop, robotReady])
+
+  useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const active = Boolean(
+      pose && lowObstacle?.active &&
+      typeof lowObstacle.distance === 'number' &&
+      typeof lowObstacle.fov === 'number',
+    )
+    h.lowObstacle.visible = active
+    if (active && lowObstacle?.distance != null && lowObstacle.fov != null) {
+      const radius = THREE.MathUtils.clamp(lowObstacle.distance, 0.03, 0.50) / FIT.scale
+      const fov = THREE.MathUtils.clamp(lowObstacle.fov, 0.10, Math.PI / 2)
+      h.lowObstacleFan.geometry.dispose()
+      h.lowObstacleFan.geometry = new THREE.CircleGeometry(
+        1, 32, -fov / 2, fov)
+      h.lowObstacleFan.scale.set(radius, radius, 1)
+      h.lowObstaclePoint.position.x = radius
+      const alarm = lowObstacle.state === 'FORWARD_BLOCKED'
+      const color = alarm ? 0xef4444 : 0xf59e0b
+      h.lowObstacleFan.material.color.setHex(color)
+      h.lowObstaclePoint.material.color.setHex(color)
+    }
+    h.invalidate()
+  }, [lowObstacle, pose, robotReady])
 
   // ------------------------------------------------------------- 추종 상태
   /**

@@ -24,6 +24,13 @@ export interface RobotPose {
   yaw: number
 }
 
+export interface LowObstacleObservation {
+  active: boolean
+  distance: number | null
+  fov: number | null
+  state: string | null
+}
+
 /** 로컬라이제이션 진단 레이어. docs/nav2-debugging.md 가 보라는 것들이다. */
 export interface DiagLayers {
   /** 라이다. [각도(rad), 거리(m)] — 로봇 기준 극좌표라 pose 로 회전시켜 그린다. */
@@ -46,6 +53,8 @@ interface TeleopState extends DiagLayers {
   /** 새 적용 상태 메시지를 받을 때마다 증가한다. 요청 이후 응답인지 구분한다. */
   modeStatusRevision: number
   pose: RobotPose | null
+  /** 로봇 기준 전방 저상 장애물 추정 영역. 조작 소켓으로 실시간 갱신한다. */
+  lowObstacle: LowObstacleObservation | null
 }
 
 function socketUrl(robotId: string): string {
@@ -77,6 +86,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
     appliedMode: null,
     modeStatusRevision: 0,
     pose: null,
+    lowObstacle: null,
     scan: null,
     particles: null,
     plan: null,
@@ -92,6 +102,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
       appliedMode: null,
       modeStatusRevision: 0,
       pose: null,
+      lowObstacle: null,
       scan: null,
       particles: null,
       plan: null,
@@ -147,6 +158,19 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
               modeStatusRevision: s.modeStatusRevision + 1,
             }))
           }, MODE_STATUS_STALE_MS)
+        } else if (message.type === 'low_obstacle') {
+          const active = message.active === true
+          const distance = Number(message.distance_m)
+          const fov = Number(message.fov_rad)
+          setState((s) => ({
+            ...s,
+            lowObstacle: {
+              active,
+              distance: active && Number.isFinite(distance) ? distance : null,
+              fov: active && Number.isFinite(fov) ? fov : null,
+              state: typeof message.state === 'string' ? message.state : null,
+            },
+          }))
         } else if (
           message.type === 'scan' ||
           message.type === 'particles' ||
@@ -170,6 +194,7 @@ export function useTeleopSocket(robotId: string | null): TeleopState & {
           appliedMode: null,
           modeStatusRevision: s.modeStatusRevision + 1,
           scan: null, particles: null, plan: null, recoveryPlan: null,
+          lowObstacle: null,
         }))
         // 회선이 흔들리는 환경이라 끊기는 것을 정상으로 보고 다시 건다.
         if (!closed) retry = setTimeout(open, 3000)
