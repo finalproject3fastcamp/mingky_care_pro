@@ -1,6 +1,7 @@
 """관제 명령을 로봇 책임 경로로 보내는 계약."""
 
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -162,6 +163,39 @@ def test_active_guidance_states_cover_confirmation_through_room_waiting():
         GuideState.SESSION_ARRIVED,
         GuideState.SESSION_IN_ROOM,
     )
+
+
+def test_guide_state_adds_authoritative_wait_time_to_qr_payload():
+    gateway = SimpleNamespace(
+        _qr_lock=threading.Lock(),
+        _qr_wake=threading.Event(),
+        _qr_observation=None,
+    )
+    state = GuideState(
+        session_id=42,
+        session_state=GuideState.SESSION_GUIDING,
+        patient_id='patient-001',
+        returning_to_dock=False,
+        patient_wait_remaining_sec=12.5,
+    )
+
+    EventGateway._on_guide_state(gateway, state)
+
+    assert gateway._qr_observation['patient_wait_remaining_sec'] == pytest.approx(12.5)
+    assert gateway._qr_wake.is_set()
+
+
+def test_guide_state_marks_wait_time_inactive_in_qr_payload():
+    gateway = SimpleNamespace(
+        _qr_lock=threading.Lock(),
+        _qr_wake=threading.Event(),
+        _qr_observation={'patient_wait_remaining_sec': 5.0},
+    )
+    state = GuideState(patient_wait_remaining_sec=-1.0)
+
+    EventGateway._on_guide_state(gateway, state)
+
+    assert gateway._qr_observation['patient_wait_remaining_sec'] is None
 
 
 def test_cancel_guidance_dispatches_session_scoped_abort():

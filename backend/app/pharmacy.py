@@ -51,10 +51,16 @@ Flask 판은 단일 `queue.Queue` 라 브라우저 두 개가 붙으면 이벤�
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
 import random
+import signal
+import sys
+import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +69,70 @@ from typing import AsyncIterator
 from .db import get_pool
 
 log = logging.getLogger("mingky.pharmacy")
+
+# ── 관제 리포터 (OMX 박스에서만 켜진다) ─────────────────────────────────
+# OMX 는 ROS 미사용(domain NULL)이라 게이트웨이가 없다. 이 워커가 조제/포장을
+# 실제로 돌리는 프로세스이므로, 여기서 직접 관제(백엔드)로 라이프사이클 이벤트를
+# 발행한다. 후크는 `MINGKY_OMX_ROBOT_ID` 가 설정된 OMX 박스에서만 켜진다 —
+# env 가 없으면(데모·CI·개발) 아무 것도 나가지 않아 기존 동작·기존 테스트가
+# 100% 그대로다.
+#
+# **pick 성공/실패는 발행하지 않는다.** ACT 정책은 성공 여부를 내놓지 않고
+# 진행률은 시간 기준이라, 우리에겐 pick 의 ground truth 가 없다(omx/web/README.md).
+# 근거 없는 성공 신호를 지어내지 않는다 — 발행하는 것은 시간으로 증명되는 사이클
+# 라이프사이클(started/completed/aborted)과 정책 로드뿐이다.
+#
+# 리포터는 저장소 밖(omx/report)에 있고 표준 라이브러리만 쓴다. 백엔드 venv 가
+# 그 경로를 못 볼 수 있어 저장소 루트를 sys.path 에 넣고 임포트한다. 실패해도
+# 후크가 조용히 꺼질 뿐이다.
+if str(_PROJECT_ROOT := Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+try:
+    from omx.report import reporter as _reporter
+except Exception:  # noqa: BLE001
+    _reporter = None
+
+
+def _report_robot_id() -> str | None:
+    """OMX 박스에서만 값이 있다. 없으면 후크 전체가 조용히 꺼진다."""
+    return os.environ.get("MINGKY_OMX_ROBOT_ID") or None
+
+
+async def _report(fn_name: str, *args) -> None:
+    """리포터 함수를 백그라운드 스레드에서 조용히 호출한다.
+
+    env 미설정이거나 리포터가 없으면 아무 것도 하지 않는다. urllib 은 블로킹이라
+    스레드로 밀어 이벤트 루프를 막지 않고, 네트워크 실패는 삼킨다 — 관제 보고가
+    조제 워커를 죽이면 안 된다(heartbeat 와 같은 원칙: routers/robots.py).
+    """
+    rid = _report_robot_id()
+    if not rid or _reporter is None:
+        return
+    try:
+        fn = getattr(_reporter, fn_name)
+        await asyncio.to_thread(fn, *args, rid=rid)
+    except Exception:  # noqa: BLE001
+        log.debug("관제 보고 실패(%s) — 무시", fn_name, exc_info=True)
+
+
+async def _report_policy_loaded(policy_id: str) -> None:
+    """선택된 정책의 체크포인트를 관제에 알린다 — '무엇이 돌고 있나'(§4.4).
+
+    조제 정책은 코드 SHA 가 아니라 체크포인트가 버전이다. 색별 정책은 체크포인트가
+    색마다 달라 하나로 접어 문자열로 남긴다. dataset_revision 자리에는 정책의 HF
+    Hub repo id 를 쓴다 — 저장소가 아는 유일한 '학습 산출물' 참조다.
+    """
+    if not _report_robot_id() or _reporter is None:
+        return
+    pol = _POLICIES.get(policy_id) or _POLICIES.get(DEFAULT_POLICY) or {}
+    ckpt = pol.get("ckpt")
+    repo = pol.get("repo", "")
+    if isinstance(ckpt, dict):
+        ckpt_str = ",".join(f"{k}={v}" for k, v in sorted(ckpt.items()))
+    else:
+        ckpt_str = "" if ckpt is None else str(ckpt)
+    checkpoint_id = f"{repo}@{ckpt_str}" if repo else ckpt_str
+    await _report("policy_loaded", checkpoint_id, repo)
 
 # ── 데이터/모듈 경로 ────────────────────────────────────────────────────
 # 학습된 정책 목록만 파일로 남는다 (pharmacy 전용 · 관제 DB 와 무관).
@@ -145,6 +215,10 @@ PACK_SECONDS = float(os.environ.get("PACK_SECONDS", "60"))
 # 있는 채로 화면·SSE·subprocess 배선을 전부 확인할 수 있다. 실기 앞에서 배선을
 # 고치다가 팔을 움직이지 않으려고 둔다.
 PACK_DRY_RUN = os.environ.get("PACK_DRY_RUN", "0") == "1"
+# 러너는 팔이 학습 시작 자세로 돌아오면 상한을 기다리지 않고 끊는다. 감지가
+# 어긋나 작업 도중에 끊기면 이걸로 꺼서 예전처럼 PACK_SECONDS 를 채운다 —
+# 시연 중에 코드를 고치지 않고 되돌릴 수 있는 길을 남겨 둔다.
+PACK_NO_EARLY_STOP = os.environ.get("PACK_NO_EARLY_STOP", "0") == "1"
 _PACK_MARKER = "PACK_JSON"
 
 DEFAULT_POLICY = os.environ.get("POLICY", "xy")
@@ -169,12 +243,60 @@ LOG_ALL_DONE = "처방 조제 완료"
 LOG_MISS = "놓쳤습니다"
 LOG_STALL = "제자리"
 
-# ── 상태 ──────────────────────────────────────────────────────────────
-_JOB: dict = {"id": None, "상태": "대기", "단계": [],
-              "환자": None, "처방": None, "정책": None, "중단요청": False}
+# ── 상태 (robot_id 별 분리) ────────────────────────────────────────────
+# 스테이션이 늘었다. 조제 박스(omx-01)와 포장 박스(omx-02)가 서로 다른 job 으로
+# **동시에** 돌 수 있어야 한다. 그래서 전역 단일 job 을 robot_id 별 dict 로 나눈다.
+#
+# **기본 스테이션은 여전히 모듈 전역 `_JOB` 이다.** robot_id 를 주지 않는 기존
+# 호출(프론트·기존 테스트)은 이 전역을 그대로 쓴다 — 하위호환이 깨지지 않는다.
+# 그 외 스테이션만 `_JOBS[robot_id]` 에 따로 둔다. `_JOB_PROC` 도 같은 원칙으로,
+# 기본(조제) 스테이션의 서브프로세스는 전역에 남는다 — 트레이 카메라 게이트가
+# 이 전역을 본다(_tray_preflight, test_pharmacy_tray).
+#
+# 조제 기본 스테이션과 포장 스테이션의 robot_id 는 env 로 덮을 수 있다.
+DEFAULT_ROBOT_ID = os.environ.get("MINGKY_OMX_DISPENSE_ROBOT_ID", "omx-01")
+PACK_ROBOT_ID = os.environ.get("MINGKY_OMX_PACK_ROBOT_ID", "omx-02")
+
+
+def _new_job() -> dict:
+    return {"id": None, "상태": "대기", "단계": [],
+            "환자": None, "처방": None, "정책": None, "중단요청": False}
+
+
+_JOB: dict = _new_job()                        # 기본(조제) 스테이션 — 전역 별칭
+_JOBS: dict[str, dict] = {}                     # 그 외 스테이션(포장 등)
 _JOB_LOCK = asyncio.Lock()
-_JOB_TASK: asyncio.Task | None = None
-_JOB_PROC: asyncio.subprocess.Process | None = None
+_JOB_TASK: asyncio.Task | None = None           # 기본 스테이션 워커
+_JOB_TASKS: dict[str, asyncio.Task] = {}        # 그 외 스테이션 워커
+_JOB_PROC: asyncio.subprocess.Process | None = None   # 기본 스테이션 서브프로세스
+_JOB_PROCS: dict[str, asyncio.subprocess.Process] = {}
+
+
+def _is_default(robot_id: str | None) -> bool:
+    return robot_id is None or robot_id == DEFAULT_ROBOT_ID
+
+
+def _job(robot_id: str | None = None) -> dict:
+    """robot_id 의 job 상태. 기본 스테이션은 전역 `_JOB` 을 그대로 돌려준다."""
+    if _is_default(robot_id):
+        return _JOB
+    return _JOBS.setdefault(robot_id, _new_job())
+
+
+def _get_proc(robot_id: str | None):
+    if _is_default(robot_id):
+        return _JOB_PROC
+    return _JOB_PROCS.get(robot_id)
+
+
+def _set_proc(robot_id: str | None, proc) -> None:
+    global _JOB_PROC
+    if _is_default(robot_id):
+        _JOB_PROC = proc
+    elif proc is None:
+        _JOB_PROCS.pop(robot_id, None)
+    else:
+        _JOB_PROCS[robot_id] = proc
 
 # 트레이 계수 직렬화. top 카메라는 V4L2 라 동시에 두 번 열리지 않는다.
 _TRAY_LOCK = asyncio.Lock()
@@ -375,7 +497,7 @@ async def _count_pills() -> dict:
     cmd = [str(_OMX_PYTHON), str(_TRAY_SCRIPT),
            "--root", str(_OMX_PROJECT), "--frames", str(TRAY_FRAMES)]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=str(_OMX_PROJECT),
+        *cmd, cwd=str(_OMX_PROJECT), preexec_fn=_die_with_parent,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         raw_out, raw_err = await asyncio.wait_for(
@@ -449,6 +571,73 @@ async def random_prescriptions() -> tuple[dict, int]:
 
 
 # ── SSE 브로드캐스트 ───────────────────────────────────────────────────
+# **libc 는 여기서, 모듈 로드 시점에 잡는다.** `_die_with_parent` 는 fork 직후의
+# 자식에서 도는데, 거기서 CDLL 로 라이브러리를 새로 열면 부모의 다른 스레드가
+# 쥔 채로 복제된 동적 로더 락에 걸려 멈출 수 있다. uvicorn 은 스레드를 쓴다.
+# 자식은 이미 풀린 함수 포인터만 호출하게 둔다.
+_PR_SET_PDEATHSIG = 1
+try:
+    _LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
+except OSError:                     # 리눅스가 아니거나 libc 이름이 다르다
+    _LIBC = None
+
+
+def _die_with_parent() -> None:
+    """부모가 죽으면 커널이 나에게 SIGINT 를 보내게 등록한다 (리눅스 전용).
+
+    러너는 팔을 움직이는 프로세스다. 백엔드가 죽어도 자식은 그대로 살아남아
+    감시자 없이 팔을 계속 움직이고, 포트·카메라를 쥔 채라 다음 기동까지 막는다.
+
+    `lifespan` 종료 훅만으로는 부족하다 — **SIGKILL 은 그 훅을 아예 안 태운다.**
+    약국 화면이 열려 있으면 SSE 때문에 uvicorn 이 SIGTERM 으로 안 죽어서
+    `stop.sh` 가 10초 뒤 SIGKILL 하는데, 하필 그때가 포장이 돌고 있을 때다.
+    이 등록은 커널이 들고 있으므로 부모가 어떻게 죽든 동작한다.
+
+    SIGTERM 이 아니라 **SIGINT** 인 이유는 러너가 `KeyboardInterrupt` 를 받아
+    `robot.disconnect()` 로 토크를 풀고 나가기 때문이다. 그냥 죽이면 팔이
+    마지막 자세로 힘을 준 채 굳는다 (중단 버튼이 SIGINT 를 쓰는 이유와 같다).
+
+    subprocess 의 preexec_fn 으로 fork 직후 자식에서 돈다. 실패해도 기동을
+    막지 않는다 — 이건 안전망이고, 정상 경로는 `shutdown_runner()` 다.
+    """
+    if _LIBC is None:
+        return
+    try:
+        _LIBC.prctl(_PR_SET_PDEATHSIG, signal.SIGINT, 0, 0, 0)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+
+async def _shutdown_one_proc(proc, timeout: float) -> None:
+    if proc is None or proc.returncode is not None:
+        return
+    log.warning("종료 중 — 로봇 러너(pid %s)를 정리합니다", proc.pid)
+    try:
+        proc.send_signal(signal.SIGINT)     # 토크를 풀고 나갈 기회를 준다
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        log.error("러너가 %.0f초 안에 끝나지 않아 강제 종료합니다", timeout)
+        proc.kill()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            pass
+    except ProcessLookupError:
+        pass
+
+
+async def shutdown_runner(timeout: float = 15.0) -> None:
+    """돌고 있는 로봇 러너를 전부 정리한다. `lifespan` 종료 훅이 부른다.
+
+    기본(조제) 스테이션은 전역 `_JOB_PROC`, 그 외(포장 등)는 `_JOB_PROCS` 에
+    있다 — 한 백엔드가 두 스테이션을 로컬 서브프로세스로 물고 있을 수 있으니
+    양쪽을 다 덮는다.
+    """
+    procs = [_JOB_PROC, *list(_JOB_PROCS.values())]
+    for proc in procs:
+        await _shutdown_one_proc(proc, timeout)
+
+
 def _push(event: dict) -> None:
     data = json.dumps(event, ensure_ascii=False)
     for q in list(_SUBSCRIBERS):
@@ -468,80 +657,209 @@ async def subscribe() -> AsyncIterator[str]:
                 data = await asyncio.wait_for(q.get(), timeout=20)
                 yield f"data: {data}\n\n"
             except asyncio.TimeoutError:
-                yield ": keep-alive\n\n"
+                # **주석(`: keep-alive`)이 아니라 진짜 이벤트여야 한다.**
+                # EventSource 는 주석을 소비자에게 넘기지 않으므로, 주석으로는
+                # 화면이 "소식이 끊겼다" 를 판단할 수 없다.
+                #
+                # 그 판단이 필요한 이유는 vite 프록시다. 백엔드가 죽어도 프록시가
+                # 클라이언트 소켓을 붙잡고 있어서 브라우저는 스트림이 열린 줄 안다
+                # — onerror 도, EventSource 자동 재연결도 오지 않는다. 화면이
+                # 조용히 죽은 채 남는다. 이 핑이 그 유일한 단서다.
+                yield 'data: {"종류":"핑"}\n\n'
     finally:
         _SUBSCRIBERS.discard(q)
 
 
 # ── 조제 실행 ──────────────────────────────────────────────────────────
-async def _단계시작(i: int, color: str) -> None:
+async def _단계시작(i: int, color: str, robot_id: str | None = None) -> None:
     meds = await _get_meds()
     약 = meds.get(color, {"이름": color, "색이름": _COLOR_SHORT.get(color, color)})
     async with _JOB_LOCK:
-        _JOB["단계"].append(
+        _job(robot_id)["단계"].append(
             {"순번": i, "색": color, "약": 약["이름"], "상태": "진행"})
     _push({"종류": "단계시작", "순번": i, "색": color,
-           "약": 약["이름"], "색이름": 약["색이름"]})
+           "약": 약["이름"], "색이름": 약["색이름"], "robot_id": robot_id})
 
 
-async def _단계끝(i: int, color: str, ok: bool, 메모: str) -> None:
+async def _단계끝(i: int, color: str, ok: bool, 메모: str,
+                robot_id: str | None = None) -> None:
     async with _JOB_LOCK:
-        for step in _JOB["단계"]:
+        for step in _job(robot_id)["단계"]:
             if step["순번"] == i:
                 step.update({"상태": "완료" if ok else "실패", "메모": 메모})
                 break
-    _push({"종류": "단계끝", "순번": i, "색": color, "성공": ok, "메모": 메모})
+    _push({"종류": "단계끝", "순번": i, "색": color, "성공": ok,
+           "메모": 메모, "robot_id": robot_id})
 
 
-async def _중단(이유: str) -> None:
+async def _중단(이유: str, robot_id: str | None = None) -> None:
     async with _JOB_LOCK:
-        _JOB["상태"] = "중단"
-    _push({"종류": "중단", "이유": 이유})
+        _job(robot_id)["상태"] = "중단"
+    _push({"종류": "중단", "이유": 이유, "robot_id": robot_id})
 
 
-async def _조제완료(job_id: str) -> None:
+async def _조제완료(job_id: str, robot_id: str | None = None) -> None:
     async with _JOB_LOCK:
-        _JOB["상태"] = "조제완료"
-    _push({"종류": "조제완료", "job": job_id,
+        _job(robot_id)["상태"] = "조제완료"
+    _push({"종류": "조제완료", "job": job_id, "robot_id": robot_id,
            "시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
 
-async def _dispense_worker(job_id: str, 처방: dict, policy_id: str) -> None:
+async def _dispense_worker(job_id: str, 처방: dict, policy_id: str,
+                           robot_id: str | None = None) -> bool:
     조합 = 처방["조합"]
-    _push({"종류": "시작", "job": job_id, "총단계": len(조합)})
+    _push({"종류": "시작", "job": job_id, "총단계": len(조합), "robot_id": robot_id})
+
+    # 관제 보고(OMX 박스에서만). 정책 로드 → 사이클 시작. duration_ms 는 실제
+    # 경과로만 채운다 — 성공 판정이 아니라 시간이 정본이다(§4.4). 시뮬/실제 어느
+    # 쪽이든 조제 흐름·상태는 건드리지 않는 부수효과이고, env 없으면 전부 무동작.
+    await _report_policy_loaded(policy_id)
+    _시작 = time.monotonic()
+    await _report("cycle_started", job_id, "+".join(조합) or "(빈 조합)")
+
+    async def _완료() -> None:
+        await _조제완료(job_id, robot_id)
+        await _report("cycle_completed", job_id,
+                      int((time.monotonic() - _시작) * 1000))
+
+    async def _포기(이유: str) -> None:
+        await _중단(이유, robot_id)
+        await _report("cycle_aborted", job_id, 이유)
 
     if not REAL_MODE:
         for i, color in enumerate(조합, 1):
-            await _단계시작(i, color)
+            await _단계시작(i, color, robot_id)
             for _ in range(16):
-                if _JOB.get("중단요청"):
-                    await _중단("사용자가 중단했습니다")
-                    return
+                if _job(robot_id).get("중단요청"):
+                    await _포기("사용자가 중단했습니다")
+                    return False
                 await asyncio.sleep(0.25)
-            await _단계끝(i, color, True, "시뮬레이션")
-        await _조제완료(job_id)
-        return
+            await _단계끝(i, color, True, "시뮬레이션", robot_id)
+        await _완료()
+        return True
 
-    ok, 메모 = await _run_sequence(조합, policy_id)
+    ok, 메모 = await _run_sequence(조합, policy_id, robot_id)
     if not ok:
-        await _중단(메모)
-        return
-    await _조제완료(job_id)
+        await _포기(메모)
+        return False
+    await _완료()
+    return True
 
 
-async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
-    global _JOB_PROC
+# ── 원격 러너 프록시 (박스별 HTTP) ──────────────────────────────────────
+# 아키텍처: 각 OMX 박스(.41=조제, .97=포장)가 로컬 스크립트(run.sh·pack_run.py·
+# count_tray.py)를 감싼 경량 HTTP 러너(omx/report/runner.py)를 띄우고, 클라우드
+# 백엔드가 여기로 프록시한다. URL 이 env 로 설정되면 원격, 없으면 기존 로컬
+# 서브프로세스/시뮬 그대로다 — CI·데모·개발은 env 가 없으므로 동작 불변.
+#
+# 러너 자체가 lerobot·카메라를 들고 있으므로, 백엔드는 진행 상황만 폴링해
+# 화면(SSE)으로 옮긴다. run.sh 는 몇 분씩 걸릴 수 있어 시작을 블로킹으로
+# 기다리지 않고 상태를 짧게 폴링한다.
+_RUNNER_HTTP_TIMEOUT = float(os.environ.get("MINGKY_OMX_RUNNER_TIMEOUT", "10"))
+_RUNNER_POLL_SEC = float(os.environ.get("MINGKY_OMX_RUNNER_POLL", "1"))
+
+
+def _dispense_runner_url() -> str | None:
+    return (os.environ.get("MINGKY_OMX_DISPENSE_URL") or "").rstrip("/") or None
+
+
+def _pack_runner_url() -> str | None:
+    return (os.environ.get("MINGKY_OMX_PACK_URL") or "").rstrip("/") or None
+
+
+def _http_json(url: str, method: str, body: dict | None = None) -> dict:
+    """러너에 JSON 요청. 블로킹 urllib 이라 호출부가 to_thread 로 감싼다."""
+    data = None
+    headers = {}
+    if body is not None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=_RUNNER_HTTP_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8") or "{}"
+        return json.loads(raw)
+    except urllib.error.HTTPError as e:  # 러너가 4xx/5xx 로 오류 메시지를 실어 준다
+        try:
+            return json.loads(e.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return {"오류": f"러너 HTTP {e.code}"}
+    except (urllib.error.URLError, OSError) as e:
+        return {"오류": f"러너에 연결하지 못했습니다: {e}"}
+
+
+async def _run_remote_dispense(base_url: str, 조합: list[str], policy_id: str,
+                               robot_id: str | None) -> tuple[bool, str]:
+    """원격 러너에 조제를 맡기고 상태를 폴링해 단계 진행을 화면으로 옮긴다."""
+    started = await asyncio.to_thread(
+        _http_json, f"{base_url}/dispense/start", "POST",
+        {"sequence": 조합, "policy": policy_id})
+    if started.get("오류"):
+        return False, str(started["오류"])
+
+    mirrored = 0   # 화면에 이미 반영한 완료 단계 수
+    while True:
+        if _job(robot_id).get("중단요청"):
+            await asyncio.to_thread(_http_json, f"{base_url}/dispense/stop", "POST", {})
+            return False, "사용자가 중단했습니다"
+
+        st = await asyncio.to_thread(_http_json, f"{base_url}/dispense/state", "GET")
+        if st.get("오류"):
+            return False, str(st["오류"])
+
+        done = min(int(st.get("완료단계", 0)), len(조합))
+        while mirrored < done:
+            i = mirrored + 1
+            await _단계시작(i, 조합[i - 1], robot_id)
+            await _단계끝(i, 조합[i - 1], True, "원격 러너", robot_id)
+            mirrored += 1
+
+        상태 = st.get("상태")
+        if 상태 == "완료":
+            return True, "완료"
+        if 상태 in ("오류", "중단", "실패"):
+            return False, str(st.get("메모") or "원격 조제가 실패했습니다")
+        await asyncio.sleep(_RUNNER_POLL_SEC)
+
+
+async def _run_remote_pack(base_url: str, robot_id: str | None) -> tuple[bool, str]:
+    """원격 러너에 포장을 맡긴다. 조제 폴링과 같은 구조."""
+    started = await asyncio.to_thread(_http_json, f"{base_url}/pack/start", "POST", {})
+    if started.get("오류"):
+        return False, str(started["오류"])
+    while True:
+        if _job(robot_id).get("중단요청"):
+            await asyncio.to_thread(_http_json, f"{base_url}/pack/stop", "POST", {})
+            return False, "사용자가 중단했습니다"
+        st = await asyncio.to_thread(_http_json, f"{base_url}/pack/state", "GET")
+        if st.get("오류"):
+            return False, str(st["오류"])
+        상태 = st.get("상태")
+        if 상태 == "완료":
+            return True, "완료"
+        if 상태 in ("오류", "중단", "실패"):
+            return False, str(st.get("메모") or "원격 포장이 실패했습니다")
+        await asyncio.sleep(_RUNNER_POLL_SEC)
+
+
+async def _run_sequence(조합: list[str], policy_id: str,
+                        robot_id: str | None = None) -> tuple[bool, str]:
+    # 원격 러너(박스별 HTTP)가 설정돼 있으면 로컬 서브프로세스 대신 프록시한다.
+    # env 가 없으면(데모·CI·개발) 아래 로컬 경로 그대로 — 하위호환·CI 불변.
+    remote = _dispense_runner_url()
+    if remote:
+        return await _run_remote_dispense(remote, 조합, policy_id, robot_id)
 
     pol = _POLICIES.get(policy_id, _POLICIES[DEFAULT_POLICY])
     단일 = pol["단일정책"]
 
     if not 단일:
         for i, color in enumerate(조합, 1):
-            if _JOB.get("중단요청"):
+            if _job(robot_id).get("중단요청"):
                 return False, "사용자가 중단했습니다"
-            await _단계시작(i, color)
+            await _단계시작(i, color, robot_id)
             ok, 메모 = await _run_one(pol, color, last=(i == len(조합)))
-            await _단계끝(i, color, ok, 메모)
+            await _단계끝(i, color, ok, 메모, robot_id)
             if not ok:
                 return False, 메모
             await asyncio.sleep(REST)
@@ -565,16 +883,16 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
            "HF_HUB_OFFLINE": "1"}
 
     i = 1
-    await _단계시작(i, 조합[0])
+    await _단계시작(i, 조합[0], robot_id)
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_OMX_PROJECT), env=env,
+            *cmd, cwd=str(_OMX_PROJECT), env=env, preexec_fn=_die_with_parent,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        _JOB_PROC = proc
+        _set_proc(robot_id, proc)
         assert proc.stdout is not None
         async for raw in proc.stdout:
             line = raw.decode(errors="replace").rstrip()
-            if _JOB.get("중단요청"):
+            if _job(robot_id).get("중단요청"):
                 proc.send_signal(2)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=30)
@@ -582,10 +900,10 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
                     proc.kill()
                 return False, "사용자가 중단했습니다"
             if LOG_STEP_DONE in line:
-                await _단계끝(i, 조합[i - 1], True, f"{pol['이름']}")
+                await _단계끝(i, 조합[i - 1], True, f"{pol['이름']}", robot_id)
             elif LOG_NEXT_TARGET in line and i < len(조합):
                 i += 1
-                await _단계시작(i, 조합[i - 1])
+                await _단계시작(i, 조합[i - 1], robot_id)
             elif LOG_MISS in line:
                 _push({"종류": "알림",
                        "글": "놓쳤습니다 — 다시 시도합니다", "급": "warn"})
@@ -598,12 +916,12 @@ async def _run_sequence(조합: list[str], policy_id: str) -> tuple[bool, str]:
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
     finally:
-        _JOB_PROC = None
+        _set_proc(robot_id, None)
 
     async with _JOB_LOCK:
-        done = sum(1 for s in _JOB["단계"] if s["상태"] == "완료")
+        done = sum(1 for s in _job(robot_id)["단계"] if s["상태"] == "완료")
     if done < len(조합):
-        await _단계끝(i, 조합[i - 1], False, "제한 시간 안에 담지 못했습니다")
+        await _단계끝(i, 조합[i - 1], False, "제한 시간 안에 담지 못했습니다", robot_id)
         return False, f"{done}/{len(조합)} 만 담았습니다"
     return True, "완료"
 
@@ -625,7 +943,7 @@ async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]
            "HF_HUB_OFFLINE": "1"}
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_OMX_PROJECT), env=env,
+            *cmd, cwd=str(_OMX_PROJECT), env=env, preexec_fn=_die_with_parent,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         try:
             stdout, _ = await asyncio.wait_for(
@@ -639,37 +957,49 @@ async def _run_one(pol: dict, color: str, last: bool = True) -> tuple[bool, str]
         return False, f"{type(e).__name__}: {e}"
 
 
-async def _pack_worker(job_id: str) -> None:
-    _push({"종류": "포장시작", "job": job_id})
-    async with _JOB_LOCK:
-        _JOB["상태"] = "포장중"
+async def _pack_worker(job_id: str, robot_id: str | None = None) -> None:
+    # 상태 전환은 `start_pack` 이 락 안에서 이미 했다 — 여기서 다시 하면 그
+    # 사이가 다시 경합 창이 된다(#142 중복 /pack 수정).
+    _push({"종류": "포장시작", "job": job_id, "robot_id": robot_id})
+
+    # 포장 사이클도 관제로 보고한다(OMX 박스에서만). 조제와 job_id 가 같으므로
+    # dispense_id 에 접미사를 붙여 구분한다. 넷 중 로봇이 하는 것은 "약 투입"
+    # 하나지만, 사이클 시간은 포장 전체의 벽시계 소요다.
+    _시작 = time.monotonic()
+    await _report("cycle_started", f"{job_id}-pack", "pack")
 
     for 단계 in ("봉투 준비", "약 투입", "라벨 인쇄", "밀봉"):
-        _push({"종류": "포장단계", "이름": 단계})
+        _push({"종류": "포장단계", "이름": 단계, "robot_id": robot_id})
         # 로봇이 하는 것은 "약 투입" 하나다. 학습된 작업이 "약통을 집어 봉투에
         # 넣기" 뿐이라 (`omx/il/TASK.md`), 나머지 셋은 실제 모드에서도 시뮬레이션
         # 이다. 넷 다 진짜인 것처럼 보이게 만들지 않는다.
         if 단계 == "약 투입" and PACK_REAL:
-            ok, 메모 = await _run_pack()
+            ok, 메모 = await _run_pack(robot_id)
             if not ok:
-                await _중단(메모)
+                await _중단(메모, robot_id)
+                await _report("cycle_aborted", f"{job_id}-pack", 메모)
                 return
         else:
             await asyncio.sleep(1.2)
 
     async with _JOB_LOCK:
-        _JOB["상태"] = "완료"
-    _push({"종류": "완료", "job": job_id,
+        _job(robot_id)["상태"] = "완료"
+    _push({"종류": "완료", "job": job_id, "robot_id": robot_id,
            "시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    await _report("cycle_completed", f"{job_id}-pack",
+                  int((time.monotonic() - _시작) * 1000))
 
 
-async def _run_pack() -> tuple[bool, str]:
+async def _run_pack(robot_id: str | None = None) -> tuple[bool, str]:
     """`omx/web/pack_run.py` 를 il venv 로 띄우고 `PACK_JSON` 줄만 읽는다.
 
     조제(`_run_sequence`) 와 같은 구조다 — 백엔드는 lerobot·torch·카메라를 모르고,
     자식 프로세스의 stdout 한 줄씩만 화면 이벤트로 옮긴다.
     """
-    global _JOB_PROC
+    # 원격 러너가 설정돼 있으면 포장도 프록시한다. env 없으면 로컬 그대로.
+    remote = _pack_runner_url()
+    if remote:
+        return await _run_remote_pack(remote, robot_id)
 
     if not _PACK_SCRIPT.is_file():
         return False, f"포장 러너를 찾지 못했습니다: {_PACK_SCRIPT}"
@@ -686,16 +1016,18 @@ async def _run_pack() -> tuple[bool, str]:
     if PACK_DRY_RUN:
         cmd.append("--dry-run")
         _push({"종류": "알림", "글": "포장 — 리허설(팔이 움직이지 않습니다)", "급": "warn"})
+    if PACK_NO_EARLY_STOP:
+        cmd.append("--no-early-stop")
     마지막오류 = ""
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(_DATA_DIR),
+            *cmd, cwd=str(_DATA_DIR), preexec_fn=_die_with_parent,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        _JOB_PROC = proc
+        _set_proc(robot_id, proc)
         assert proc.stdout is not None
         async for raw in proc.stdout:
             line = raw.decode(errors="replace").rstrip()
-            if _JOB.get("중단요청"):
+            if _job(robot_id).get("중단요청"):
                 # SIGINT 로 보내야 러너의 finally 가 돌아 팔의 토크가 풀린다.
                 # 죽여 버리면 팔이 마지막 자세로 힘을 준 채 남는다.
                 proc.send_signal(2)
@@ -712,15 +1044,33 @@ async def _run_pack() -> tuple[bool, str]:
                 continue
             if ev.get("오류"):
                 마지막오류 = str(ev["오류"])
+            elif ev.get("완료"):
+                # 상한을 채운 것과 팔이 돌아와서 끝난 것은 다르다. 임계값을
+                # 조정하려면 이때의 이탈값이 필요해서 같은 줄에 싣는다 — 이
+                # 프로젝트에는 로거 설정이 없어 `log.info` 는 버려진다.
+                끝맺음 = "조기 종료" if ev.get("조기종료") else "제한 시간"
+                꼬리 = ""
+                if ev.get("최대이탈") is not None:
+                    꼬리 = f" · 최대이탈 {ev['최대이탈']} · 끝이탈 {ev.get('끝이탈')}"
+                _push({"종류": "알림",
+                       "글": f"포장 — {ev.get('초')}초 ({끝맺음}){꼬리}"})
             elif ev.get("단계") in ("정책 로드", "로봇 연결"):
                 # 첫 실행은 torch·정책 로드에만 수십 초가 걸린다. 아무 소식이
                 # 없으면 멈춘 것으로 보이므로 로그에 남긴다.
                 _push({"종류": "알림", "글": f"포장 — {ev['단계']}"})
+            elif isinstance(ev.get("진행"), (int, float)):
+                # 에피소드가 도는 동안 화면이 비어 있었다 — 기본 60초를 "로봇
+                # 연결" 에서 멈춘 채 보낸다. 러너는 매초 진행률을 올리고 있으니
+                # 그대로 흘려 준다. 단, 로그가 아니라 **진행 막대로만** 보낸다.
+                # 알림에 초당 한 줄씩 쌓으면 나머지 기록이 다 밀려난다.
+                _push({"종류": "포장진행",
+                       "이름": str(ev.get("단계", "")),
+                       "진행": max(0.0, min(1.0, float(ev["진행"])))})
         await proc.wait()
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
     finally:
-        _JOB_PROC = None
+        _set_proc(robot_id, None)
 
     if 마지막오류:
         return False, 마지막오류
@@ -730,9 +1080,16 @@ async def _run_pack() -> tuple[bool, str]:
 
 
 # ── 조작 API ──────────────────────────────────────────────────────────
-async def start_dispense(body: dict) -> tuple[dict, int]:
+def _set_task(robot_id: str | None, task: asyncio.Task) -> None:
     global _JOB_TASK
+    if _is_default(robot_id):
+        _JOB_TASK = task
+    else:
+        _JOB_TASKS[robot_id] = task
 
+
+async def start_dispense(body: dict, robot_id: str | None = None) -> tuple[dict, int]:
+    job = _job(robot_id)
     환자 = body.get("환자") or {}
     처방 = await _find_prescription(body.get("처방코드") or "")
     meds = await _get_meds()
@@ -757,12 +1114,12 @@ async def start_dispense(body: dict) -> tuple[dict, int]:
         return {"오류": f"모르는 정책입니다: {policy_id}"}, 400
 
     async with _JOB_LOCK:
-        if _JOB["상태"] == "조제중":
+        if job["상태"] == "조제중":
             return {"오류": "이미 조제가 진행 중입니다"}, 409
         job_id = uuid.uuid4().hex[:8]
-        _JOB.update({"id": job_id, "상태": "조제중", "단계": [],
-                     "환자": 환자, "처방": 처방, "정책": policy_id,
-                     "중단요청": False})
+        job.update({"id": job_id, "상태": "조제중", "단계": [],
+                    "환자": 환자, "처방": 처방, "정책": policy_id,
+                    "중단요청": False})
 
     if REAL_MODE:
         tray = await read_tray()
@@ -770,47 +1127,93 @@ async def start_dispense(body: dict) -> tuple[dict, int]:
         # 로 뭉치면 사람이 트레이에 알약을 더 올리며 원인을 못 찾는다.
         if tray.get("오류"):
             async with _JOB_LOCK:
-                _JOB["상태"] = "대기"
+                job["상태"] = "대기"
             return {"오류": tray["오류"]}, 503
         부족 = [c for c in 처방["조합"] if tray.get("개수", {}).get(c, 0) < 1]
         if 부족:
             async with _JOB_LOCK:
-                _JOB["상태"] = "대기"
+                job["상태"] = "대기"
             이름 = ", ".join(meds[c]["색이름"] for c in 부족 if c in meds)
             return {"오류": f"트레이에 {이름} 알약이 없습니다"}, 400
 
-    _JOB_TASK = asyncio.create_task(
-        _dispense_worker(job_id, 처방, policy_id))
-    return {"job": job_id, "처방": 처방,
+    _set_task(robot_id, asyncio.create_task(
+        _dispense_worker(job_id, 처방, policy_id, robot_id)))
+    return {"job": job_id, "처방": 처방, "robot_id": robot_id or DEFAULT_ROBOT_ID,
             "정책": _POLICIES[policy_id]["이름"]}, 200
 
 
-async def stop_dispense() -> dict:
+async def stop_dispense(robot_id: str | None = None) -> dict:
     async with _JOB_LOCK:
-        _JOB["중단요청"] = True
-    _push({"종류": "중단요청"})
+        _job(robot_id)["중단요청"] = True
+    _push({"종류": "중단요청", "robot_id": robot_id})
     return {"결과": "중단 요청을 보냈습니다"}
 
 
-async def start_pack() -> tuple[dict, int]:
+async def start_pack(robot_id: str | None = None) -> tuple[dict, int]:
+    # 포장 기본 스테이션은 조제와 다른 박스(omx-02)다. robot_id 를 주지 않으면
+    # 조제(기본) 스테이션에서 이어 포장한다 — 기존 단일-스테이션 흐름 유지.
+    # 조제와 다른 스테이션을 지정하면 두 job 이 동시에 돌 수 있다(§6.2 · item 3).
+    #
+    # **검사와 상태 전환은 한 임계구역 안에 있어야 한다(#142).** 상태만 보고 락을
+    # 놓은 뒤 `_pack_worker` 가 다시 "포장중" 을 기록하면, 그 사이 두 번째 요청이
+    # 통과해 러너가 둘 뜬다 — 두 정책이 같은 팔에 행동을 보낸다. 그래서 여기서
+    # 락 안에 상태까지 세운다. 화면 버튼 disabled 는 방어가 못 된다.
+    job = _job(robot_id)
     async with _JOB_LOCK:
-        if _JOB["상태"] not in ("조제완료", "완료"):
-            return {"오류": "조제가 끝난 뒤에 포장할 수 있습니다"}, 409
-        job_id = _JOB["id"]
-    asyncio.create_task(_pack_worker(job_id))
-    return {"결과": "포장을 시작했습니다"}, 200
+        # 실행 중인 job 위에 겹쳐 시작하지 않는다. 그 외(대기·조제완료·완료)는
+        # 포장을 허용한다 — 조제를 마친 스테이션이든, 조제 없이 포장만 받는
+        # 전용 포장 스테이션이든.
+        if job["상태"] in ("조제중", "포장중"):
+            return {"오류": "이미 진행 중입니다"}, 409
+        if _get_proc(robot_id) is not None:
+            # 상태는 끝났는데 러너가 남아 있다 — 포트·카메라를 아직 쥐고 있다.
+            return {"오류": "앞선 로봇 작업이 아직 정리되지 않았습니다"}, 409
+        job_id = job["id"] or uuid.uuid4().hex[:8]
+        job["id"] = job_id
+        job["상태"] = "포장중"          # 락 안에서 세운다 (#142 dup-race 방지)
+    _set_task(robot_id, asyncio.create_task(_pack_worker(job_id, robot_id)))
+    return {"결과": "포장을 시작했습니다",
+            "robot_id": robot_id or DEFAULT_ROBOT_ID}, 200
 
 
-async def reset_state() -> tuple[dict, int]:
+async def reset_state(robot_id: str | None = None) -> tuple[dict, int]:
+    job = _job(robot_id)
     async with _JOB_LOCK:
-        if _JOB["상태"] == "조제중":
+        if job["상태"] == "조제중":
             return {"오류": "조제 중입니다 — 먼저 중단하세요"}, 409
-        _JOB.update({"id": None, "상태": "대기", "단계": [],
-                     "환자": None, "처방": None, "정책": None, "중단요청": False})
-    _push({"종류": "리셋"})
+        job.update({"id": None, "상태": "대기", "단계": [],
+                    "환자": None, "처방": None, "정책": None, "중단요청": False})
+    _push({"종류": "리셋", "robot_id": robot_id})
     return {"결과": "초기화"}, 200
 
 
-async def snapshot() -> dict:
+async def snapshot(robot_id: str | None = None) -> dict:
     async with _JOB_LOCK:
-        return dict(_JOB)
+        return dict(_job(robot_id))
+
+
+# ── 세션 연결 조제 (item 4) ────────────────────────────────────────────
+# 안내 로봇이 약국에 도착하면(pharmacy.arrived) 백엔드가 그 환자의 처방을 조제
+# 스테이션에서 시작한다. 위 start_dispense 와 달리 화면 입력이 아니라 세션이
+# 방아쇠이고, **완료를 기다렸다가** pharmacy_link 가 dispense_completed 를
+# 발행해야 하므로 워커를 태스크로 던지지 않고 여기서 끝까지 await 한다.
+async def prescription_for_patient(patient_id: str) -> dict | None:
+    """환자의 현재 처방(색 조합)을 DB 에서 읽어 조제용 dict 로 만든다."""
+    rows = await _load_patients(patient_id)
+    for p in rows:
+        if p["id"] == patient_id:
+            처방 = dict(p["처방"])
+            처방["환자"] = {"id": p["id"], "이름": p["이름"]}
+            return 처방
+    return None
+
+
+async def run_session_dispense(dispense_id: str, 처방: dict, policy_id: str,
+                               robot_id: str) -> bool:
+    """세션 연결 조제를 스테이션에서 시작해 완료까지 기다린다. 완주면 True."""
+    job = _job(robot_id)
+    async with _JOB_LOCK:
+        job.update({"id": dispense_id, "상태": "조제중", "단계": [],
+                    "환자": 처방.get("환자"), "처방": 처방,
+                    "정책": policy_id, "중단요청": False})
+    return await _dispense_worker(dispense_id, 처방, policy_id, robot_id)

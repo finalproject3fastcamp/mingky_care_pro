@@ -47,3 +47,7 @@ string current_visit
 float32 battery_voltage
 bool returning_to_dock
 int16 battery_percent
+
+# 환자를 기다리는 실제 남은 시간. Guide Manager의 단조 시계에서 계산한다.
+# 대기 중이 아니면 -1. 화면이 자체 시작 시각을 추측하지 않게 하는 값이다.
+float32 patient_wait_remaining_sec

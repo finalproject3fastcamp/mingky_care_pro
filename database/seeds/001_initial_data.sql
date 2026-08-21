@@ -15,19 +15,22 @@ VALUES
 ON CONFLICT (medication_name)
 DO UPDATE SET color = EXCLUDED.color;
 
-INSERT INTO patients (patient_id, name, birth_date, gender, condition_id)
-SELECT patient_id, name, birth_date, gender, condition_id
+-- admission_type 을 섞어 둔다. 두 경로(외래 수납·약국·약수령 / 입원 병동)를
+-- 시드만으로 다 검증하려면 한쪽만 있어선 안 된다.
+INSERT INTO patients (patient_id, name, birth_date, gender, admission_type, condition_id)
+SELECT patient_id, name, birth_date, gender, admission_type, condition_id
 FROM (
     VALUES
-        ('p001', '윤동수', DATE '1953-01-15', '남자', '퇴행성 무릎 관절염'),
-        ('p002', '권민수', DATE '1976-08-22', '남자', '단순 팔 골절'),
-        ('p003', '김지우', DATE '2005-04-09', '여자', '십자인대 파열')
-) AS source(patient_id, name, birth_date, gender, condition_name)
+        ('p001', '윤동수', DATE '1953-01-15', '남자', 'outpatient', '퇴행성 무릎 관절염'),
+        ('p002', '권민수', DATE '1976-08-22', '남자', 'outpatient', '단순 팔 골절'),
+        ('p003', '김지우', DATE '2005-04-09', '여자', 'inpatient', '십자인대 파열')
+) AS source(patient_id, name, birth_date, gender, admission_type, condition_name)
 JOIN conditions USING (condition_name)
 ON CONFLICT (patient_id) DO UPDATE SET
     name = EXCLUDED.name,
     birth_date = EXCLUDED.birth_date,
     gender = EXCLUDED.gender,
+    admission_type = EXCLUDED.admission_type,
     condition_id = EXCLUDED.condition_id;
 
 INSERT INTO examination_steps (condition_id, step_order, examination_name)

@@ -17,6 +17,7 @@ class QrObservation:
     qr_visible: bool
     visual_visible: bool
     observed_at: datetime
+    patient_wait_remaining_sec: float | None = None
 
 
 _observations: dict[str, QrObservation] = {}
@@ -32,6 +33,7 @@ def update(
     follow_source: str | None = None,
     qr_visible: bool = False,
     visual_visible: bool = False,
+    patient_wait_remaining_sec: float | None = None,
 ) -> None:
     _observations[robot_id] = QrObservation(
         visible=visible,
@@ -42,6 +44,7 @@ def update(
         qr_visible=qr_visible,
         visual_visible=visual_visible,
         observed_at=datetime.now(timezone.utc),
+        patient_wait_remaining_sec=patient_wait_remaining_sec,
     )
 
 
@@ -62,6 +65,7 @@ def get(robot_id: str, now: datetime | None = None) -> QrObservation | None:
             qr_visible=False,
             visual_visible=False,
             observed_at=observation.observed_at,
+            patient_wait_remaining_sec=None,
         )
     return observation
 

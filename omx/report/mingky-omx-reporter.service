@@ -1,0 +1,20 @@
+[Unit]
+Description=밍키케어 OMX 스테이션 리포터 (heartbeat → 관제)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# OMX 박스의 로그인 사용자. 조제/포장 스크립트를 돌리는 계정과 같게 둔다.
+User=omx
+# `omx.report` 를 임포트할 수 있도록 저장소 루트에서 실행한다. 리포터는 표준
+# 라이브러리만 쓰므로 il venv 가 아니라 시스템 python3 로도 충분하다.
+WorkingDirectory=/home/omx/mingky_care_pro
+EnvironmentFile=/etc/mingky/omx.env
+ExecStart=/usr/bin/python3 -m omx.report.reporter
+# heartbeat 는 실패 시 그냥 버린다(재전송 금지). 프로세스가 죽으면 다시 띄운다.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

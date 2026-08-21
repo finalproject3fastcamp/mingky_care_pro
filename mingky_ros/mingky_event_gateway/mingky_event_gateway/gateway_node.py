@@ -726,6 +726,24 @@ class EventGateway(Node):
             msg.session_id > 0
             and msg.session_state in ACTIVE_GUIDE_SESSION_STATES
         )
+        # 화면이 자체적으로 대기 시작 시각을 추측하면 새로고침할 때 20초부터
+        # 다시 센다. Guide Manager가 계산한 실제 남은 시간을 QR 상태와 함께
+        # 보내 0.5초 폴링 화면에서도 같은 시계를 보게 한다.
+        with self._qr_lock:
+            current = dict(self._qr_observation or {
+                "visible": False,
+                "distance": None,
+                "follow_state": None,
+                "follow_distance": None,
+                "follow_source": None,
+                "qr_visible": False,
+                "visual_visible": False,
+            })
+            remaining = float(msg.patient_wait_remaining_sec)
+            current["patient_wait_remaining_sec"] = (
+                remaining if remaining >= 0.0 else None)
+            self._qr_observation = current
+        self._qr_wake.set()
 
     def _on_localization_active(self, msg: Bool) -> None:
         self._localization_active = bool(msg.data)
@@ -998,6 +1016,7 @@ class EventGateway(Node):
                 "navigation_speed_mps": self._navigation_speed_mps,
                 "low_obstacle_mode": self._low_obstacle_mode,
                 "guide_robot_state": self._guide_robot_state,
+                "guide_session_state": self._guide_session_state,
                 "inventory_hash": self._inventory_hash,
                 "cpu_total_pct": self._cpu_total_pct,
                 "max_node_cpu_pct": self._max_node_cpu_pct,

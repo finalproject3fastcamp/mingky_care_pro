@@ -456,6 +456,10 @@ class MobileRobotOut(RobotBase):
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
     ] | None = None
+    guide_session_state: Literal[
+        "none", "qr_scanning", "patient_confirmed", "guiding",
+        "arrived", "in_room", "completed",
+    ] | None = None
     # 토픽 주기 감시 (§7.2). 공통 축이 아니라 여기 두는 이유는 ROS 개념이라서다
     # — OMX 는 LeRobot 시리얼 직결이라 토픽 자체가 없고, 팔에 빈 목록을 내려
     # 보내면 화면이 "감시 중인데 아무것도 안 온다" 로 읽는다.
@@ -520,6 +524,11 @@ class RobotHeartbeatIn(BaseModel):
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
+    ] | None = None
+    # 세션 축을 로봇 축과 분리해야 환자 추적 대기와 검사실 QR 대기를 구분한다.
+    guide_session_state: Literal[
+        "none", "qr_scanning", "patient_confirmed", "guiding",
+        "arrived", "in_room", "completed",
     ] | None = None
 
     # 게이트웨이가 계산한 인벤토리 지문. 서버가 아는 값과 다르면 본문을 요구한다.
@@ -681,6 +690,13 @@ class QrObservationIn(BaseModel):
     ] | None = None
     qr_visible: bool = False
     visual_visible: bool = False
+    # Guide Manager가 단조 시계로 계산한 실제 값. 구버전 로봇은 보내지 않는다.
+    patient_wait_remaining_sec: float | None = Field(
+        default=None,
+        ge=0,
+        le=300,
+        allow_inf_nan=False,
+    )
 
     @model_validator(mode="after")
     def visible_has_distance(self):
@@ -705,6 +721,7 @@ class QrObservationOut(BaseModel):
     ] | None = None
     qr_visible: bool = False
     visual_visible: bool = False
+    patient_wait_remaining_sec: float | None = None
     observed_at: datetime | None = None
 
 

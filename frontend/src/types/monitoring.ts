@@ -123,6 +123,9 @@ export interface MobileRobot extends RobotCommon {
   guide_robot_state:
     | 'idle' | 'moving' | 'waiting' | 'charging' | 'battery_low'
     | 'comm_lost' | 'paused' | 'returning_to_dock' | null
+  guide_session_state:
+    | 'none' | 'qr_scanning' | 'patient_confirmed' | 'guiding'
+    | 'arrived' | 'in_room' | 'completed' | null
   /**
    * 토픽 주기 감시 (§7.2). ROS 개념이라 팔에는 없다.
    *
@@ -334,6 +337,8 @@ export interface QrObservation {
   follow_source: 'none' | 'qr' | 'visual' | 'partial_near' | 'acquiring' | 'grace' | 'stale' | 'unknown' | null
   qr_visible: boolean
   visual_visible: boolean
+  /** Guide Manager가 계산한 실제 환자 대기 잔여 시간. 구버전 로봇은 null. */
+  patient_wait_remaining_sec: number | null
   observed_at: string | null
 }
 

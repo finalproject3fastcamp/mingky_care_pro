@@ -76,10 +76,10 @@ export interface HospitalMap3DProps extends DiagLayers {
    * 환자 추종 상태. 로봇 쪽 `follow_state` 를 그대로 받는다.
    * 안 넘기면 이 화면은 예전과 똑같이 움직인다.
    */
-  follow?: Pick<
-    QrObservation,
-    'follow_state' | 'follow_distance' | 'follow_source'
-  > | null
+  follow?: (
+    Pick<QrObservation, 'follow_state' | 'follow_distance' | 'follow_source'>
+    & Partial<Pick<QrObservation, 'patient_wait_remaining_sec'>>
+  ) | null
   /**
    * 충전소로 돌아가는 중인지.
    *
@@ -107,6 +107,27 @@ export interface HospitalMap3DProps extends DiagLayers {
    * `null` 이면 창을 띄우지 않는다(보여줄 카메라가 없는 화면).
    */
   camera?: 'front' | 'rear' | null
+  /**
+   * 환자를 못 찾은 채 이만큼(초) 지나면 로봇이 안내를 접고 충전소로 간다.
+   *
+   * 로봇 쪽 `patient_follow_wait_limit_sec` 과 같은 값이어야 한다. 화면이
+   * 세는 숫자와 로봇이 세는 숫자가 다르면, 0 이 됐는데 안 가거나 아직
+   * 남았는데 가버리는 것으로 보인다.
+   */
+  waitLimitSec?: number
+  /**
+   * 로봇이 **환자를 기다리느라 멈춰 있는지.**
+   *
+   * 남은 시간을 셀지 말지를 이 값으로 정한다. 로봇은 안내 목표를 향해
+   * 가던 중에 환자를 놓쳤을 때만 복귀 시계를 돌린다. 이미 도착해서 서
+   * 있었다면 시계를 아예 시작하지 않고, 그때는 환자를 놓쳐도 영영
+   * 기다린다.
+   *
+   * 그 차이를 무시하고 세면 화면은 0 까지 세고서 아무 일도 안 일어난다.
+   * **일어나지 않을 일을 예고하는 화면이 아무것도 안 보여주는 화면보다
+   * 나쁘다.**
+   */
+  paused?: boolean
 }
 
 type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
@@ -265,6 +286,14 @@ const FACING = 0
 /** 추종 상태를 받아 오는 주기. 뒤쪽 카메라 화면과 같은 값이다. */
 const QR_POLL_MS = 500
 
+/**
+ * 복귀 예고가 빗나갔다고 인정하기까지 기다리는 시간.
+ *
+ * `guide_robot_state` 가 오는 주기(3초)와 같게 둔다. 그보다 짧으면 상태가
+ * 아직 안 왔을 뿐인데 틀렸다고 말하고, 길면 틀린 채로 오래 서 있는다.
+ */
+const WAIT_OVERDUE_SEC = 3
+
 /** 박동 한 주기(ms). 2D 지도에서 쓰던 1.5초와 같다. */
 const PULSE_MS = 1500
 
@@ -324,6 +353,8 @@ export function HospitalMap3D({
   returning = false,
   robotId = null,
   camera = 'rear',
+  waitLimitSec = 20,
+  paused = false,
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -1051,7 +1082,7 @@ export function HospitalMap3D({
       else r.m.color.copy(r.base)
     }
     h.invalidate()
-  }, [pose, estop, selected, robotReady])
+  }, [pose, estop, robotReady])
 
   // ------------------------------------------------------------- 추종 상태
   /**
@@ -1065,9 +1096,29 @@ export function HospitalMap3D({
     QR_POLL_MS,
     robotId ?? null,
   )
-  // 요청이 실패했는데 마지막 성공값을 계속 보여주면 끊긴 추적을 정상으로
-  // 오인할 수 있다. 명시적으로 넘겨받은 값이 없을 때는 오류 즉시 비운다.
-  const followNow = follow ?? (observed.error ? null : observed.data)
+  /**
+   * 요청이 실패했을 때의 원칙: **좋은 소식은 즉시 버리고, 나쁜 소식은 붙든다.**
+   *
+   * 낡은 normal/slow 를 계속 보여주면 끊긴 추적을 정상으로 오인한다 — 그래서
+   * 오류가 나면 비운다(기존 동작 유지). 그런데 waiting 까지 같이 비우면 반대
+   * 방향의 거짓말이 생긴다. 폴링이 한 번만 실패해도 화면이 대기 상태를 잠깐
+   * 벗어나면서 복귀 카운트다운이 20초부터 다시 시작하는데, 로봇의 시계는 그
+   * 500 에러를 모르고 계속 돈다. 하네스로 재보니 오류 한 번에 화면이 7초를
+   * 잃었고, 로봇이 떠나는 순간 화면에는 "복귀까지 10초" 가 남아 있었다.
+   * 이탈 경보가 껌뻑이며 이벤트 로그도 두 줄로 갈라진다.
+   *
+   * waiting 은 경보다. 경보를 오류 동안 유지하는 것은 안전한 방향이고,
+   * 그 사이에도 로봇은 실제로 세고 있으므로 사실에도 맞다. 연결이 돌아오면
+   * 다음 폴링(0.5초)이 진실로 되돌린다.
+   */
+  const heldWaiting = useRef<QrObservation | null>(null)
+  useEffect(() => {
+    if (observed.error) return
+    heldWaiting.current =
+      observed.data?.follow_state === 'waiting' ? observed.data : null
+  }, [observed.data, observed.error])
+  const followNow =
+    follow ?? (observed.error ? heldWaiting.current : observed.data)
 
   const mapState: MapState = useMemo(() => {
     if (estop) return 'estop'
@@ -1111,6 +1162,78 @@ export function HospitalMap3D({
     h.setRing(MAP_STATE[mapState].ring && !!pose)
     h.invalidate()
   }, [mapState, pose, selected])
+
+  /**
+   * 복귀까지 남은 시간.
+   *
+   * 기다리는 것만 보여주면 보는 사람은 "언제까지 기다리나" 를 모른다.
+   * 남은 시간이 보이면 **곧 무슨 일이 일어날지 알고 지켜볼 수 있다.**
+   *
+   * Guide Manager가 단조 시계로 계산한 실제 남은 시간을 우선 표시한다.
+   * 브라우저를 새로고침해도 로봇의 시계는 계속되므로 숫자가 20초로
+   * 되돌아가지 않는다.
+   *
+   * | 신호 | 여기서 맡는 일 |
+   * |---|---|---|
+   * | `patient_wait_remaining_sec` | 실제 남은 시간 |
+   * | `follow_state` | 기다리는 상태인지 |
+   * | `guide_robot_state` | 실제 복귀 시계가 도는지 |
+   *
+   * 배포 중 구버전 로봇은 새 값을 보내지 않는다. 그 경우에만 기존의
+   * 브라우저 타이머를 fallback으로 사용해 화면 자체가 사라지지 않게 한다.
+   */
+  const waitStartedAt = useRef<number | null>(null)
+  const [waitSec, setWaitSec] = useState<number | null>(null)
+  const authoritativeWaitLeft =
+    followNow?.patient_wait_remaining_sec ?? null
+
+  useEffect(() => {
+    if (mapState !== 'waiting') {
+      // 환자가 돌아오면 로봇도 `_patient_wait_started_at` 을 0 으로 되돌린다.
+      // 짧게 여러 번 놓친 것을 합산하면 잘 따라오는데도 복귀해 버린다.
+      waitStartedAt.current = null
+      setWaitSec(null)
+      return
+    }
+    if (authoritativeWaitLeft !== null) {
+      // 로봇의 실제 시계가 있으면 브라우저가 별도 시계를 만들지 않는다.
+      waitStartedAt.current = null
+      setWaitSec(null)
+      return
+    }
+    if (waitStartedAt.current === null) waitStartedAt.current = performance.now()
+    if (!paused) {
+      // 로봇이 시계를 안 돌리는 경우다. 세지 않는다.
+      setWaitSec(null)
+      return
+    }
+    const startedAt = waitStartedAt.current
+    let id = 0
+    const tick = () => {
+      const sec = (performance.now() - startedAt) / 1000
+      setWaitSec(sec)
+      // 시간이 지났는데도 상태가 그대로면 더 셀 이유가 없다.
+      if (sec > waitLimitSec + WAIT_OVERDUE_SEC) window.clearInterval(id)
+    }
+    tick()
+    id = window.setInterval(tick, 250)
+    return () => window.clearInterval(id)
+  }, [authoritativeWaitLeft, mapState, paused, waitLimitSec])
+
+  /**
+   * `paused` 는 **"시계가 돈다" 보다 넓다.** 노드를 띄워 재 보니, 이미 멈춰
+   * 있던 로봇이 목표 없이 서 있는 상태에서 환자를 놓치면 시계는 안 도는데
+   * `paused` 는 그대로 남아 있었다.
+   *
+   * 그 조합에서 화면만 세면 막대가 다 비고도 로봇이 안 간다. 그래서 시간이
+   * 지나도 상태가 안 바뀌면 **화면이 스스로 말을 바꾼다.** 예고한 일이 안
+   * 일어났을 때 조용히 틀린 채로 있는 것보다 낫다.
+   */
+  const fallbackWaitLeft = waitSec === null ? null : waitLimitSec - waitSec
+  const waitLeft = mapState === 'waiting' && paused
+    ? authoritativeWaitLeft ?? fallbackWaitLeft
+    : null
+  const waitOverdue = waitLeft !== null && waitLeft <= -WAIT_OVERDUE_SEC
 
   /**
    * 무슨 일이 있었는지 남긴다.
@@ -1342,6 +1465,31 @@ export function HospitalMap3D({
             (mapState === 'escort' || mapState === 'slow') && (
               <b>{followNow.follow_distance.toFixed(2)} m</b>
             )}
+          {/*
+              줄어드는 막대가 주인공이다. 이 화면은 시연용 모니터에 띄워
+              여러 사람이 떨어져서 본다 -- 두 자리 숫자는 안 읽히고 막대는
+              읽힌다. 게다가 화면이 세는 값은 어림이라, 막대가 "대략 이만큼"
+              을 숫자보다 정직하게 말한다.
+
+              마지막 1초는 숫자 대신 "복귀 준비" 로 바꾼다. 0 을 띄워 두고
+              멈춰 있는 것이 진행 표시에서 가장 오래된 결함이다.
+          */}
+          {waitLeft !== null && (
+            <span className="map3d__wait">
+              {!waitOverdue && (
+                <span className="map3d__wait-bar" aria-hidden="true">
+                  <i style={{ width: `${Math.max(0, waitLeft / waitLimitSec) * 100}%` }} />
+                </span>
+              )}
+              <b>
+                {waitOverdue
+                  ? '복귀 시간 지남'
+                  : waitLeft <= 1
+                    ? '복귀 준비'
+                    : `복귀까지 ${Math.ceil(waitLeft)}초`}
+              </b>
+            </span>
+          )}
         </span>
         {pose ? (
           <span className="robot-map__coord">

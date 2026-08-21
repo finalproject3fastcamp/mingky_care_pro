@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+#
+# Pinky의 실행 경로를 개인 overlay로 임시 전환한다.
+#
+# /run의 drop-in만 사용하므로 재부팅하거나 `stop`하면 공용 설치 경로로
+# 돌아간다. 서비스는 완전히 멈춘 뒤 의존 순서대로 올리고, ROS 상태 토픽까지
+# 받은 경우에만 성공으로 판정한다.
+set -euo pipefail
+
+private_repo="${MINGKY_PRIVATE_REPO:-/home/pinky/wmk/mingky_care_pro}"
+public_repo="${MINGKY_PUBLIC_REPO:-/home/pinky/mingky_care_pro}"
+runtime_root="/run/systemd/system"
+backup_root="${MINGKY_PRIVATE_BACKUP_ROOT:-$(dirname "$private_repo")/service-overrides-backup}"
+units=(fg-teleop mingky-teleop-bridge mingky-gateway mingky-system)
+stop_order=(mingky-system mingky-gateway mingky-teleop-bridge fg-teleop)
+start_order=(fg-teleop mingky-gateway mingky-teleop-bridge mingky-system)
+active_units=()
+
+unit_exists() {
+  [[ -n "$(systemctl show --property=FragmentPath --value "$1.service" \
+    2>/dev/null)" ]]
+}
+
+capture_active_units() {
+  local unit
+  active_units=()
+  for unit in "${units[@]}"; do
+    unit_exists "$unit" || continue
+    if systemctl is-active --quiet "$unit.service"; then
+      active_units+=("$unit")
+    fi
+  done
+}
+
+was_active() {
+  local expected="$1" unit
+  for unit in "${active_units[@]}"; do
+    [[ "$unit" == "$expected" ]] && return 0
+  done
+  return 1
+}
+
+archive_persistent_private_overrides() {
+  local unit path backup_dir=""
+  for unit in "${units[@]}"; do
+    unit_exists "$unit" || continue
+    while IFS= read -r path; do
+      # 공용 /home/pinky/mingky_care_pro는 건드리지 않는다. wmk뿐 아니라
+      # yunseo 등 다른 개인 overlay도 함께 제거해야 drop-in 정렬 순서에
+      # 따라 실제 실행 경로가 뒤집히지 않는다.
+      grep -Eq '/home/pinky/[^/]+/mingky_care_pro' "$path" || continue
+      if [[ -z "$backup_dir" ]]; then
+        backup_dir="$backup_root/$(date +%Y%m%d-%H%M%S)-legacy-private"
+        sudo install -d -o pinky -g pinky "$backup_dir"
+      fi
+      sudo mv "$path" "$backup_dir/${unit}-$(basename "$path")"
+      echo "영구 개인 drop-in 백업: $path"
+    done < <(find "/etc/systemd/system/$unit.service.d" \
+      -maxdepth 1 -type f -name '*.conf' 2>/dev/null | sort)
+  done
+}
+
+write_overrides() {
+  sudo install -d \
+    "$runtime_root/mingky-system.service.d" \
+    "$runtime_root/mingky-gateway.service.d" \
+    "$runtime_root/fg-teleop.service.d" \
+    "$runtime_root/mingky-teleop-bridge.service.d"
+
+  sudo tee "$runtime_root/mingky-system.service.d/99-wmk-private.conf" >/dev/null <<EOF
+[Service]
+WorkingDirectory=$private_repo
+Environment=MINGKY_REPO=$private_repo
+ExecStart=
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source $private_repo/install/local_setup.bash && exec ros2 launch mingky_bringup mingky_system.launch.xml robot_id:=\${MINGKY_ROBOT_ID} backend_url:=\${MINGKY_BACKEND_URL} low_obstacle_mode:=\${MINGKY_LOW_OBSTACLE_MODE:-disabled} start_fire_evac:=\${MINGKY_FIRE_EVAC_ENABLED:-false} fire_infer_server_url:=\${MINGKY_FIRE_INFER_SERVER_URL:-} start_patient_follow:=\${MINGKY_PATIENT_FOLLOW_ENABLED:-true} \${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL:+patient_follow_infer_server_url:=\${MINGKY_PATIENT_FOLLOW_INFER_SERVER_URL}} patient_follow_slow_distance:=\${MINGKY_PATIENT_FOLLOW_SLOW_DISTANCE_M:-0.15} patient_follow_stop_distance:=\${MINGKY_PATIENT_FOLLOW_STOP_DISTANCE_M:-0.30} patient_follow_slow_speed_percent:=\${MINGKY_PATIENT_FOLLOW_SLOW_SPEED_PERCENT:-35.0} patient_follow_tracking_grace:=\${MINGKY_PATIENT_FOLLOW_TRACKING_GRACE_SEC:-2.0} patient_follow_initial_acquire_grace:=\${MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_GRACE_SEC:-4.0} patient_follow_initial_acquire_distance:=\${MINGKY_PATIENT_FOLLOW_INITIAL_ACQUIRE_DISTANCE_M:-0.30} patient_follow_target_height:=\${MINGKY_PATIENT_FOLLOW_TARGET_HEIGHT_M:-0.13} patient_follow_partial_bbox_max_distance:=\${MINGKY_PATIENT_FOLLOW_PARTIAL_BBOX_MAX_DISTANCE_M:-0.35} patient_follow_partial_bbox_conf_threshold:=\${MINGKY_PATIENT_FOLLOW_PARTIAL_BBOX_CONF_THRESHOLD:-0.50}'
+EOF
+
+  sudo tee "$runtime_root/mingky-gateway.service.d/99-wmk-private.conf" >/dev/null <<EOF
+[Service]
+WorkingDirectory=$private_repo
+ExecStart=
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source $private_repo/install/local_setup.bash && exec ros2 run mingky_event_gateway event_gateway --ros-args -p backend_url:="\${MINGKY_BACKEND_URL}" -p robot_id:="\${MINGKY_ROBOT_ID}" -p order_interval_sec:="\${MINGKY_ORDER_INTERVAL}"'
+EOF
+
+  sudo tee "$runtime_root/fg-teleop.service.d/99-wmk-private.conf" >/dev/null <<EOF
+[Service]
+WorkingDirectory=$private_repo
+ExecStart=
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source $private_repo/install/local_setup.bash && exec ros2 launch mingky_bringup teleop.launch.py robot_id:=\${MINGKY_ROBOT_ID}'
+EOF
+
+  sudo tee "$runtime_root/mingky-teleop-bridge.service.d/99-wmk-private.conf" >/dev/null <<EOF
+[Service]
+WorkingDirectory=$private_repo
+ExecStart=
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/pinky/pinky_pro/install/local_setup.bash && source $private_repo/install/local_setup.bash && exec ros2 run mingky_teleop teleop_bridge --ros-args -p backend_url:=\${MINGKY_BACKEND_URL} -p robot_id:=\${MINGKY_ROBOT_ID}'
+EOF
+
+  local unit
+  for unit in "${units[@]}"; do
+    if ! unit_exists "$unit"; then
+      sudo rm -f "$runtime_root/$unit.service.d/99-wmk-private.conf"
+      sudo rmdir "$runtime_root/$unit.service.d" 2>/dev/null || true
+    fi
+  done
+}
+
+remove_overrides() {
+  local unit
+  for unit in "${units[@]}"; do
+    sudo rm -f "$runtime_root/$unit.service.d/99-wmk-private.conf"
+    sudo rm -f "$runtime_root/$unit.service.d/10-wmk-main.conf"
+    sudo rmdir "$runtime_root/$unit.service.d" 2>/dev/null || true
+  done
+}
+
+wait_for_topic() {
+  local validation_repo="$1" topic="$2" timeout_sec="$3"
+  (
+    # ROS setup 파일은 선언되지 않은 내부 변수를 읽으므로 바깥의 nounset을
+    # 이 subshell에만 해제한다.
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source /home/pinky/pinky_pro/install/local_setup.bash
+    source "$validation_repo/install/local_setup.bash"
+    timeout "$timeout_sec" ros2 topic echo "$topic" --once \
+      --qos-durability transient_local \
+      --qos-reliability reliable >/dev/null
+  )
+}
+
+transition_active_units() {
+  local validation_repo="$1" unit
+
+  # restart를 연달아 호출하면 이전 DDS participant가 정리되기 전에 다음
+  # 노드가 떠 /mode와 GuideState가 멎을 수 있다. 모두 내려간 것을 확인한 뒤
+  # 의존 순서대로 새 participant를 만든다.
+  for unit in "${stop_order[@]}"; do
+    was_active "$unit" || continue
+    sudo systemctl stop "$unit.service"
+  done
+  sudo systemctl daemon-reload
+
+  for unit in "${start_order[@]}"; do
+    was_active "$unit" || continue
+    sudo systemctl start "$unit.service"
+    systemctl is-active --quiet "$unit.service"
+
+    if [[ "$unit" == "fg-teleop" ]]; then
+      wait_for_topic "$validation_repo" /mode 20 || {
+        echo "실패: /mode 실데이터를 받지 못했습니다." >&2
+        return 1
+      }
+    elif [[ "$unit" == "mingky-system" ]]; then
+      wait_for_topic "$validation_repo" /guide_manager/state 60 || {
+        echo "실패: /guide_manager/state 실데이터를 받지 못했습니다." >&2
+        return 1
+      }
+    fi
+  done
+}
+
+verify_private_exec_paths() {
+  local unit exec_start
+  for unit in "${active_units[@]}"; do
+    exec_start="$(systemctl show --property=ExecStart --value "$unit.service")"
+    if ! grep -Fq "$private_repo" <<<"$exec_start"; then
+      echo "실패: $unit.service가 개인 경로를 사용하지 않습니다." >&2
+      return 1
+    fi
+  done
+}
+
+start_private() {
+  test -f "$private_repo/install/local_setup.bash"
+  capture_active_units
+  archive_persistent_private_overrides
+  write_overrides
+  transition_active_units "$private_repo"
+  verify_private_exec_paths
+  echo "개인 경로 실행 중: $private_repo (ROS 상태 확인 완료)"
+}
+
+stop_private() {
+  test -f "$public_repo/install/local_setup.bash"
+  capture_active_units
+  archive_persistent_private_overrides
+  remove_overrides
+  transition_active_units "$public_repo"
+  echo "공용 설치 경로로 복귀했습니다. (ROS 상태 확인 완료)"
+}
+
+status_runtime() {
+  local unit exec_start
+  for unit in "${units[@]}"; do
+    unit_exists "$unit" || continue
+    exec_start="$(systemctl show --property=ExecStart --value "$unit.service")"
+    printf '%-30s ' "$unit"
+    if grep -Fq "$private_repo" <<<"$exec_start"; then
+      echo private
+    else
+      echo public
+    fi
+  done
+}
+
+case "${1:-run}" in
+  start)
+    start_private
+    ;;
+  stop)
+    stop_private
+    ;;
+  status)
+    status_runtime
+    ;;
+  run)
+    cleaned_up=0
+    cleanup() {
+      if (( cleaned_up == 0 )); then
+        cleaned_up=1
+        stop_private
+      fi
+    }
+    trap 'exit 130' INT TERM HUP
+    trap cleanup EXIT
+    start_private
+    echo "Ctrl+C로 종료하면 공용 설치 경로로 자동 복귀합니다."
+    while sleep 3600; do :; done
+    ;;
+  *)
+    echo "사용법: $0 {run|start|stop|status}" >&2
+    exit 2
+    ;;
+esac

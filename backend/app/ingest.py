@@ -34,16 +34,36 @@ import uuid
 import asyncpg
 from asyncpg.exceptions import IntegrityConstraintViolationError
 
-from . import notify
+from . import notify, pharmacy_link
 from .event_codes import UNKNOWN_CODE, EventCodeRegistry
 from .schemas import EventIn, IngestResult
 
 log = logging.getLogger("mingky")
 
 _INSERT = """
+    WITH resolved AS (
+        SELECT
+            CASE
+                WHEN $3::bigint = 0 THEN NULL
+                WHEN EXISTS (
+                    SELECT 1 FROM guidance_sessions WHERE session_id = $3
+                ) THEN $3
+                ELSE NULL
+            END AS session_id,
+            $3::bigint <> 0 AND NOT EXISTS (
+                SELECT 1 FROM guidance_sessions WHERE session_id = $3
+            ) AS detached
+    )
     INSERT INTO events (event_id, robot_id, session_id, occurred_at,
                         level, event_code, source_node, payload)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    SELECT $1, $2, resolved.session_id, $4, $5, $6, $7,
+           CASE
+               WHEN resolved.detached THEN
+                   $8::jsonb || jsonb_build_object(
+                       'reported_session_id', $3::bigint)
+               ELSE $8::jsonb
+           END
+    FROM resolved
     ON CONFLICT (event_id) DO NOTHING
     RETURNING event_id
 """
@@ -77,8 +97,10 @@ async def _insert(conn: asyncpg.Connection, event: EventIn) -> bool:
         _INSERT,
         event.event_id,
         event.robot_id,
-        # session_id 0 은 '세션 없음' 이라 FK 를 걸 수 없다. NULL 로 저장한다.
-        event.session_id or None,
+        # 0 또는 현재 DB에 없는 과거 세션은 SQL에서 NULL로 분리한다. DB를
+        # 초기화한 뒤 로봇의 영속 큐가 옛 세션 이벤트를 재전송하더라도 배치
+        # 전체가 FK 오류로 막히지 않는다. 원래 값은 payload에 보존한다.
+        event.session_id,
         event.occurred_at,
         event.level,
         event.event_code,
@@ -237,5 +259,16 @@ async def ingest(conn: asyncpg.Connection, events: list[EventIn],
         notify.notify(delivered)
     except Exception:
         log.exception("알림 발송 실패. 적재는 이미 커밋됐다.")
+
+    # 안내 로봇이 약국에 도착했으면 세션 연결 조제를 시작한다(item 4). notify 와
+    # 같은 이유로 트랜잭션 밖이다 — 조제는 오래 걸리므로 적재 커밋을 막으면 안 되고,
+    # 커밋된(재전송이 아닌 새) 도착에 대해서만 시작한다. schedule_from_event 가
+    # 백그라운드 태스크로 던지므로 여기서 조제 완료를 기다리지 않는다.
+    for event in delivered:
+        if event.event_code == pharmacy_link.ARRIVED_CODE:
+            try:
+                pharmacy_link.schedule_from_event(event.payload)
+            except Exception:
+                log.exception("세션 연결 조제 시작 실패. 적재는 이미 커밋됐다.")
 
     return result
