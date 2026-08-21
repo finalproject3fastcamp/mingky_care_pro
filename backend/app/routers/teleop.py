@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -50,6 +51,51 @@ log = logging.getLogger("mingky")
 _robots: dict[str, WebSocket] = {}
 # robot_id → 조작자 소켓들. 여러 명이 볼 수 있게 열어 두되, 조작은 아래 참고.
 _operators: dict[str, set[WebSocket]] = {}
+
+# 브라우저 탭이 절전되거나 회선이 반쯤 끊기면 ``send_text``가 TCP 버퍼에서
+# 오래 막힐 수 있다. 로봇 소켓의 수신 루프 안에서 전송하므로 한 탭이 막히면
+# 다른 모든 탭의 pose·경로·라이다도 함께 멈춘다. 정상적인 WAN 전송은 즉시
+# 버퍼에 들어가므로, 이 시간을 넘긴 연결은 이미 실시간 관제에 쓸 수 없다.
+OPERATOR_SEND_TIMEOUT_SECONDS = 0.25
+OPERATOR_CLOSE_TIMEOUT_SECONDS = 0.10
+
+
+async def _send_to_operator(
+    robot_id: str,
+    operator: WebSocket,
+    message: str,
+) -> None:
+    """한 느린 관제 연결이 다른 관제 연결까지 막지 않게 제한 전송한다."""
+    try:
+        await asyncio.wait_for(
+            operator.send_text(message),
+            timeout=OPERATOR_SEND_TIMEOUT_SECONDS,
+        )
+        return
+    except (asyncio.TimeoutError, WebSocketDisconnect, RuntimeError, OSError):
+        _operators.get(robot_id, set()).discard(operator)
+        log.warning("teleop: 응답 없는 조작자 연결 제거 %s", robot_id)
+
+    # 제거만 하고 소켓을 살려 두면 해당 handler가 명령을 계속 전달할 수 있다.
+    # close도 회선 상태에 따라 막힐 수 있으므로 짧게 제한한다.
+    try:
+        await asyncio.wait_for(
+            operator.close(),
+            timeout=OPERATOR_CLOSE_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, RuntimeError, OSError):
+        pass
+
+
+async def _broadcast_to_operators(robot_id: str, message: str) -> None:
+    """모든 정상 관제 탭에 동시에 보내고 느린 탭만 격리한다."""
+    operators = tuple(_operators.get(robot_id, ()))
+    if not operators:
+        return
+    await asyncio.gather(*(
+        _send_to_operator(robot_id, operator, message)
+        for operator in operators
+    ))
 
 
 @router.websocket("/{robot_id}/teleop/robot")
@@ -73,11 +119,7 @@ async def robot_socket(websocket: WebSocket, robot_id: str):
         while True:
             # 로봇이 올리는 것은 지금은 pose 뿐이다. 그대로 조작자들에게 뿌린다.
             message = await websocket.receive_text()
-            for operator in list(_operators.get(robot_id, ())):
-                try:
-                    await operator.send_text(message)
-                except (WebSocketDisconnect, RuntimeError):
-                    _operators.get(robot_id, set()).discard(operator)
+            await _broadcast_to_operators(robot_id, message)
     except WebSocketDisconnect:
         pass
     finally:
