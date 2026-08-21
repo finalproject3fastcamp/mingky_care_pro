@@ -40,21 +40,25 @@ def test_smac_tree_selects_smac_planner() -> None:
     assert selector.attrib['default_planner'] == 'Smac2D'
 
 
-def test_replanning_waits_for_translation_instead_of_rotation() -> None:
+def test_replanning_keeps_valid_path_and_refreshes_invalid_path_promptly() -> None:
     for name in (
             'navigate_no_recovery_navfn.xml',
             'navigate_no_recovery_smac2d.xml',
             'navigate_recovery_smac2d.xml'):
         root = _root(name)
-        controller = root.find('.//DistanceController')
+        controller = root.find('.//RateController')
+        planner_fallback = controller.find(
+            './RecoveryNode[@name="ComputePathToPose"]/Fallback')
 
         assert controller is not None
-        assert controller.attrib == {
-            'distance': '0.08',
-            'global_frame': 'map',
-            'robot_base_frame': 'base_link',
-        }
-        assert root.find('.//RateController') is None
+        assert controller.attrib == {'hz': '1.0'}
+        assert root.find('.//DistanceController') is None
+        assert planner_fallback is not None
+        assert planner_fallback.find('.//IsPathValid') is not None
+        assert planner_fallback.find('.//GlobalUpdatedGoal') is not None
+        timer = planner_fallback.find('.//PathExpiringTimer')
+        assert timer is not None
+        assert timer.attrib == {'seconds': '10.0', 'path': '{path}'}
 
 
 def test_stalled_follow_path_refreshes_costmap_once_before_adaptive_recovery() -> None:
