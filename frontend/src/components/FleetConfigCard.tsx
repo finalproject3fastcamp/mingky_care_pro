@@ -159,8 +159,8 @@ export function FleetConfigCard({ config, loading, error }: Props) {
 
           <small>
             맵은 이름이 아니라 격자 지문으로 비교합니다. 같은 이름의 다른 맵이
-            실제로 있습니다. 조제 로봇의 코드 형상은 게이트웨이가 붙으면
-            채워집니다.
+            실제로 있습니다. 조제 로봇의 코드 형상은 게이트웨이가 연결되면
+            표시됩니다.
           </small>
         </>
       )}

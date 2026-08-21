@@ -66,7 +66,7 @@ export function ServoHealthCard({ health, loading, error }: Props) {
         <p className="manipulator-empty">
           {loading
             ? '불러오는 중…'
-            : '서보 보고가 없습니다. U2D2 로 읽은 값이 올라오면 이 카드가 채워집니다.'}
+            : '서보 보고가 없습니다. U2D2로 값을 읽어 오면 이 자리에 표시됩니다.'}
         </p>
       ) : (
         <>
