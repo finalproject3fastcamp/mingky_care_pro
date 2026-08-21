@@ -1,0 +1,73 @@
+.fleet-scene {
+  margin-top: 1.5rem;
+}
+
+.fleet-scene__viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #c5cbd1;
+}
+
+.fleet-scene__viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 라벨은 캔버스 위에 얹되 마우스를 가로채지 않는다(개관 표시만). */
+.fleet-scene__labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fleet-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #f8fafc;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.fleet-label__name {
+  font-weight: 600;
+}
+
+.fleet-label__badge {
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  background: rgba(148, 163, 184, 0.35);
+}
+
+/* 오프라인·위치 없음: 라벨도 흐리게, 로봇 흐리기와 짝을 맞춘다. */
+.fleet-label[data-status='offline'],
+.fleet-label[data-status='no-pose'] {
+  background: rgba(71, 85, 105, 0.72);
+  color: #e2e8f0;
+}
+
+.fleet-label[data-status='offline'] .fleet-label__badge {
+  background: rgba(239, 68, 68, 0.5);
+}
+
+.fleet-label[data-status='no-pose'] .fleet-label__badge {
+  background: rgba(245, 158, 11, 0.55);
+}
+
+.fleet-label[data-status='active'] .fleet-label__badge {
+  background: rgba(34, 197, 94, 0.55);
+}
