@@ -16,7 +16,7 @@
 5. Nav2 local costmap의 `RangeSensorLayer`와 MPPI가 가까운 회피를 수행하고,
    global costmap의 임시 레이어를 본 Smac2D가 필요하면 전체 우회 경로를
    다시 만듭니다.
-6. 15cm 이내에서는 전진 상한을 0.08m/s부터 거리에 비례해 연속적으로 낮추고,
+6. 25cm 이내에서는 전진 상한을 0.08m/s부터 거리에 비례해 연속적으로 낮추고,
    **2-of-3 저상 장애물 확정 이후** 4cm에서 전진만 막습니다. 회전과 후퇴
    명령은 변경하지 않습니다.
 
@@ -50,7 +50,8 @@ costmap을 한 번 초기화해 그 작업에서 누적한 저상 장애물 표�
 `/low_obstacle/observation`은 확정 상태, 추정 거리, 실제 초음파 FOV를 JSON으로
 발행합니다. Teleop WebSocket이 이 작은 메시지만 실시간 전달하고 3D 지도는
 정확한 점 대신 전방 부채꼴을 표시합니다. 과거 관측이 만료되면 표시도 즉시
-사라집니다.
+사라집니다. `active`는 현재 센서 관측, `retained_active`는 현재 주행 작업의
+costmap에 보존 중인 저상 장애물 존재 여부입니다.
 
 기본값은 40cm에서 표식하고 25cm부터 감속하며 4cm에서 완전히 멈춥니다.
 ADC 물리 보정을 대신하지 않으므로 실기 로그를 보고 `detect_distance_m`,
@@ -65,13 +66,13 @@ costmap 주기를 올리지 않고 우회 준비 시간만 확보합니다.
 - `CLEAR`: 낮은 장애물 증거 없음
 - `UNCERTAIN`: 반복 확인 중
 - `CONFIRMED`: local costmap에 반영됨
-- `SLOW`: 15cm 이내 전진 감속
+- `SLOW`: 25cm 이내 전진 감속
 - `FORWARD_BLOCKED`: 4cm 이내 전진 차단
 - `STALE_RANGE`, `STALE_LIDAR`: 입력이 오래됨
 - `DISABLED`: launch 파라미터로 비활성화됨
 
 센서가 끊기면 기존 LiDAR Nav2는 유지하고 상태만 stale로 보고합니다. 이미
-확정된 15cm/4cm 장애물은 센서가 잠시 끊겨도 마지막 전진 제한을 유지하며,
+확정된 25cm/4cm 장애물은 센서가 잠시 끊겨도 마지막 전진 제한을 유지하며,
 과거 지도 표시는 현재 안내 구간 또는 Waypoint Test가 끝날 때 삭제합니다.
 
 ## 실행과 확인

@@ -266,6 +266,7 @@ class GuideManager(Node):
         self._active_nav_context = None
         self._pending_low_obstacle_context = None
         self._low_obstacle_confirmed_count = 0
+        self._low_obstacle_active = False
         self._patient_follow_state = 'inactive'
         self._patient_follow_last_at = 0.0
         self._patient_wait_started_at = 0.0
@@ -301,6 +302,12 @@ class GuideManager(Node):
             String, '/emergency_stop/reason', self._on_emergency_reason, state_qos)
         self.create_subscription(
             Bool, '/emergency_stop/state', self._on_emergency_state, state_qos)
+        self.create_subscription(
+            String,
+            '/low_obstacle/observation',
+            self._on_low_obstacle_observation,
+            state_qos,
+        )
         self.create_subscription(
             LaserScan,
             str(self.get_parameter('recovery_scan_topic').value),
@@ -1224,6 +1231,21 @@ class GuideManager(Node):
         self._latest_scan = msg
         self._latest_scan_received_ns = self.get_clock().now().nanoseconds
 
+    def _on_low_obstacle_observation(self, msg: String) -> None:
+        """확정 저상 장애물 동안 전방 탈출 후보를 잠근다."""
+        try:
+            payload = json.loads(msg.data)
+        except (TypeError, ValueError):
+            self.get_logger().warn(
+                '저상 장애물 관측 메시지를 해석하지 못했습니다.',
+                throttle_duration_sec=5.0,
+            )
+            return
+        if isinstance(payload, dict):
+            self._low_obstacle_active = bool(
+                payload.get('active', False)
+                or payload.get('retained_active', False))
+
     def _on_low_obstacle_range(self, msg: Range) -> None:
         """초음파 관측을 회피 드라이버와 저상 장애물 판정에 전달한다."""
         self.low_obstacle_driver.update_range(msg.range)
@@ -1922,7 +1944,10 @@ class GuideManager(Node):
                 failures=failures,
                 # 뒤쪽의 빈 공간도 후보로 검토하되, MPPI vx_min=0이므로
                 # 실제 이동은 제자리 회전 후 전진으로만 수행한다.
-                config=SelectorConfig(allow_reverse=True),
+                config=SelectorConfig(
+                    allow_reverse=True,
+                    block_forward=self._low_obstacle_active,
+                ),
             ),
             limit=self.recovery_candidate_limit,
             minimum_separation_rad=self.recovery_candidate_separation_rad,
@@ -1930,6 +1955,9 @@ class GuideManager(Node):
         if not candidates:
             self.get_logger().warn('안전 여유를 만족하는 탈출 후보가 없습니다.')
             return False
+        if self._low_obstacle_active:
+            self.get_logger().info(
+                '저상 장애물 관측 중이라 전방 탈출 후보를 제외했습니다.')
 
         context = {
             'waypoint_name': waypoint_name,

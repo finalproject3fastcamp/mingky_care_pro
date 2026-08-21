@@ -210,6 +210,7 @@ class NavigationManager(Node):
         self._test_context: dict | None = None
         self._pending_low_obstacle_context: dict | None = None
         self._low_obstacle_confirmed_count = 0
+        self._low_obstacle_active = False
         # Nav2의 /plan은 원래 경로, 복구 후보 검증, 실제 복구 경로가 같은
         # 토픽을 공유한다. 관제에서 세 종류가 섞이지 않도록 현재 목적을
         # 구분해 별도 토픽으로 다시 발행한다.
@@ -238,6 +239,12 @@ class NavigationManager(Node):
             Bool, '/emergency_stop/state', self._on_emergency, state_qos)
         self.create_subscription(
             Bool, '/auto_localize/active', self._on_localization, state_qos)
+        self.create_subscription(
+            String,
+            '/low_obstacle/observation',
+            self._on_low_obstacle_observation,
+            state_qos,
+        )
         self.create_subscription(
             LaserScan,
             str(self.get_parameter('recovery_scan_topic').value),
@@ -364,6 +371,21 @@ class NavigationManager(Node):
     def _on_scan(self, msg: LaserScan) -> None:
         self._latest_scan = msg
         self._latest_scan_received_ns = self.get_clock().now().nanoseconds
+
+    def _on_low_obstacle_observation(self, msg: String) -> None:
+        """확정 저상 장애물 동안 전방 탈출 후보를 잠근다."""
+        try:
+            payload = json.loads(msg.data)
+        except (TypeError, ValueError):
+            self.get_logger().warn(
+                '저상 장애물 관측 메시지를 해석하지 못했습니다.',
+                throttle_duration_sec=5.0,
+            )
+            return
+        if isinstance(payload, dict):
+            self._low_obstacle_active = bool(
+                payload.get('active', False)
+                or payload.get('retained_active', False))
 
     def _on_low_obstacle_range(self, msg: Range) -> None:
         """시험 주행 중 초음파와 LiDAR 차이로 저상 장애물을 판별한다."""
@@ -834,7 +856,10 @@ class NavigationManager(Node):
                 # allow_reverse는 속도 명령이 아니라 로봇 뒤쪽 공간도 탈출
                 # 후보로 살필지를 뜻한다. 실제 주행 후진은 MPPI vx_min=0으로
                 # 금지하고, 뒤쪽 후보는 Rotation Shim이 회전 후 전진한다.
-                config=SelectorConfig(allow_reverse=True),
+                config=SelectorConfig(
+                    allow_reverse=True,
+                    block_forward=self._low_obstacle_active,
+                ),
             ),
             limit=self.recovery_candidate_limit,
             minimum_separation_rad=self.recovery_candidate_separation_rad,
@@ -842,6 +867,9 @@ class NavigationManager(Node):
         if not candidates:
             self.get_logger().warn('안전 여유를 만족하는 탈출 후보가 없습니다.')
             return False
+        if self._low_obstacle_active:
+            self.get_logger().info(
+                '저상 장애물 관측 중이라 전방 탈출 후보를 제외했습니다.')
 
         recovery = {
             'recovery_attempt': recovery_attempt,

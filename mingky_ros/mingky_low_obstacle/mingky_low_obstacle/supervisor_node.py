@@ -494,6 +494,9 @@ class LowObstacleSupervisor(Node):
             self._last_active_observation_distance = None
         payload = json.dumps({
             'active': active,
+            # 현재 센서에서 잠깐 사라져도 이번 주행의 costmap에 보존된
+            # 저상 장애물이 있으면 복구 후보 선택에는 계속 반영한다.
+            'retained_active': bool(self._marked_observations),
             'distance_m': (
                 round(distance, 3)
                 if active and distance is not None else None),

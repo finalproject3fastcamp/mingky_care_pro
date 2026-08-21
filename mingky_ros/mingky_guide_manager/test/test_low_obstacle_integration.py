@@ -10,6 +10,7 @@ from mingky_guide_manager.low_obstacle import SidestepOutcome
 from mingky_interfaces.msg import GuideState
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import LaserScan, Range
+from std_msgs.msg import String
 
 
 class ImmediateFuture:
@@ -141,6 +142,18 @@ def test_disabled_mode_keeps_current_navigation(manager):
     manager._on_low_obstacle_range(Range(range=0.08))
 
     assert handle.cancelled == 0
+
+
+def test_observation_controls_forward_recovery_lock(manager):
+    manager._on_low_obstacle_observation(String(data='{"active": true}'))
+    assert manager._low_obstacle_active is True
+
+    manager._on_low_obstacle_observation(String(data='{"active": false}'))
+    assert manager._low_obstacle_active is False
+
+    manager._on_low_obstacle_observation(String(
+        data='{"active": false, "retained_active": true}'))
+    assert manager._low_obstacle_active is True
 
 
 def test_mode_change_is_rejected_during_navigation(manager):

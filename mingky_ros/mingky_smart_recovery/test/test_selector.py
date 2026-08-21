@@ -165,6 +165,17 @@ def test_reverse_candidates_can_be_disabled() -> None:
     assert all(not candidate.name.startswith('rear') for candidate in result)
 
 
+def test_forward_candidates_can_be_blocked_for_low_obstacle() -> None:
+    result = candidates(
+        scan(default=1.0), config=SelectorConfig(block_forward=True))
+
+    assert result
+    assert all(math.cos(candidate.bearing_rad) <= 1.0e-9
+               for candidate in result)
+    assert {'left', 'right', 'rear'} <= {
+        candidate.name for candidate in result}
+
+
 def test_finds_escape_between_old_45_degree_directions() -> None:
     ranges = scan()
     open_sector(ranges, 30, 1.0)
