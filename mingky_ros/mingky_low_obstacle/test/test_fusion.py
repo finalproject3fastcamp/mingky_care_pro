@@ -1,6 +1,7 @@
 import math
 
 from mingky_low_obstacle.fusion import (
+    CostmapObservationRetention,
     FusionConfig,
     limit_forward_velocity,
     LowObstacleFilter,
@@ -20,10 +21,10 @@ def _update(filter_, sonar, lidar=0.80):
     )
 
 
-def test_median_and_three_of_five_reject_one_spike():
+def test_median_and_two_of_three_reject_one_spike():
     filter_ = LowObstacleFilter()
 
-    decisions = [_update(filter_, value) for value in (0.18, 0.19, 0.63, 0.18, 0.19)]
+    decisions = [_update(filter_, value) for value in (0.18, 0.63, 0.19)]
 
     assert decisions[-1].filtered_range_m == pytest.approx(0.19)
     assert decisions[-1].state == 'CONFIRMED'
@@ -80,20 +81,24 @@ def test_near_samples_do_not_block_before_low_obstacle_confirmation():
     assert decision.forward_speed_limit_mps is None
 
     # A wall edge or a transient echo must not directly stop guidance.  The
-    # LiDAR mismatch first has to satisfy the normal 3-of-5 confirmation rule.
+    # LiDAR mismatch first has to satisfy the normal 2-of-3 confirmation rule.
     decision = _update(filter_, 0.06)
-    assert decision.state == 'UNCERTAIN'
+    assert decision.state == 'SLOW'
+    assert decision.forward_speed_limit_mps == pytest.approx(0.08)
+    # The endpoint is clamped outside the footprint so Nav2 sees a routable
+    # obstacle instead of clearing it, while the real range controls speed.
+    assert decision.output_range_m == pytest.approx(0.10)
 
-    decision = _update(filter_, 0.06)
-    assert decision.state == 'UNCERTAIN'
 
-    decision = _update(filter_, 0.06)
+def test_four_centimetres_is_the_hard_forward_stop():
+    filter_ = LowObstacleFilter()
+
+    for _ in range(3):
+        decision = _update(filter_, 0.04)
+
     assert decision.state == 'FORWARD_BLOCKED'
     assert decision.forward_speed_limit_mps == 0.0
-    # A lethal endpoint this close would overlap the padded footprint and make
-    # MPPI reject rotation/recovery too. Max range clears the local layer while
-    # the separate velocity gate still blocks unsafe forward motion.
-    assert decision.output_range_m == pytest.approx(0.97)
+    assert decision.output_range_m == pytest.approx(0.10)
 
 
 def test_confirmed_obstacle_outside_footprint_is_kept_in_costmap():
@@ -133,7 +138,7 @@ def test_stale_lidar_does_not_clear_or_create_obstacle():
 def test_stale_sensor_keeps_confirmed_near_forward_limit():
     filter_ = LowObstacleFilter()
     for _ in range(5):
-        _update(filter_, 0.06)
+        _update(filter_, 0.04)
 
     decision = filter_.stale_decision(0.80)
 
@@ -198,6 +203,14 @@ def test_robot_motion_expires_robot_relative_obstacle_observation():
     assert observation_pose_expired(
         anchor, (1.10, 2.0, 0.0),
         distance_m=0.10, yaw_rad=math.radians(20.0))
+    assert not observation_pose_expired(
+        anchor, (1.20, 2.0, 0.0),
+        distance_m=0.10, yaw_rad=math.radians(20.0),
+        preserve_forward_approach=True)
+    assert observation_pose_expired(
+        anchor, (1.0, 2.10, 0.0),
+        distance_m=0.10, yaw_rad=math.radians(20.0),
+        preserve_forward_approach=True)
     assert observation_pose_expired(
         anchor, (1.0, 2.0, math.radians(20.0)),
         distance_m=0.10, yaw_rad=math.radians(20.0))
@@ -205,6 +218,32 @@ def test_robot_motion_expires_robot_relative_obstacle_observation():
     assert observation_pose_expired(
         anchor, (1.0, 2.0, math.radians(350.0)),
         distance_m=0.10, yaw_rad=math.radians(10.0))
+
+
+def test_costmap_clear_is_delayed_and_cancelled_by_redetection():
+    retention = CostmapObservationRetention(hold_sec=1.5)
+
+    retention.request_clear(1_000_000_000, 'sensor clear')
+    assert not retention.clear_due(2_499_999_999)
+    assert retention.clear_due(2_500_000_000)
+
+    retention.on_detection(True)
+    assert not retention.clear_due(3_000_000_000)
+
+
+def test_avoidance_clear_suppresses_remarking_until_sensor_clears():
+    retention = CostmapObservationRetention(hold_sec=1.5)
+
+    retention.request_clear(
+        1_000_000_000, 'avoidance', suppress_until_sensor_clear=True)
+    retention.on_detection(True)
+
+    assert retention.suppress_until_sensor_clear
+    assert retention.clear_due(2_500_000_000)
+
+    retention.mark_cleared()
+    retention.on_detection(False)
+    assert not retention.suppress_until_sensor_clear
 
 
 def test_invalid_configuration_is_rejected():

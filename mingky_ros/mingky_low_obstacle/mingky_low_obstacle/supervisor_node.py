@@ -25,6 +25,7 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from .fusion import (
+    CostmapObservationRetention,
     FusionConfig,
     FusionDecision,
     limit_forward_velocity,
@@ -57,19 +58,22 @@ class LowObstacleSupervisor(Node):
             'detect_distance_m': 0.30,
             'clear_distance_m': 0.35,
             'slow_distance_m': 0.15,
-            'stop_distance_m': 0.07,
+            'stop_distance_m': 0.04,
             'costmap_min_range_m': 0.10,
             'slow_speed_mps': 0.08,
             'lidar_margin_m': 0.15,
             'median_samples': 3,
-            'confirmation_window': 5,
-            'confirmations_required': 3,
+            'confirmation_window': 3,
+            'confirmations_required': 2,
             'clear_confirmations': 2,
             'near_window': 3,
             'near_confirmations': 2,
             # 로봇 상대 센서 관측은 회피 이동 뒤 같은 지도 좌표에 남기지 않는다.
             'observation_expiry_distance_m': 0.10,
             'observation_expiry_yaw_rad': 0.3490658503988659,
+            # 전역 costmap(1 Hz)이 적어도 한 번은 안정된 장애물을 보고
+            # 우회 경로를 만들 수 있도록 즉시 삭제하지 않는다.
+            'observation_clear_hold_sec': 1.5,
         }
         for name, default in parameters.items():
             self.declare_parameter(name, default)
@@ -87,6 +91,8 @@ class LowObstacleSupervisor(Node):
             0.01, float(get('observation_expiry_distance_m').value))
         self.observation_expiry_yaw = max(
             0.05, float(get('observation_expiry_yaw_rad').value))
+        self.observation_retention = CostmapObservationRetention(
+            float(get('observation_clear_hold_sec').value))
         self.filter = LowObstacleFilter(FusionConfig(
             detect_distance_m=float(get('detect_distance_m').value),
             clear_distance_m=float(get('clear_distance_m').value),
@@ -220,6 +226,8 @@ class LowObstacleSupervisor(Node):
             lidar_range_m=self._latest_lidar_range,
             lidar_fresh=lidar_fresh,
         )
+        self.observation_retention.on_detection(
+            decision.low_obstacle_confirmed)
         if decision.output_range_m is not None:
             output = Range()
             output.header.stamp = msg.header.stamp
@@ -232,10 +240,26 @@ class LowObstacleSupervisor(Node):
             if math.isclose(
                     output.range, output.max_range,
                     rel_tol=0.0, abs_tol=1e-6):
-                self._clear_marked_observations('현재 관측 해제')
-            self.range_pub.publish(output)
-            if output.range < output.max_range:
-                self._remember_marked_observation(output)
+                if self._marked_observations:
+                    self.observation_retention.request_clear(
+                        self.get_clock().now().nanoseconds,
+                        '센서 해제 확인')
+                else:
+                    # Preserve the normal RangeSensorLayer clearing stream and
+                    # also clean a cone that may predate this node process.
+                    self.range_pub.publish(output)
+            elif not self.observation_retention.suppress_until_sensor_clear:
+                close_observation_already_marked = (
+                    decision.filtered_range_m is not None
+                    and decision.filtered_range_m
+                    < self.filter.config.costmap_min_range_m
+                    and bool(self._marked_observations))
+                # At very close range keep the first safe clamped endpoint
+                # fixed in the map instead of dragging an invented 10 cm point
+                # forward with the robot on every sensor update.
+                if not close_observation_already_marked:
+                    self.range_pub.publish(output)
+                    self._remember_marked_observation(output)
         self._set_decision(decision)
 
     def _on_odom(self, msg: Odometry) -> None:
@@ -259,9 +283,13 @@ class LowObstacleSupervisor(Node):
                     self._mark_anchor_pose,
                     self._latest_odom_pose,
                     distance_m=self.observation_expiry_distance,
-                    yaw_rad=self.observation_expiry_yaw)):
-            self._clear_marked_observations('회피 이동으로 과거 관측 만료')
-            self._publish_observation(self._decision, force_active=False)
+                    yaw_rad=self.observation_expiry_yaw,
+                    preserve_forward_approach=(
+                        self._decision.low_obstacle_confirmed))):
+            self.observation_retention.request_clear(
+                self.get_clock().now().nanoseconds,
+                '회피 이동 후 과거 관측 만료',
+                suppress_until_sensor_clear=True)
 
     def _remember_marked_observation(self, msg: Range) -> None:
         if self._mark_anchor_pose is None:
@@ -347,6 +375,13 @@ class LowObstacleSupervisor(Node):
                 self.filter.stale_decision(self._latest_lidar_range))
         elif not self._is_lidar_fresh():
             self._publish_state('STALE_LIDAR')
+        if (
+                self._marked_observations
+                and self.observation_retention.clear_due(now_ns)):
+            reason = self.observation_retention.reason or '관측 유지시간 만료'
+            self._clear_marked_observations(reason)
+            self.observation_retention.mark_cleared()
+            self._publish_observation(self._decision, force_active=False)
 
     def _set_decision(self, decision: FusionDecision) -> None:
         self._decision = decision

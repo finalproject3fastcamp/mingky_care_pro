@@ -16,13 +16,13 @@ class FusionConfig:
     detect_distance_m: float = 0.30
     clear_distance_m: float = 0.35
     slow_distance_m: float = 0.15
-    stop_distance_m: float = 0.07
+    stop_distance_m: float = 0.04
     costmap_min_range_m: float = 0.10
     slow_speed_mps: float = 0.08
     lidar_margin_m: float = 0.15
     median_samples: int = 3
-    confirmation_window: int = 5
-    confirmations_required: int = 3
+    confirmation_window: int = 3
+    confirmations_required: int = 2
     clear_confirmations: int = 2
     near_window: int = 3
     near_confirmations: int = 2
@@ -117,7 +117,8 @@ def nearest_lidar_in_ultrasonic_cone(
 def observation_pose_expired(
         anchor: tuple[float, float, float],
         current: tuple[float, float, float], *,
-        distance_m: float, yaw_rad: float) -> bool:
+        distance_m: float, yaw_rad: float,
+        preserve_forward_approach: bool = False) -> bool:
     """Return whether a robot-relative obstacle observation became obsolete."""
     dx = current[0] - anchor[0]
     dy = current[1] - anchor[1]
@@ -125,7 +126,57 @@ def observation_pose_expired(
         math.sin(current[2] - anchor[2]),
         math.cos(current[2] - anchor[2]),
     )
-    return math.hypot(dx, dy) >= distance_m or abs(yaw_delta) >= yaw_rad
+    if preserve_forward_approach:
+        # A confirmed obstacle must remain in the costmap while the robot is
+        # merely approaching it. Expire only after lateral avoidance, backing
+        # away, or a meaningful heading change shows that the original
+        # robot-relative cone is no longer the current driving corridor.
+        cos_yaw = math.cos(anchor[2])
+        sin_yaw = math.sin(anchor[2])
+        forward = cos_yaw * dx + sin_yaw * dy
+        lateral = -sin_yaw * dx + cos_yaw * dy
+        translation_expired = (
+            abs(lateral) >= distance_m or forward <= -distance_m)
+    else:
+        translation_expired = math.hypot(dx, dy) >= distance_m
+    return translation_expired or abs(yaw_delta) >= yaw_rad
+
+
+class CostmapObservationRetention:
+    """Keep a temporary obstacle stable while Nav2 replans around it."""
+
+    def __init__(self, hold_sec: float):
+        self.hold_ns = max(0, int(hold_sec * 1_000_000_000))
+        self.deadline_ns = 0
+        self.reason = ''
+        self.suppress_until_sensor_clear = False
+
+    def on_detection(self, confirmed: bool) -> None:
+        if not confirmed:
+            self.suppress_until_sensor_clear = False
+            return
+        if not self.suppress_until_sensor_clear:
+            self.cancel_pending_clear()
+
+    def request_clear(
+            self, now_ns: int, reason: str, *,
+            suppress_until_sensor_clear: bool = False) -> None:
+        if self.deadline_ns <= 0:
+            self.deadline_ns = now_ns + self.hold_ns
+            self.reason = reason
+        if suppress_until_sensor_clear:
+            self.suppress_until_sensor_clear = True
+
+    def clear_due(self, now_ns: int) -> bool:
+        return self.deadline_ns > 0 and now_ns >= self.deadline_ns
+
+    def mark_cleared(self) -> None:
+        self.deadline_ns = 0
+        self.reason = ''
+
+    def cancel_pending_clear(self) -> None:
+        self.deadline_ns = 0
+        self.reason = ''
 
 
 class LowObstacleFilter:
@@ -271,16 +322,16 @@ class LowObstacleFilter:
         return None
 
     def _costmap_output(self, distance_m: float, max_range_m: float) -> float:
-        """Keep a near echo from making the robot collide with its own layer.
+        """Clamp a near echo just outside the padded footprint.
 
         A RangeSensorLayer endpoint immediately against the padded footprint
-        makes every MPPI trajectory start in collision.  The velocity gate
-        still handles that close range, while max-range explicitly clears the
-        cone so rotation and recovery remain executable.
+        makes every MPPI trajectory start in collision.  Clearing that echo,
+        however, hides the obstacle from the global planner and prevents a
+        detour.  Clamp it to the configured safe range instead; the separate
+        velocity gate still enforces the real measured stop distance.
         """
-        if distance_m < self.config.costmap_min_range_m:
-            return max_range_m
-        return distance_m
+        return min(
+            max(distance_m, self.config.costmap_min_range_m), max_range_m)
 
 
 def limit_forward_velocity(
