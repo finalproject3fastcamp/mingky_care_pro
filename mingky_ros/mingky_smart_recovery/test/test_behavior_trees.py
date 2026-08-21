@@ -38,7 +38,23 @@ def test_smac_tree_selects_smac_planner() -> None:
 
     assert selector is not None
     assert selector.attrib['default_planner'] == 'Smac2D'
-    assert root.find('.//RateController').attrib['hz'] == '1.0'
+
+
+def test_replanning_waits_for_translation_instead_of_rotation() -> None:
+    for name in (
+            'navigate_no_recovery_navfn.xml',
+            'navigate_no_recovery_smac2d.xml',
+            'navigate_recovery_smac2d.xml'):
+        root = _root(name)
+        controller = root.find('.//DistanceController')
+
+        assert controller is not None
+        assert controller.attrib == {
+            'distance': '0.08',
+            'global_frame': 'map',
+            'robot_base_frame': 'base_link',
+        }
+        assert root.find('.//RateController') is None
 
 
 def test_stalled_follow_path_refreshes_costmap_once_before_adaptive_recovery() -> None:
