@@ -8,12 +8,10 @@
           <Fallback>
             <ReactiveSequence>
               <Inverter>
-                <PathExpiringTimer seconds="10.0" path="{path}"/>
-              </Inverter>
-              <Inverter>
                 <GlobalUpdatedGoal/>
               </Inverter>
-              <IsPathValid path="{path}"/>
+              <TruncatePathLocal input_path="{path}" output_path="{remaining_path}" distance_forward="20.0" distance_backward="0.0" robot_frame="base_link" transform_tolerance="0.3"/>
+              <IsPathValid path="{remaining_path}"/>
             </ReactiveSequence>
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
           </Fallback>
