@@ -165,7 +165,8 @@ class LowObstacleFilter:
             self._clear_streak = 0
 
         near = (
-            comparable
+            self._confirmed
+            and comparable
             and len(self._near_evidence) >= self.config.near_confirmations
             and sum(self._near_evidence) >= self.config.near_confirmations)
 

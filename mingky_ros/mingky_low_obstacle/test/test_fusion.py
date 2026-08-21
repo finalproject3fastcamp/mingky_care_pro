@@ -53,14 +53,35 @@ def test_hysteresis_requires_three_clear_observations():
     assert decision.state == 'CLEAR'
 
 
-def test_two_near_samples_block_forward_without_waiting_for_map_confirmation():
+def test_near_samples_do_not_block_before_low_obstacle_confirmation():
     filter_ = LowObstacleFilter()
 
     assert _update(filter_, 0.06).state == 'UNCERTAIN'
     decision = _update(filter_, 0.06)
 
+    assert decision.state == 'UNCERTAIN'
+    assert decision.forward_speed_limit_mps is None
+
+    # A wall edge or a transient echo must not directly stop guidance.  The
+    # LiDAR mismatch first has to satisfy the normal 3-of-5 confirmation rule.
+    decision = _update(filter_, 0.06)
+    assert decision.state == 'UNCERTAIN'
+
+    decision = _update(filter_, 0.06)
+    assert decision.state == 'UNCERTAIN'
+
+    decision = _update(filter_, 0.06)
     assert decision.state == 'FORWARD_BLOCKED'
     assert decision.forward_speed_limit_mps == 0.0
+
+
+def test_near_wall_seen_by_lidar_never_blocks_forward():
+    filter_ = LowObstacleFilter()
+
+    decisions = [_update(filter_, 0.06, lidar=0.08) for _ in range(8)]
+
+    assert all(decision.state == 'CLEAR' for decision in decisions)
+    assert all(decision.forward_speed_limit_mps is None for decision in decisions)
 
 
 def test_stale_lidar_does_not_clear_or_create_obstacle():
