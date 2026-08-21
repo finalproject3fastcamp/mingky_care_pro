@@ -38,6 +38,17 @@ services:
       # 심각한 사건을 메신저로 내보낸다 (§8.4). 비어 있으면 꺼진 채로 돈다 —
       # 기본이 '안 보냄' 이라야 설정을 안 한 환경이 실수로 쏘지 않는다.
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # OMX 조제/포장 스테이션의 러너 주소. 각 OMX 박스가 클라우드로 역터널을
+      # 걸어 자기 러너 포트를 host 의 127.0.0.1:2203x 에 노출하고, 백엔드는
+      # 컨테이너 안에서 그 포트를 host.docker.internal 로 부른다(아래 extra_hosts).
+      # 비어 있으면 원격 프록시를 쓰지 않고 기존 로컬/시뮬 동작 그대로다.
+      MINGKY_OMX_DISPENSE_URL: ${MINGKY_OMX_DISPENSE_URL:-}
+      MINGKY_OMX_PACK_URL: ${MINGKY_OMX_PACK_URL:-}
+    # 컨테이너의 127.0.0.1 은 컨테이너 자신이라, host 에 뜬 역터널 포트에 닿지
+    # 못한다. host-gateway 로 host 를 가리켜 위 URL(host.docker.internal:2203x)이
+    # 실제 host 의 터널 포트로 나가게 한다.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
