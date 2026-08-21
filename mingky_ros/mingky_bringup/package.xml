@@ -16,6 +16,7 @@
   <depend>sensor_msgs</depend>
 
   <exec_depend>mingky_guide_manager</exec_depend>
+  <exec_depend>mingky_interfaces</exec_depend>
   <exec_depend>mingky_lcd_status</exec_depend>
   <exec_depend>mingky_navigation_manager</exec_depend>
   <exec_depend>mingky_person_follow</exec_depend>
@@ -26,9 +27,11 @@
   <exec_depend>mingky_camera_streamer</exec_depend>
   <exec_depend>mingky_qr_distance</exec_depend>
   <exec_depend>mingky_teleop</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>pinky_navigation</exec_depend>
   <exec_depend>pinky_bringup</exec_depend>
+  <exec_depend>pinky_led</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>ros2cli</exec_depend>
   <exec_depend>rclpy</exec_depend>

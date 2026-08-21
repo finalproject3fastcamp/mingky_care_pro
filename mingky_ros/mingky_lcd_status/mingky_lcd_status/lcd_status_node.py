@@ -5,8 +5,9 @@ from mingky_interfaces.msg import GuideState
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
+from .power_policy import should_dim_display
 from .renderer import render_view, resolve_font_path
 from .view_model import DisplayView, build_display_view
 
@@ -30,6 +31,11 @@ class LcdStatusNode(Node):
         super().__init__('lcd_status')
         self.declare_parameter('robot_id', 'pinky-01')
         self.declare_parameter('font_path', '')
+        self.declare_parameter('active_brightness', 100)
+        # Pinky LCD 백라이트는 GPIO 소프트웨어 PWM을 사용하므로 낮은 duty
+        # cycle에서는 시스템 부하에 따라 깜빡일 수 있다. 절전 상태에서는
+        # PWM 펄스가 발생하지 않도록 백라이트를 완전히 끈다.
+        self.declare_parameter('idle_brightness', 0)
         self.robot_id = str(self.get_parameter('robot_id').value)
         configured_font = str(self.get_parameter('font_path').value)
         self.font_path = resolve_font_path(configured_font)
@@ -43,6 +49,12 @@ class LcdStatusNode(Node):
         self.lcd = LCD()
         self._last_view = None
         self._evacuating = False
+        self._mode = 'auto'
+        self._robot_state = GuideState.ROBOT_IDLE
+        self._session_state = GuideState.SESSION_NONE
+        self._active_brightness = self._brightness('active_brightness')
+        self._idle_brightness = self._brightness('idle_brightness')
+        self._last_brightness = None
         # 대피가 끝나면 원래 보여주던 안내 화면으로 돌아가야 하니, GuideState
         # 기반 화면을 최신으로 하나 저장해둔다 (대피 중엔 화면에 못 띄우고
         # 저장만 해둠).
@@ -64,13 +76,17 @@ class LcdStatusNode(Node):
         # 그냥 계속 평상시 화면만 보여주면 되니 문제 없다.
         self.create_subscription(
             Bool, '/fire_evac/active', self._on_fire_evac, state_qos)
+        self.create_subscription(String, '/mode', self._on_mode, state_qos)
         self._show(self._last_guide_view)
+        self._apply_backlight()
         self.get_logger().info(
             f'LCD 안내 상태 표시 시작 (robot_id={self.robot_id})')
 
     def _on_state(self, msg: GuideState) -> None:
         if msg.robot_id != self.robot_id:
             return
+        self._robot_state = msg.robot_state
+        self._session_state = msg.session_state
         self._last_guide_view = build_display_view(
             robot_state=msg.robot_state,
             session_state=msg.session_state,
@@ -80,12 +96,37 @@ class LcdStatusNode(Node):
         if self._evacuating:
             # 대피 화면이 우선이다. 나중에 대피가 끝나면 방금 저장한 걸로
             # 복원된다.
+            self._apply_backlight()
             return
         self._show(self._last_guide_view)
+        self._apply_backlight()
 
     def _on_fire_evac(self, msg: Bool) -> None:
         self._evacuating = bool(msg.data)
         self._show(_EMERGENCY_VIEW if self._evacuating else self._last_guide_view)
+        self._apply_backlight()
+
+    def _on_mode(self, msg: String) -> None:
+        self._mode = str(msg.data)
+        self._apply_backlight()
+
+    def _brightness(self, name: str) -> int:
+        return max(0, min(100, int(self.get_parameter(name).value)))
+
+    def _apply_backlight(self) -> None:
+        dim = should_dim_display(
+            robot_state=self._robot_state,
+            session_state=self._session_state,
+            mode=self._mode,
+            evacuating=self._evacuating,
+        )
+        brightness = self._idle_brightness if dim else self._active_brightness
+        if brightness == self._last_brightness:
+            return
+        self.lcd.set_backlight(brightness)
+        self._last_brightness = brightness
+        self.get_logger().info(
+            f'LCD 밝기 {brightness}% ({"절전" if dim else "활성"})')
 
     def _show(self, view: DisplayView) -> None:
         if view == self._last_view:

@@ -11,6 +11,7 @@ Nav2/teleop 은 ``cmd_vel_safety_input`` 으로 명령하고, 이 노드만 실�
 """
 
 from pathlib import Path
+import threading
 
 from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import Twist
@@ -22,6 +23,8 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
+from .fire_alarm import play_fire_alarm
+
 
 class EmergencyStop(Node):
 
@@ -32,6 +35,8 @@ class EmergencyStop(Node):
         self.declare_parameter('command_timeout', 0.5)
         self.declare_parameter('blink_period', 0.5)
         self.declare_parameter('use_led', True)
+        self.declare_parameter('use_buzzer', True)
+        self.declare_parameter('fire_buzzer_repeat_seconds', 5.0)
         self.declare_parameter('cancel_nav2', True)
         self.declare_parameter('input_topic', 'cmd_vel_safety_input')
         self.declare_parameter('output_topic', 'cmd_vel')
@@ -42,6 +47,9 @@ class EmergencyStop(Node):
         self.rate = float(get('publish_rate').value)
         self.command_timeout = float(get('command_timeout').value)
         self.use_led = bool(get('use_led').value)
+        self.use_buzzer = bool(get('use_buzzer').value)
+        self.fire_buzzer_repeat_seconds = max(
+            1.0, float(get('fire_buzzer_repeat_seconds').value))
         self.cancel_nav2 = bool(get('cancel_nav2').value)
         self.state_file = Path(get('state_file').value).expanduser()
 
@@ -50,6 +58,12 @@ class EmergencyStop(Node):
         self.last_input_at = None
         self.blink_on = False
         self.blink_timer = None
+        self.fire_alarm_active = None
+        self.fire_buzzer_timer = None
+        self._fire_buzzer_running = False
+        self._desired_led = None
+        self._applied_led = None
+        self._led_request_in_flight = False
 
         latched = QoSProfile(
             depth=1,
@@ -69,6 +83,8 @@ class EmergencyStop(Node):
             Bool, 'emergency_stop/obstacle', self.on_obstacle, 10)
         self.create_subscription(
             Bool, 'emergency_stop/communication', self.on_communication, 10)
+        self.create_subscription(
+            Bool, '/fire_evac/alarm_active', self.on_fire_alarm, latched)
         self.create_service(Trigger, 'emergency_stop/release', self.on_release)
 
         self.cancel_client = self.create_client(
@@ -76,6 +92,7 @@ class EmergencyStop(Node):
             if self.cancel_nav2 else None
         self.led_client = (
             self.create_client(SetLed, 'set_led') if self.use_led else None)
+        self.led_retry_timer = self.create_timer(1.0, self._retry_led)
 
         # 항상 살아 있는 안전 타이머다. 정지 상태뿐 아니라 입력 두절도 감시한다.
         self.safety_timer = self.create_timer(1.0 / self.rate, self.tick_safety)
@@ -124,6 +141,24 @@ class EmergencyStop(Node):
         if msg.data:
             self.engage('communication_loss')
 
+    def on_fire_alarm(self, msg: Bool):
+        active = bool(msg.data)
+        if active == self.fire_alarm_active:
+            return
+        self.fire_alarm_active = active
+        if active:
+            self._stop_blink()
+            self.set_led('fill', 255, 0, 0)
+            self._start_fire_buzzer()
+            self.get_logger().error('화재 경보 표시 시작 — 빨간 LED / 부저')
+            return
+        self._stop_fire_buzzer()
+        if self.engaged:
+            self._start_blink()
+        else:
+            self.set_led('clear')
+        self.get_logger().info('화재 경보 표시 해제')
+
     def on_release(self, request, response):
         if not self.engaged:
             response.success = False
@@ -161,7 +196,10 @@ class EmergencyStop(Node):
         self.engaged = False
         self.reason = None
         self._stop_blink()
-        self.set_led('clear')
+        if self.fire_alarm_active:
+            self.set_led('fill', 255, 0, 0)
+        else:
+            self.set_led('clear')
         self.publish_cmd(Twist())
         self.publish_state(previous_reason or 'manual_release')
         self.get_logger().info('비상정지 해제 — 새 속도 명령을 기다립니다.')
@@ -179,6 +217,9 @@ class EmergencyStop(Node):
         self.cmd_pub.publish(msg)
 
     def _start_blink(self):
+        if self.fire_alarm_active:
+            self.set_led('fill', 255, 0, 0)
+            return
         if self.led_client is not None and self.blink_timer is None:
             self.blink_timer = self.create_timer(
                 float(self.get_parameter('blink_period').value), self.tick_blink)
@@ -193,13 +234,73 @@ class EmergencyStop(Node):
         self.blink_on = not self.blink_on
         self.set_led('fill', 255, 0, 0) if self.blink_on else self.set_led('clear')
 
-    def set_led(self, command, red=0, green=0, blue=0):
-        if self.led_client is None or not self.led_client.service_is_ready():
+    def _start_fire_buzzer(self):
+        if not self.use_buzzer:
             return
+        self._beep_fire_alarm()
+        if self.fire_buzzer_timer is None:
+            self.fire_buzzer_timer = self.create_timer(
+                self.fire_buzzer_repeat_seconds, self._beep_fire_alarm)
+
+    def _stop_fire_buzzer(self):
+        if self.fire_buzzer_timer is not None:
+            self.fire_buzzer_timer.cancel()
+            self.destroy_timer(self.fire_buzzer_timer)
+            self.fire_buzzer_timer = None
+
+    def _beep_fire_alarm(self):
+        if (not self.fire_alarm_active or not self.use_buzzer
+                or self._fire_buzzer_running):
+            return
+        self._fire_buzzer_running = True
+
+        def run():
+            try:
+                play_fire_alarm()
+            except Exception as exc:
+                self.get_logger().warn(f'화재 부저 실행 실패: {exc}')
+            finally:
+                self._fire_buzzer_running = False
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_led(self, command, red=0, green=0, blue=0):
+        if self.led_client is None:
+            return
+        self._desired_led = (command, int(red), int(green), int(blue))
+        self._dispatch_led()
+
+    def _retry_led(self):
+        if self._desired_led != self._applied_led:
+            self._dispatch_led()
+
+    def _dispatch_led(self):
+        if (self.led_client is None or self._desired_led is None
+                or self._led_request_in_flight
+                or not self.led_client.service_is_ready()):
+            return
+        state = self._desired_led
         request = SetLed.Request()
-        request.command = command
-        request.r, request.g, request.b = int(red), int(green), int(blue)
-        self.led_client.call_async(request)
+        request.command, request.r, request.g, request.b = state
+        self._led_request_in_flight = True
+        future = self.led_client.call_async(request)
+        future.add_done_callback(
+            lambda completed, requested=state:
+            self._on_led_result(completed, requested))
+
+    def _on_led_result(self, future, requested):
+        self._led_request_in_flight = False
+        try:
+            response = future.result()
+            if response is not None and response.success:
+                self._applied_led = requested
+            else:
+                message = getattr(response, 'message', '응답 없음')
+                self.get_logger().warn(f'LED 적용 실패: {message}')
+        except Exception as exc:
+            self.get_logger().warn(f'LED 서비스 호출 실패: {exc}')
+        if self._desired_led != self._applied_led:
+            self._dispatch_led()
 
     def cancel_nav2_goals(self):
         if self.cancel_client is None:
@@ -214,6 +315,10 @@ class EmergencyStop(Node):
         reason = self.reason if self.engaged else release_reason
         self.reason_pub.publish(String(data=reason or ''))
         self.state_pub.publish(Bool(data=self.engaged))
+
+    def destroy_node(self):
+        self._stop_fire_buzzer()
+        return super().destroy_node()
 
 
 def main(args=None):

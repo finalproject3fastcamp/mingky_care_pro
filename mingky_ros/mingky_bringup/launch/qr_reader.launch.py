@@ -101,6 +101,11 @@ def generate_launch_description() -> LaunchDescription:
         default_value='5',
         description='폴링이 이 횟수 연속 실패하면 disarmed 로 떨어뜨린다 (페일세이프)',
     )
+    camera_idle_timeout_arg = DeclareLaunchArgument(
+        'camera_idle_timeout_seconds',
+        default_value='15.0',
+        description='마지막 QR/미리보기/구독 수요 뒤 카메라를 끄기까지의 유예',
+    )
 
     qr_node = Node(
         package='mingky_qr_reader',
@@ -126,6 +131,8 @@ def generate_launch_description() -> LaunchDescription:
                 'arming_poll_seconds': LaunchConfiguration('arming_poll_seconds'),
                 'arming_fail_disarm_after': LaunchConfiguration(
                     'arming_fail_disarm_after'),
+                'camera_idle_timeout_seconds': LaunchConfiguration(
+                    'camera_idle_timeout_seconds'),
             },
         ],
         prefix=['nice -n 5'],
@@ -147,5 +154,6 @@ def generate_launch_description() -> LaunchDescription:
         preview_max_fps_arg,
         arming_poll_seconds_arg,
         arming_fail_disarm_after_arg,
+        camera_idle_timeout_arg,
         qr_node,
     ])
