@@ -54,6 +54,11 @@ log = logging.getLogger("mingky.omx.report")
 DEFAULT_BACKEND_URL = "https://mingkycarepro.site/api"
 SOURCE_NODE = "omx.report.reporter"
 
+# 관제가 Cloudflare 뒤에 있고, 기본 `Python-urllib/x` User-Agent 는 봇으로
+# 차단돼 403 이 온다(HTTPError 라 조용히 삼켜져 heartbeat 가 영영 안 닿는다).
+# 브라우저 UA 를 흉내 낼 필요는 없고, 기본값만 아니면 통과한다.
+USER_AGENT = "mingky-omx-reporter/1.0"
+
 # 발행 가능한(진실한) 이벤트 코드. pick_* 는 여기 없다 — 위 docstring 참조.
 CYCLE_STARTED = "manipulator.cycle_started"
 CYCLE_COMPLETED = "manipulator.cycle_completed"
@@ -96,7 +101,8 @@ def heartbeat(*, rid: str | None = None, base_url: str | None = None) -> int | N
     if not rid:
         return None
     url = f"{base_url or backend_url()}/robots/{rid}/heartbeat"
-    req = urllib.request.Request(url, data=b"", method="POST")
+    req = urllib.request.Request(
+        url, data=b"", method="POST", headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=_timeout()) as resp:
             return resp.status
@@ -128,7 +134,8 @@ def _emit(event_code: str, level: str, payload: dict, *,
     data = json.dumps([event], ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url, data=data, method="POST",
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json",
+                 "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=_timeout()) as resp:
             return resp.status
