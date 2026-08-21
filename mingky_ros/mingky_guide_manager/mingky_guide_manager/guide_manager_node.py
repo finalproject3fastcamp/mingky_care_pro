@@ -100,8 +100,8 @@ class GuideManager(Node):
         self.declare_parameter('recovery_cooldown_sec', 3.0)
         self.declare_parameter('arrival_notice_sec', 3.0)
         self.declare_parameter('use_arrival_chime', True)
-        # disabled 는 기존 동작을 그대로 유지한다. range_layer 는 후속 검증 뒤
-        # 추가하고, 현재는 실로봇에서 검증한 sidestep 만 선택할 수 있다.
+        # 목표를 취소하는 구형 sidestep은 폐기했다. 파라미터 이름은 이전
+        # 배포 파일과의 호환성 때문에 남기되 disabled 이외의 값은 무시한다.
         self.declare_parameter('low_obstacle_mode', 'disabled')
         self.declare_parameter('low_obstacle_range_topic', '/us_sensor/range')
         self.declare_parameter('low_obstacle_scan_stale_sec', 1.0)
@@ -172,13 +172,13 @@ class GuideManager(Node):
             0.0, float(self.get_parameter('arrival_notice_sec').value))
         self.use_arrival_chime = bool(
             self.get_parameter('use_arrival_chime').value)
-        self.low_obstacle_mode = str(
+        configured_low_obstacle_mode = str(
             self.get_parameter('low_obstacle_mode').value).lower()
-        if self.low_obstacle_mode not in ('disabled', 'sidestep'):
+        self.low_obstacle_mode = 'disabled'
+        if configured_low_obstacle_mode != 'disabled':
             self.get_logger().warn(
-                f'지원하지 않는 low_obstacle_mode={self.low_obstacle_mode!r}; '
-                'disabled 를 사용합니다.')
-            self.low_obstacle_mode = 'disabled'
+                '목표 취소형 저상 장애물 sidestep은 폐기되었습니다: '
+                f'요청={configured_low_obstacle_mode!r}, 적용=disabled')
         self.low_obstacle_scan_stale_sec = max(
             0.1, float(self.get_parameter(
                 'low_obstacle_scan_stale_sec').value))
@@ -386,10 +386,10 @@ class GuideManager(Node):
         )
         if requested_mode is None:
             return SetParametersResult(successful=True)
-        if requested_mode not in ('disabled', 'sidestep'):
+        if requested_mode != 'disabled':
             return SetParametersResult(
                 successful=False,
-                reason='low_obstacle_mode은 disabled 또는 sidestep이어야 합니다.',
+                reason='구형 sidestep은 폐기되어 low_obstacle_mode=disabled만 허용합니다.',
             )
         if (
                 self._active_nav_context is not None

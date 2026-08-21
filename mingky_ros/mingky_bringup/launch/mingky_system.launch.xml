@@ -12,7 +12,7 @@
     <arg name="planner_mode" default="smac2d"/>
     <!-- 장애물이 사라진 뒤 거의 즉시 최신 LiDAR로 다시 판단한다. -->
     <arg name="recovery_retry_delay_sec" default="0.3"/>
-    <!-- 실로봇 검증 전까지 기존 주행을 유지한다. 지원값: disabled, sidestep -->
+    <!-- 호환성을 위해 인자는 유지하지만 목표 취소형 sidestep은 폐기되어 무시한다. -->
     <arg name="low_obstacle_mode" default="disabled"/>
     <!-- 기존 목표 취소형 sidestep과 독립된 local costmap 기반 저상 장애물 대응. -->
     <arg name="low_obstacle_fusion_enabled" default="true"/>
@@ -179,7 +179,7 @@
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
         <param name="recovery_retry_delay_sec"
                value="$(var recovery_retry_delay_sec)"/>
-        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="disabled" type="str"/>
         <param name="patient_follow_enabled"
                value="$(var start_patient_follow)" type="bool"/>
         <param name="patient_follow_timeout_sec"
@@ -238,7 +238,7 @@
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
         <param name="recovery_retry_delay_sec"
                value="$(var recovery_retry_delay_sec)"/>
-        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="disabled" type="str"/>
     </node>
 
     <node pkg="mingky_lcd_status" exec="lcd_status"
@@ -259,7 +259,7 @@
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="backend_url" value="$(var backend_url)"/>
-        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="disabled" type="str"/>
         <!-- 형상 패널이 읽는 이름. 지문은 /map 에서 직접 뜬다. -->
         <param name="map_name" value="$(var map_name)"/>
     </node>

@@ -129,7 +129,7 @@ class OrderIn(BaseModel):
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
     # start_session 이면 patient_id, start_guidance/cancel_guidance 면 session_id,
     # set_mode 면 auto | manual | estop, set_navigation_speed 면 m/s 숫자,
-    # set_low_obstacle_mode 면 disabled | sidestep,
+    # set_low_obstacle_mode은 구형 로봇을 끄기 위한 disabled만 허용하고,
     # 나머지 제어 명령은 run.
     #
     # 모드는 로봇이 정본을 갖는다. 여기서 보내는 것은 요청이고, 반영 여부는

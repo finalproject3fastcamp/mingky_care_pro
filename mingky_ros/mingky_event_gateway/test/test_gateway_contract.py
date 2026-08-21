@@ -52,9 +52,9 @@ def test_navigation_speed_rejects_out_of_range_or_off_step_values():
     assert parse_navigation_speed('fast') is None
 
 
-def test_low_obstacle_mode_only_accepts_implemented_strategies():
+def test_low_obstacle_mode_only_accepts_retired_mode_off_switch():
     assert parse_low_obstacle_mode('disabled') == 'disabled'
-    assert parse_low_obstacle_mode('sidestep') == 'sidestep'
+    assert parse_low_obstacle_mode('sidestep') is None
     assert parse_low_obstacle_mode('enabled') is None
     assert parse_low_obstacle_mode('range_layer') is None
 
@@ -120,14 +120,14 @@ def test_navigation_speed_keeps_previous_value_after_parameter_rejection():
     assert gateway._navigation_speed_mps == 0.20
 
 
-def test_low_obstacle_mode_updates_reported_value_after_parameter_success():
+def test_low_obstacle_mode_reports_disabled_after_parameter_success():
     gateway = object.__new__(EventGateway)
     gateway._low_obstacle_mode = 'disabled'
     gateway.get_logger = lambda: _Logger()
 
-    gateway._on_low_obstacle_mode_response(_Future(True), 'sidestep')
+    gateway._on_low_obstacle_mode_response(_Future(True), 'disabled')
 
-    assert gateway._low_obstacle_mode == 'sidestep'
+    assert gateway._low_obstacle_mode == 'disabled'
 
 
 def test_low_obstacle_mode_keeps_previous_value_after_parameter_rejection():
@@ -146,12 +146,12 @@ def test_waypoint_mode_is_applied_before_guide_mode():
     gateway.get_logger = lambda: _Logger()
 
     gateway._on_navigation_low_obstacle_mode_response(
-        _Future(True), 'sidestep', 'disabled')
+        _Future(True), 'disabled', 'disabled')
 
     assert len(gateway._guide_parameters.requests) == 1
     parameter = gateway._guide_parameters.requests[0][0]
     assert parameter.name == 'low_obstacle_mode'
-    assert parameter.value == 'sidestep'
+    assert parameter.value == 'disabled'
 
 
 def test_guide_mode_rejection_rolls_waypoint_mode_back():

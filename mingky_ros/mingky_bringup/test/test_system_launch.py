@@ -203,7 +203,7 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
             '$(var recovery_retry_delay_sec)')
 
 
-def test_low_obstacle_sidestep_is_opt_in() -> None:
+def test_legacy_low_obstacle_sidestep_cannot_be_enabled() -> None:
     root = _root()
 
     assert _argument(root, 'low_obstacle_mode').get('default') == 'disabled'
@@ -215,7 +215,7 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
         item.get('name'): item.get('value')
         for item in guide_manager.findall('param')
     }
-    assert params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+    assert params['low_obstacle_mode'] == 'disabled'
 
     navigation_manager = next(
         item for item in root.findall('node')
@@ -225,7 +225,7 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
         item.get('name'): item.get('value')
         for item in navigation_manager.findall('param')
     }
-    assert navigation_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+    assert navigation_params['low_obstacle_mode'] == 'disabled'
 
     event_gateway = next(
         item for item in root.findall('node')
@@ -235,12 +235,15 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
         item.get('name'): item.get('value')
         for item in event_gateway.findall('param')
     }
-    assert gateway_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+    assert gateway_params['low_obstacle_mode'] == 'disabled'
 
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    private_runtime = PRIVATE_RUNTIME_SCRIPT.read_text(encoding='utf-8')
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
-    assert 'low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled}' in unit
-    assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
+    assert 'low_obstacle_mode:=disabled' in unit
+    assert 'low_obstacle_mode:=disabled' in private_runtime
+    assert 'MINGKY_LOW_OBSTACLE_MODE' not in private_runtime
+    assert 'MINGKY_LOW_OBSTACLE_MODE=' not in env_example
     assert (
         'low_obstacle_fusion_enabled:='
         '${MINGKY_LOW_OBSTACLE_FUSION_ENABLED:-true}' in unit

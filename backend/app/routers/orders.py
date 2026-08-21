@@ -37,10 +37,13 @@ def _validate_navigation_speed(argument: str) -> None:
 
 
 def _validate_low_obstacle_mode(argument: str) -> None:
-    if argument not in ("disabled", "sidestep"):
+    if argument != "disabled":
         raise HTTPException(
             status_code=422,
-            detail="low obstacle mode must be disabled or sidestep",
+            detail=(
+                "legacy sidestep is retired; "
+                "low obstacle mode must be disabled"
+            ),
         )
 
 

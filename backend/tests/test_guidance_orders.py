@@ -235,10 +235,10 @@ def test_navigation_speed_uses_a_separate_order_slot():
 
 
 def test_low_obstacle_mode_command_is_part_of_the_contract():
-    command = OrderIn(command='set_low_obstacle_mode', argument='sidestep')
+    command = OrderIn(command='set_low_obstacle_mode', argument='disabled')
 
     assert command.command == 'set_low_obstacle_mode'
-    assert command.argument == 'sidestep'
+    assert command.argument == 'disabled'
 
 
 def test_low_obstacle_mode_has_an_independent_config_slot():
@@ -251,7 +251,7 @@ def test_low_obstacle_mode_does_not_overwrite_pending_speed_change():
     orders.reset()
     try:
         orders.put('pinky-01', 'set_navigation_speed', '0.15')
-        orders.put('pinky-01', 'set_low_obstacle_mode', 'sidestep')
+        orders.put('pinky-01', 'set_low_obstacle_mode', 'disabled')
 
         pending = orders.snapshot()['pinky-01']
         assert [order.command for order in pending] == [
@@ -260,12 +260,13 @@ def test_low_obstacle_mode_does_not_overwrite_pending_speed_change():
         orders.reset()
 
 
-@pytest.mark.parametrize('argument', ['disabled', 'sidestep'])
+@pytest.mark.parametrize('argument', ['disabled'])
 def test_low_obstacle_mode_accepts_supported_strategies(argument):
     orders_router._validate_low_obstacle_mode(argument)
 
 
-@pytest.mark.parametrize('argument', ['enabled', 'stop_only', 'range_layer', ''])
+@pytest.mark.parametrize(
+    'argument', ['sidestep', 'enabled', 'stop_only', 'range_layer', ''])
 def test_low_obstacle_mode_rejects_unknown_strategies(argument):
     with pytest.raises(HTTPException) as raised:
         orders_router._validate_low_obstacle_mode(argument)

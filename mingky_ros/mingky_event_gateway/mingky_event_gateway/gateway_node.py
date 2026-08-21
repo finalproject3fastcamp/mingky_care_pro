@@ -109,7 +109,7 @@ DEFAULT_NAVIGATION_SPEED_MPS = 0.20
 MIN_NAVIGATION_SPEED_MPS = 0.05
 MAX_NAVIGATION_SPEED_MPS = 0.25
 NAVIGATION_SPEED_STEP_MPS = 0.01
-LOW_OBSTACLE_MODES = frozenset({"disabled", "sidestep"})
+LOW_OBSTACLE_MODES = frozenset({"disabled"})
 LOW_OBSTACLE_STATES = frozenset({
     "STARTING", "DISABLED", "CLEAR", "UNCERTAIN", "CONFIRMED", "SLOW",
     "FORWARD_BLOCKED", "STALE_RANGE", "STALE_LIDAR",
@@ -134,7 +134,7 @@ def parse_navigation_speed(argument: str) -> float | None:
 
 
 def parse_low_obstacle_mode(argument: str) -> str | None:
-    """관제에서 선택 가능한 구현된 전략만 통과시킨다."""
+    """폐기된 목표 취소형 sidestep이 다시 켜지지 않도록 막는다."""
     return argument if argument in LOW_OBSTACLE_MODES else None
 
 

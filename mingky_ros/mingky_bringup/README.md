@@ -99,42 +99,16 @@ battery
 `start_event_gateway:=true`로 실행합니다. 다른 맵을 쓸 때는 같은 맵에 대응하는
 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
 
-### 저상 장애물 옆걸음 회피
+### 저상 장애물 대응
 
-라이다가 보지 못하고 `/us_sensor/range` 초음파에만 잡히는 낮은 장애물은
-선택적으로 직접 옆걸음 회피할 수 있습니다. 기본값은 기존 Nav2 동작을 보존하는
-`disabled`이며, 실제 로봇에서 기능을 시험할 때만 `sidestep`을 명시합니다.
-초음파 감지 임계값은 10cm 미만이고 2회 연속 확인해야 회피를 시작합니다. 회피
-이동 중 거리가 4cm 미만으로 줄어들면 안전을 위해 현재 동작을 즉시 취소합니다.
+목표를 취소한 뒤 직접 옆걸음을 수행하던 `sidestep` 실험 모드는 폐기했습니다.
+이 모드는 Nav2가 이미 만든 우회 경로까지 취소해 Waypoint 시험과 안내 주행을
+오류 코드 `-10`으로 끝낼 수 있었기 때문입니다. 이전 배포 파일과의 호환성을 위해
+`low_obstacle_mode` 이름은 남아 있지만 운영 launch, 관제 명령, ROS 파라미터
+변경 모두 `disabled`만 허용합니다. `/etc/mingky/robot.env`에 과거의
+`MINGKY_LOW_OBSTACLE_MODE=sidestep`이 남아 있어도 다시 활성화되지 않습니다.
 
-```bash
-ros2 launch mingky_bringup mingky_system.launch.xml \
-  low_obstacle_mode:=sidestep
-```
-
-운영 systemd에서는 `/etc/mingky/robot.env`에 다음 값을 넣고 통합 시스템을
-재시작합니다.
-
-```bash
-MINGKY_LOW_OBSTACLE_MODE=sidestep
-```
-
-안내 주행 또는 Waypoint 시험 주행이 시작되기 전에는 재시작 없이도 모드를 바꿀
-수 있습니다. 진행 중인 주행이나 회피가 있으면 변경 요청을 거부합니다.
-
-```bash
-ros2 param set /guide_manager low_obstacle_mode sidestep
-ros2 param set /navigation_manager low_obstacle_mode sidestep
-ros2 param set /guide_manager low_obstacle_mode disabled
-ros2 param set /navigation_manager low_obstacle_mode disabled
-```
-
-`sidestep`은 안내 목표나 Waypoint 시험 목표를 취소하고 좌우 탐색과 단계 전진을
-완료한 뒤 원래 목표를 다시 보내는 기존 실험 모드입니다. 기본값은 계속
-`disabled`이며 관제 선택 UI에서는 제거했습니다. 호환성과 개발자 비교 시험을
-위해 launch 및 ROS parameter 인터페이스만 유지합니다.
-
-별도로 `low_obstacle_fusion_enabled:=true`가 기본 적용됩니다. 전방 초음파를
+대신 `low_obstacle_fusion_enabled:=true`가 기본 적용됩니다. 전방 초음파를
 median 3개와 최근 5개 중 3개로 확인하고, 같은 부채꼴의 LiDAR보다 물체가 충분히
 가까울 때만 `/low_obstacle/range`에 발행합니다. 10cm 이상 떨어져 회피 공간이
 있는 확정 장애물은 local·global costmap의 임시 레이어에 함께 추가됩니다.
