@@ -31,6 +31,7 @@
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>pinky_navigation</exec_depend>
   <exec_depend>pinky_bringup</exec_depend>
+  <exec_depend>pinky_led</exec_depend>
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>ros2cli</exec_depend>
   <exec_depend>rclpy</exec_depend>

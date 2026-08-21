@@ -405,6 +405,14 @@ def test_fire_evacuation_is_configurable_in_integrated_launch() -> None:
     assert safety_params['use_led'] == '$(var use_led)'
     assert safety_params['use_buzzer'] == '$(var use_buzzer)'
 
+    led_node = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'led_service_server'
+    )
+    assert led_node.get('pkg') == 'pinky_led'
+    assert led_node.get('exec') == 'led_server'
+    assert led_node.get('if') == '$(var use_led)'
+
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
     assert 'start_fire_evac:=${MINGKY_FIRE_EVAC_ENABLED:-false}' in unit
     assert 'fire_infer_server_url:=${MINGKY_FIRE_INFER_SERVER_URL:-}' in unit

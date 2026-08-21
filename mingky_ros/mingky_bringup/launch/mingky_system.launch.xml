@@ -75,6 +75,10 @@
         <arg name="start_battery_publisher" value="false"/>
     </include>
 
+    <!-- 비상정지와 화재 경보가 사용하는 후면 RGB LED 서비스. -->
+    <node pkg="pinky_led" exec="led_server" name="led_service_server"
+          output="screen" if="$(var use_led)"/>
+
     <include file="$(find-pkg-share pinky_navigation)/launch/bringup_launch.xml">
         <arg name="map" value="$(var map)"/>
         <arg name="params_file" value="$(var nav2_params)"/>
