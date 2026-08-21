@@ -62,7 +62,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -115,15 +115,13 @@ async def _report(fn_name: str, *args) -> None:
         log.debug("관제 보고 실패(%s) — 무시", fn_name, exc_info=True)
 
 
-async def _report_policy_loaded(policy_id: str) -> None:
-    """선택된 정책의 체크포인트를 관제에 알린다 — '무엇이 돌고 있나'(§4.4).
+def _policy_checkpoint(policy_id: str) -> tuple[str, str]:
+    """정책의 `(checkpoint_id, dataset_revision)` 문자열.
 
     조제 정책은 코드 SHA 가 아니라 체크포인트가 버전이다. 색별 정책은 체크포인트가
     색마다 달라 하나로 접어 문자열로 남긴다. dataset_revision 자리에는 정책의 HF
     Hub repo id 를 쓴다 — 저장소가 아는 유일한 '학습 산출물' 참조다.
     """
-    if not _report_robot_id() or _reporter is None:
-        return
     pol = _POLICIES.get(policy_id) or _POLICIES.get(DEFAULT_POLICY) or {}
     ckpt = pol.get("ckpt")
     repo = pol.get("repo", "")
@@ -132,6 +130,14 @@ async def _report_policy_loaded(policy_id: str) -> None:
     else:
         ckpt_str = "" if ckpt is None else str(ckpt)
     checkpoint_id = f"{repo}@{ckpt_str}" if repo else ckpt_str
+    return checkpoint_id, repo
+
+
+async def _report_policy_loaded(policy_id: str) -> None:
+    """선택된 정책의 체크포인트를 관제에 알린다 — '무엇이 돌고 있나'(§4.4)."""
+    if not _report_robot_id() or _reporter is None:
+        return
+    checkpoint_id, repo = _policy_checkpoint(policy_id)
     await _report("policy_loaded", checkpoint_id, repo)
 
 # ── 데이터/모듈 경로 ────────────────────────────────────────────────────
@@ -788,24 +794,108 @@ def _http_json(url: str, method: str, body: dict | None = None) -> dict:
         return {"오류": f"러너에 연결하지 못했습니다: {e}"}
 
 
+# ── 원격 프록시: manipulator 이벤트 직접 INSERT ─────────────────────────
+# 원격 러너로 조제/포장이 도는 **클라우드 백엔드는 단일 박스 id 가 없어**
+# `MINGKY_OMX_ROBOT_ID` 게이트(_report)가 꺼져 있다 — HTTP 리포터로는 이벤트가
+# 0건이라 관제 조제 패널(사이클·정책)이 비어 있었다. 대신 백엔드가 관제 DB 를
+# 직접 쥐고 있으니(get_pool) 리포터를 거치지 않고 events 에 바로 INSERT 한다.
+#
+# 이 함수는 원격 프록시 경로(_run_remote_*)에서만 불린다 — 원격 URL 이 없으면
+# _run_sequence/_run_pack 이 로컬 서브프로세스/시뮬로 빠지므로 아래 INSERT 는
+# 아예 실행되지 않는다. 그래서 기존 _report 훅·SIM·기존 테스트는 100% 불변이다.
+#
+# **pick_succeeded/pick_failed 는 넣지 않는다.** ACT 정책은 pick 성공 여부를
+# 내놓지 않고 진행률은 시간 기준이라 pick 의 ground truth 가 없다(omx/web/README.md).
+# 근거 없는 성공 신호를 지어내지 않는다 — 넣는 것은 시간으로 증명되는 사이클
+# 라이프사이클(started/completed/aborted)과 정책 로드뿐이다. 그래서 조제 성능의
+# pick 성공률은 계속 비어도 정상이고(dispense.py: picks 0 → None), 이 경로가
+# 채우는 것은 **사이클 수·사이클 타임(p50/p95)·정책 체크포인트**다.
+_SOURCE_NODE_REMOTE = "backend.pharmacy.remote"
+
+_INSERT_EVENT = """
+    INSERT INTO events (event_id, robot_id, session_id, occurred_at,
+                        level, event_code, source_node, payload)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (event_id) DO NOTHING
+"""
+
+
+async def _emit_event(robot_id: str, code: str, level: str, payload: dict) -> None:
+    """manipulator.* 이벤트 한 건을 events 에 직접 넣는다(qr.py `_INSERT_EVENT` 형식).
+
+    조제/포장엔 안내 session 이 없으므로 session_id 는 NULL 이다(§6.2 규칙).
+    적재 실패는 삼킨다 — 관제 보고가 조제/포장 워커를 죽이면 안 된다(_report 와
+    같은 원칙: heartbeat).
+    """
+    try:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                _INSERT_EVENT,
+                uuid.uuid4(),
+                robot_id,
+                None,                          # 조제/포장엔 session_id 없음 → NULL
+                datetime.now(timezone.utc),
+                level,
+                code,
+                _SOURCE_NODE_REMOTE,
+                json.dumps(payload, ensure_ascii=False),
+            )
+    except Exception:  # noqa: BLE001
+        log.debug("원격 manipulator 이벤트 적재 실패(%s) — 무시", code, exc_info=True)
+
+
+def _dispense_station(robot_id: str | None) -> str:
+    """조제 이벤트의 robot_id. 기본 스테이션이면 omx-01 로 확정한다."""
+    return DEFAULT_ROBOT_ID if _is_default(robot_id) else robot_id
+
+
+def _pack_station(robot_id: str | None) -> str:
+    """포장 이벤트의 robot_id. 기본 스테이션이면 포장 박스 omx-02 로 확정한다 —
+    포장은 조제(omx-01)와 다른 스테이션이라 사이클을 그 팔에 태깅한다."""
+    return PACK_ROBOT_ID if _is_default(robot_id) else robot_id
+
+
 async def _run_remote_dispense(base_url: str, 조합: list[str], policy_id: str,
                                robot_id: str | None) -> tuple[bool, str]:
-    """원격 러너에 조제를 맡기고 상태를 폴링해 단계 진행을 화면으로 옮긴다."""
+    """원격 러너에 조제를 맡기고 상태를 폴링해 단계 진행을 화면으로 옮긴다.
+
+    원격 경로에는 _report 게이트가 꺼져 있으므로, 사이클 라이프사이클을 여기서
+    events 에 직접 INSERT 해 관제 조제 패널을 채운다(_emit_event 주석 참고).
+    """
+    station = _dispense_station(robot_id)
+    dispense_id = _job(robot_id).get("id") or ""
+
+    # 정책 로드 → 사이클 시작. 스키마(event_codes.yaml:443-509)와 payload 키를
+    # 정확히 맞춘다. duration_ms 는 실제 경과(monotonic 차)로만 채운다.
+    checkpoint_id, revision = _policy_checkpoint(policy_id)
+    await _emit_event(station, "manipulator.policy_loaded", "info",
+                      {"checkpoint_id": checkpoint_id, "dataset_revision": revision})
+    _시작 = time.monotonic()
+    await _emit_event(station, "manipulator.cycle_started", "info",
+                      {"dispense_id": dispense_id,
+                       "medication_id": "+".join(조합) or "(빈 조합)"})
+
+    async def _포기(reason: str) -> tuple[bool, str]:
+        await _emit_event(station, "manipulator.cycle_aborted", "error",
+                          {"dispense_id": dispense_id, "reason": reason})
+        return False, reason
+
     started = await asyncio.to_thread(
         _http_json, f"{base_url}/dispense/start", "POST",
         {"sequence": 조합, "policy": policy_id})
     if started.get("오류"):
-        return False, str(started["오류"])
+        return await _포기(str(started["오류"]))
 
     mirrored = 0   # 화면에 이미 반영한 완료 단계 수
     while True:
         if _job(robot_id).get("중단요청"):
             await asyncio.to_thread(_http_json, f"{base_url}/dispense/stop", "POST", {})
-            return False, "사용자가 중단했습니다"
+            return await _포기("사용자가 중단했습니다")
 
         st = await asyncio.to_thread(_http_json, f"{base_url}/dispense/state", "GET")
         if st.get("오류"):
-            return False, str(st["오류"])
+            return await _포기(str(st["오류"]))
 
         done = min(int(st.get("완료단계", 0)), len(조합))
         while mirrored < done:
@@ -816,29 +906,55 @@ async def _run_remote_dispense(base_url: str, 조합: list[str], policy_id: str,
 
         상태 = st.get("상태")
         if 상태 == "완료":
+            await _emit_event(station, "manipulator.cycle_completed", "info",
+                              {"dispense_id": dispense_id,
+                               "duration_ms": int((time.monotonic() - _시작) * 1000)})
             return True, "완료"
         if 상태 in ("오류", "중단", "실패"):
-            return False, str(st.get("메모") or "원격 조제가 실패했습니다")
+            return await _포기(str(st.get("메모") or "원격 조제가 실패했습니다"))
         await asyncio.sleep(_RUNNER_POLL_SEC)
 
 
 async def _run_remote_pack(base_url: str, robot_id: str | None) -> tuple[bool, str]:
-    """원격 러너에 포장을 맡긴다. 조제 폴링과 같은 구조."""
+    """원격 러너에 포장을 맡긴다. 조제 폴링과 같은 구조.
+
+    포장 박스(omx-02)도 manipulator 라, 사이클 라이프사이클을 events 에 직접
+    INSERT 해 그 팔의 관제 패널을 채운다. dispense_id 는 조제와 겹치지 않게 job
+    id 에 `-pack` 을 붙이고, duration_ms 는 러너 실행의 실제 경과다(로봇이 하는
+    "약 투입" 구간). 포장 정책 체크포인트는 _PACK_CKPT 다(조제 _POLICIES 와 무관).
+    """
+    station = _pack_station(robot_id)
+    dispense_id = f"{_job(robot_id).get('id') or ''}-pack"
+
+    await _emit_event(station, "manipulator.policy_loaded", "info",
+                      {"checkpoint_id": _PACK_CKPT, "dataset_revision": ""})
+    _시작 = time.monotonic()
+    await _emit_event(station, "manipulator.cycle_started", "info",
+                      {"dispense_id": dispense_id, "medication_id": "pack"})
+
+    async def _포기(reason: str) -> tuple[bool, str]:
+        await _emit_event(station, "manipulator.cycle_aborted", "error",
+                          {"dispense_id": dispense_id, "reason": reason})
+        return False, reason
+
     started = await asyncio.to_thread(_http_json, f"{base_url}/pack/start", "POST", {})
     if started.get("오류"):
-        return False, str(started["오류"])
+        return await _포기(str(started["오류"]))
     while True:
         if _job(robot_id).get("중단요청"):
             await asyncio.to_thread(_http_json, f"{base_url}/pack/stop", "POST", {})
-            return False, "사용자가 중단했습니다"
+            return await _포기("사용자가 중단했습니다")
         st = await asyncio.to_thread(_http_json, f"{base_url}/pack/state", "GET")
         if st.get("오류"):
-            return False, str(st["오류"])
+            return await _포기(str(st["오류"]))
         상태 = st.get("상태")
         if 상태 == "완료":
+            await _emit_event(station, "manipulator.cycle_completed", "info",
+                              {"dispense_id": dispense_id,
+                               "duration_ms": int((time.monotonic() - _시작) * 1000)})
             return True, "완료"
         if 상태 in ("오류", "중단", "실패"):
-            return False, str(st.get("메모") or "원격 포장이 실패했습니다")
+            return await _포기(str(st.get("메모") or "원격 포장이 실패했습니다"))
         await asyncio.sleep(_RUNNER_POLL_SEC)
 
 
