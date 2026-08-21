@@ -37,10 +37,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
-from .. import control_audit
+from .. import control_audit, fleet_pose
 from ..actor import Actor, actor_from_query
 
 router = APIRouter(prefix="/robots", tags=["teleop"])
@@ -50,6 +51,39 @@ log = logging.getLogger("mingky")
 _robots: dict[str, WebSocket] = {}
 # robot_id → 조작자 소켓들. 여러 명이 볼 수 있게 열어 두되, 조작은 아래 참고.
 _operators: dict[str, set[WebSocket]] = {}
+
+
+def _record_pose(robot_id: str, message: str) -> None:
+    """올라온 프레임이 위치면 `fleet_pose` 에 남긴다.
+
+    여기서 가로채는 이유는, 이 소켓이 **관제가 로봇 위치를 듣는 유일한
+    지점**이기 때문이다. 조작자가 붙어 있든 아니든 로봇은 계속 올리므로,
+    아무도 안 보고 있어도 서버는 위치를 안다. 관제 화면이 여러 대를 한
+    번에 그릴 수 있는 근거가 이것이다 (`app/fleet_pose.py`).
+
+    파싱 비용은 로봇당 초당 7 프레임 남짓이다 (pose 2Hz + 진단 4종 1Hz +
+    모드 1Hz). 진단 레이어는 브리지가 이미 120점으로 솎아 보낸다.
+
+    **깨진 프레임은 조용히 넘긴다.** 여기서 예외가 나면 중계가 끊기고,
+    중계가 끊기는 것은 곧 그 로봇에 조작이 안 닿는다는 뜻이다. 위치 한
+    프레임을 놓치는 것보다 나쁘다.
+    """
+    try:
+        payload = json.loads(message)
+        if payload.get("type") != "pose":
+            return
+        x, y, yaw = (
+            float(payload["x"]), float(payload["y"]), float(payload["yaw"]))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return
+
+    # NaN 은 JSON 에 없는 값이라 `json.loads` 는 받아주지만 브라우저의
+    # `JSON.parse` 는 거부한다. 그대로 흘리면 그 프레임이 화면에서 통째로
+    # 버려지고, 원인이 지도에서는 안 보인다.
+    if not all(map(math.isfinite, (x, y, yaw))):
+        return
+
+    fleet_pose.update(robot_id, x, y, yaw)
 
 
 @router.websocket("/{robot_id}/teleop/robot")
@@ -71,8 +105,10 @@ async def robot_socket(websocket: WebSocket, robot_id: str):
 
     try:
         while True:
-            # 로봇이 올리는 것은 지금은 pose 뿐이다. 그대로 조작자들에게 뿌린다.
+            # 로봇은 pose · 진단 레이어 · 모드 상태를 올린다. 조작자에게는
+            # 전부 그대로 흘려보내고, 위치만 따로 한 벌 더 챙긴다.
             message = await websocket.receive_text()
+            _record_pose(robot_id, message)
             for operator in list(_operators.get(robot_id, ())):
                 try:
                     await operator.send_text(message)

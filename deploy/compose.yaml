@@ -35,6 +35,9 @@ services:
       SESSION_FAILURE_CANCEL_AFTER_SEC: ${SESSION_FAILURE_CANCEL_AFTER_SEC:-30}
       EVENT_CODES_FILE: /srv/mingky/config/event_codes.yaml
       WAYPOINTS_FILE: /srv/mingky/waypoints/yun_map_highres_clean_waypoints.yaml
+      # 구간 지도. 파일이 없으면 군집 조정만 꺼지고 나머지는 그대로 돈다
+      # (조정층은 안전장치가 아니라 교착 예방층이다).
+      FLEET_SEGMENTS_FILE: /srv/mingky/fleet/yun_map_highres_clean_segments.yaml
       # 심각한 사건을 메신저로 내보낸다 (§8.4). 비어 있으면 꺼진 채로 돈다 —
       # 기본이 '안 보냄' 이라야 설정을 안 한 환경이 실수로 쏘지 않는다.
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}

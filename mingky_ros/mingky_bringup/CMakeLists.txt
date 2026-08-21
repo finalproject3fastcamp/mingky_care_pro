@@ -32,6 +32,7 @@ install(
     scripts/start_guidance_test.sh
     scripts/check_waypoints.py
     scripts/camera_power_manager.py
+    scripts/build_fleet_segments.py
     scripts/run_discovery_server.sh
   DESTINATION lib/${PROJECT_NAME}
 )

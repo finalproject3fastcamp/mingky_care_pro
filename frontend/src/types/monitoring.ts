@@ -328,6 +328,24 @@ export interface FleetConfig {
   mismatches: ConfigMismatch[]
 }
 
+/**
+ * 로봇 한 대의 마지막 위치. schemas.py 의 `FleetPoseOut` 과 1:1.
+ *
+ * 맵 프레임 기준 미터·라디안이라 `useTeleopSocket` 의 `RobotPose` 와 같은
+ * 좌표계다. 다른 점은 **어느 로봇인지가 값에 붙어 있다는 것** — 조작 소켓은
+ * 로봇 하나에 매여 있어 그 사실이 URL 에 있었다.
+ *
+ * 낡았는지는 여기 없다. `observed_at` 을 `freshnessLevel` 에 넣어 화면이
+ * 판정한다 (backend/app/fleet_pose.py 의 "낡은 위치를 지우지 않는다").
+ */
+export interface FleetPose {
+  robot_id: string
+  x: number
+  y: number
+  yaw: number
+  observed_at: string
+}
+
 export interface QrObservation {
   robot_id: string
   visible: boolean

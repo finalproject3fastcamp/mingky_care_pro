@@ -1,0 +1,565 @@
+# 생성물이다. 손으로 고치지 말고 아래 명령으로 다시 구워라.
+#
+#     ros2 run mingky_bringup build_fleet_segments.py --write
+#
+# 무엇이고 왜 있는지는 scripts/build_fleet_segments.py 주석에 있다.
+# 요약하면 — 이 지도는 절반 이상이 외길이라 '만나면 양보' 가
+# 성립하지 않는다. 그래서 조정 단위를 구간으로 두고, 넓은 곳
+# (zone) 에서 기다렸다가 외길(segment) 을 한 대씩 지난다.
+#
+# map_sha256 이 맵 파일과 다르면 이 파일은 낡은 것이다.
+map: yun_map_highres_clean
+map_sha256: c87305d21a40c42c
+robot_width: 0.12
+pass_clearance: 0.14
+solo_clearance: 0.07
+grid:
+  width: 192
+  height: 147
+  resolution: 0.025
+  origin:
+  - -1.818
+  - -1.529
+  legend:
+    1: zone-1
+    2: zone-2
+    3: zone-3
+    4: seg-1
+    5: seg-2
+    6: seg-3
+    7: seg-4
+    8: seg-5
+    9: seg-6
+    10: seg-7
+    11: seg-8
+    12: seg-9
+    13: seg-10
+    14: seg-11
+    15: seg-12
+    16: seg-13
+    17: seg-14
+    18: seg-15
+    19: seg-16
+    20: seg-17
+    21: seg-18
+    22: seg-19
+    23: seg-20
+    24: seg-21
+  rows:
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - 176:0 3:4 13:0
+  - 174:0 5:4 13:0
+  - 175:0 5:4 12:0
+  - 175:0 5:4 12:0
+  - 175:0 5:4 12:0
+  - 175:0 5:4 12:0
+  - 175:0 5:4 12:0
+  - 174:0 6:4 12:0
+  - 143:0 3:9 23:0 1:22 11:4 11:0
+  - 141:0 5:9 18:0 6:22 11:4 11:0
+  - 141:0 5:9 13:0 11:22 11:4 11:0
+  - 141:0 5:9 10:0 1:9 13:22 2:4 6:1 3:4 11:0
+  - 141:0 5:9 7:0 4:9 10:22 11:1 3:4 11:0
+  - 121:0 2:6 18:0 16:9 5:22 16:1 4:4 10:0
+  - 119:0 4:6 18:0 16:9 2:22 19:1 4:4 10:0
+  - 119:0 4:6 18:0 15:9 22:1 4:4 10:0
+  - 119:0 4:6 14:0 7:9 35:1 3:4 10:0
+  - 119:0 4:6 9:0 1:6 11:9 35:1 4:4 9:0
+  - 99:0 1:6 19:0 14:6 11:9 35:1 4:4 9:0
+  - 95:0 5:6 19:0 14:6 7:9 39:1 4:4 9:0
+  - 95:0 5:6 17:0 16:6 2:9 45:1 3:4 9:0
+  - 95:0 5:6 12:0 10:6 58:1 4:4 8:0
+  - 80:0 1:16 14:0 27:6 58:1 4:4 8:0
+  - 75:0 6:16 14:0 25:6 60:1 4:4 8:0
+  - 68:0 13:16 14:0 20:6 66:1 3:4 8:0
+  - 63:0 20:16 11:0 4:6 83:1 3:4 8:0
+  - 61:0 2:21 20:16 7:0 8:6 83:1 4:4 7:0
+  - 57:0 6:21 8:16 7:2 6:16 7:0 7:6 83:1 4:4 7:0
+  - 57:0 6:21 3:16 14:2 4:16 7:0 6:6 84:1 4:4 7:0
+  - 57:0 6:21 1:16 16:2 4:5 7:0 4:6 87:1 3:4 7:0
+  - 58:0 3:21 20:2 3:5 7:0 4:6 87:1 3:4 7:0
+  - 58:0 3:21 20:2 3:5 7:0 4:6 87:1 4:4 6:0
+  - 58:0 4:21 19:2 3:5 8:0 4:6 76:1 1:8 13:4 6:0
+  - 58:0 4:21 19:2 4:5 7:0 4:6 72:1 5:8 13:4 6:0
+  - 58:0 4:21 19:2 4:5 7:0 4:11 66:1 11:8 13:4 6:0
+  - 59:0 3:21 19:2 4:5 8:0 3:11 66:1 11:8 2:4 7:0 5:4 5:0
+  - 59:0 4:21 19:2 3:5 8:0 3:11 66:1 9:8 11:0 5:4 5:0
+  - 59:0 4:21 19:2 3:5 8:0 3:11 52:1 17:8 17:0 5:4 5:0
+  - 59:0 4:13 19:2 3:5 8:0 4:11 46:1 22:8 17:0 5:4 5:0
+  - 60:0 3:13 19:2 4:5 7:0 4:11 42:1 3:18 23:8 17:0 3:4 7:0
+  - 60:0 3:13 19:2 4:5 7:0 4:11 42:1 3:18 9:8 9:0 5:8 27:0
+  - 60:0 4:13 18:2 4:5 8:0 3:11 34:1 11:18 4:8 14:0 5:8 27:0
+  - 60:0 4:13 19:2 3:5 8:0 3:11 29:1 1:23 15:18 18:0 5:8 27:0
+  - 60:0 4:13 19:2 3:5 8:0 4:11 24:1 5:23 15:18 18:0 5:8 27:0
+  - 61:0 3:13 19:2 3:5 8:0 4:11 20:1 9:23 7:18 5:0 3:18 50:0
+  - 61:0 4:13 18:2 4:5 7:0 4:11 16:1 13:23 2:18 11:0 2:18 50:0
+  - 61:0 4:13 18:2 4:5 8:0 3:11 15:1 1:7 11:23 15:0 2:18 50:0
+  - 61:0 4:13 18:2 5:5 7:0 3:11 15:1 2:7 6:23 19:0 2:18 50:0
+  - 62:0 3:13 18:2 5:5 7:0 4:11 14:1 3:7 1:23 23:0 2:18 50:0
+  - 62:0 3:13 14:2 9:5 7:0 4:11 14:1 3:7 76:0
+  - 62:0 4:13 9:2 13:5 7:0 4:11 14:1 3:7 76:0
+  - 62:0 4:13 9:2 11:5 10:0 3:11 14:1 3:7 76:0
+  - 62:0 13:13 7:5 14:0 3:11 14:1 3:7 76:0
+  - 63:0 13:13 2:5 18:0 3:11 14:1 3:7 76:0
+  - 63:0 13:13 2:5 18:0 3:11 14:1 3:7 76:0
+  - 63:0 6:13 6:0 3:5 18:0 3:11 14:1 3:7 76:0
+  - 75:0 3:5 16:0 5:11 14:1 4:7 75:0
+  - 75:0 3:5 12:0 1:20 8:11 14:1 4:7 75:0
+  - 75:0 3:5 8:0 5:20 8:11 14:1 4:7 75:0
+  - 75:0 4:5 3:17 9:20 6:11 17:1 3:7 75:0
+  - 75:0 3:5 4:17 9:20 2:11 21:1 4:7 74:0
+  - 73:0 5:5 3:17 8:20 25:1 4:7 74:0
+  - 68:0 10:5 3:17 6:20 11:12 15:1 5:7 74:0
+  - 64:0 13:5 3:17 7:20 12:12 12:1 7:7 74:0
+  - 65:0 11:5 1:3 2:17 7:20 13:12 12:1 7:7 74:0
+  - 65:0 6:5 6:3 4:17 5:20 1:12 8:0 4:12 12:1 5:7 76:0
+  - 65:0 4:5 8:3 5:17 1:20 13:0 3:12 12:1 3:7 78:0
+  - 65:0 4:5 8:3 3:17 16:0 3:12 12:1 3:7 78:0
+  - 65:0 4:5 8:3 3:17 16:0 4:12 11:1 3:7 78:0
+  - 66:0 3:5 8:3 3:17 16:0 4:12 11:1 3:7 78:0
+  - 66:0 3:5 8:3 3:17 16:0 4:12 3:1 8:15 3:7 10:0 1:19 67:0
+  - 66:0 3:5 8:3 3:17 17:0 3:12 3:1 9:15 2:7 8:0 3:19 67:0
+  - 66:0 4:5 7:3 3:17 17:0 3:12 3:1 9:15 10:7 4:19 66:0
+  - 66:0 4:5 7:3 3:17 6:0 3:24 8:0 3:12 3:1 3:15 7:0 8:7 5:19 66:0
+  - 66:0 4:14 7:3 3:17 6:0 3:24 8:0 3:12 3:1 3:15 7:0 7:7 6:19 66:0
+  - 67:0 3:14 7:3 3:17 7:0 3:24 7:0 3:12 3:1 3:15 7:0 6:7 7:19 66:0
+  - 67:0 3:14 7:3 3:17 17:0 3:12 3:1 3:15 7:0 6:7 7:19 66:0
+  - 67:0 3:14 7:3 3:17 17:0 3:12 3:1 3:15 7:0 5:7 9:19 65:0
+  - 67:0 4:14 6:3 4:17 16:0 3:12 3:1 3:15 8:0 5:7 8:19 65:0
+  - 67:0 4:14 6:3 4:17 16:0 3:12 3:1 3:15 8:0 6:7 7:19 65:0
+  - 67:0 4:14 6:3 4:10 16:0 3:12 3:1 3:15 8:0 7:7 6:19 65:0
+  - 68:0 3:14 7:3 3:10 14:0 1:10 4:12 3:1 4:15 7:0 8:7 70:0
+  - 68:0 3:14 7:3 4:10 8:0 7:10 3:12 7:15 7:0 3:7 75:0
+  - 68:0 3:14 7:3 19:10 1:12 9:15 85:0
+  - 68:0 4:14 6:3 19:10 10:15 85:0
+  - 68:0 4:14 7:3 1:14 17:10 4:15 91:0
+  - 68:0 4:14 5:3 3:14 16:10 96:0
+  - 69:0 11:14 10:10 102:0
+  - 69:0 11:14 5:10 107:0
+  - 69:0 11:14 112:0
+  - 69:0 6:14 117:0
+  - 69:0 1:14 122:0
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+  - '192:0'
+zones:
+  zone-1:
+    kind: zone
+    area_m2: 1.3313
+    connects:
+    - seg-1
+    - seg-12
+    - seg-15
+    - seg-17
+    - seg-19
+    - seg-20
+    - seg-3
+    - seg-4
+    - seg-5
+    - seg-6
+    - seg-8
+    - seg-9
+    waypoints:
+    - ct_room_goal
+    - ct_room_waiting
+    - mri_room_goal
+    - physical_therapy_goal
+    - physical_therapy_waiting
+    - restroom_goal
+    - restroom_waiting
+    - treatment_room_waiting
+    - ward_goal
+    - ward_waiting
+  zone-2:
+    kind: zone
+    area_m2: 0.2669
+    connects:
+    - seg-10
+    - seg-13
+    - seg-18
+    - seg-2
+    waypoints: []
+  zone-3:
+    kind: zone
+    area_m2: 0.0963
+    connects:
+    - seg-11
+    - seg-14
+    - seg-2
+    - seg-7
+    waypoints:
+    - payment_goal
+    - reception_goal
+segments:
+  seg-1:
+    kind: segment
+    area_m2: 0.1338
+    connects:
+    - seg-19
+    - seg-5
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-2:
+    kind: segment
+    area_m2: 0.1313
+    connects:
+    - seg-10
+    - seg-11
+    - seg-13
+    - seg-14
+    - zone-2
+    - zone-3
+    dead_end: false
+    waypoints:
+    - pharmacy_goal
+    - pharmacy_waiting
+  seg-3:
+    kind: segment
+    area_m2: 0.1288
+    connects:
+    - seg-6
+    - seg-8
+    - zone-1
+    dead_end: false
+    waypoints:
+    - treatment_room_goal
+  seg-4:
+    kind: segment
+    area_m2: 0.1013
+    connects:
+    - seg-12
+    - seg-16
+    - seg-20
+    - zone-1
+    dead_end: false
+    waypoints:
+    - charging_station_1
+  seg-5:
+    kind: segment
+    area_m2: 0.0825
+    connects:
+    - seg-1
+    - seg-15
+    - zone-1
+    dead_end: false
+    waypoints:
+    - mri_room_waiting
+  seg-6:
+    kind: segment
+    area_m2: 0.0706
+    connects:
+    - seg-19
+    - seg-3
+    - zone-1
+    dead_end: false
+    waypoints:
+    - xray_room_goal
+    - xray_room_waiting
+  seg-7:
+    kind: segment
+    area_m2: 0.0656
+    connects:
+    - seg-11
+    - seg-12
+    - seg-14
+    - seg-9
+    - zone-3
+    dead_end: false
+    waypoints:
+    - reception_payment_waiting
+  seg-8:
+    kind: segment
+    area_m2: 0.0656
+    connects:
+    - seg-17
+    - seg-3
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-9:
+    kind: segment
+    area_m2: 0.0606
+    connects:
+    - seg-12
+    - seg-17
+    - seg-7
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-10:
+    kind: segment
+    area_m2: 0.06
+    connects:
+    - seg-18
+    - seg-2
+    - zone-2
+    dead_end: false
+    waypoints: []
+  seg-11:
+    kind: segment
+    area_m2: 0.0563
+    connects:
+    - seg-2
+    - seg-7
+    - zone-3
+    dead_end: false
+    waypoints: []
+  seg-12:
+    kind: segment
+    area_m2: 0.0525
+    connects:
+    - seg-4
+    - seg-7
+    - seg-9
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-13:
+    kind: segment
+    area_m2: 0.0513
+    connects:
+    - seg-18
+    - seg-2
+    - zone-2
+    dead_end: false
+    waypoints: []
+  seg-14:
+    kind: segment
+    area_m2: 0.0425
+    connects:
+    - seg-17
+    - seg-2
+    - seg-7
+    - zone-3
+    dead_end: false
+    waypoints: []
+  seg-15:
+    kind: segment
+    area_m2: 0.0419
+    connects:
+    - seg-20
+    - seg-5
+    - zone-1
+    dead_end: false
+    waypoints:
+    - clinical_pathology_room_goal
+    - clinical_pathology_room_waiting
+  seg-16:
+    kind: segment
+    area_m2: 0.0394
+    connects:
+    - seg-4
+    dead_end: true
+    waypoints:
+    - charging_station_2
+  seg-17:
+    kind: segment
+    area_m2: 0.0363
+    connects:
+    - seg-14
+    - seg-8
+    - seg-9
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-18:
+    kind: segment
+    area_m2: 0.0306
+    connects:
+    - seg-10
+    - seg-13
+    - zone-2
+    dead_end: false
+    waypoints: []
+  seg-19:
+    kind: segment
+    area_m2: 0.03
+    connects:
+    - seg-1
+    - seg-6
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-20:
+    kind: segment
+    area_m2: 0.0288
+    connects:
+    - seg-15
+    - seg-4
+    - zone-1
+    dead_end: false
+    waypoints: []
+  seg-21:
+    kind: segment
+    area_m2: 0.0056
+    connects: []
+    dead_end: true
+    waypoints: []
+waypoints:
+  charging_station_1:
+    area: seg-4
+    clearance: 0.125
+    blocks_passage: true
+    marginal: false
+  charging_station_2:
+    area: seg-16
+    clearance: 0.125
+    blocks_passage: true
+    marginal: false
+  clinical_pathology_room_goal:
+    area: seg-15
+    clearance: 0.1
+    blocks_passage: true
+    marginal: false
+  clinical_pathology_room_waiting:
+    area: seg-15
+    clearance: 0.075
+    blocks_passage: true
+    marginal: false
+  ct_room_goal:
+    area: zone-1
+    clearance: 0.175
+    blocks_passage: false
+    marginal: false
+  ct_room_waiting:
+    area: zone-1
+    clearance: 0.15
+    blocks_passage: false
+    marginal: false
+  mri_room_goal:
+    area: zone-1
+    clearance: 0.2
+    blocks_passage: false
+    marginal: false
+  mri_room_waiting:
+    area: seg-5
+    clearance: 0.075
+    blocks_passage: true
+    marginal: false
+  payment_goal:
+    area: zone-3
+    clearance: 0.15
+    blocks_passage: false
+    marginal: false
+  pharmacy_goal:
+    area: seg-2
+    clearance: 0.125
+    blocks_passage: true
+    marginal: false
+  pharmacy_waiting:
+    area: seg-2
+    clearance: 0.1
+    blocks_passage: true
+    marginal: false
+  physical_therapy_goal:
+    area: zone-1
+    clearance: 0.2
+    blocks_passage: false
+    marginal: false
+  physical_therapy_waiting:
+    area: zone-1
+    clearance: 0.175
+    blocks_passage: false
+    marginal: false
+  reception_goal:
+    area: zone-3
+    clearance: 0.2
+    blocks_passage: false
+    marginal: false
+  reception_payment_waiting:
+    area: seg-7
+    clearance: 0.1
+    blocks_passage: true
+    marginal: false
+  restroom_goal:
+    area: zone-1
+    clearance: 0.25
+    blocks_passage: false
+    marginal: false
+  restroom_waiting:
+    area: zone-1
+    clearance: 0.15
+    blocks_passage: false
+    marginal: false
+  treatment_room_goal:
+    area: seg-3
+    clearance: 0.125
+    blocks_passage: true
+    marginal: false
+  treatment_room_waiting:
+    area: zone-1
+    clearance: 0.25
+    blocks_passage: false
+    marginal: false
+  ward_goal:
+    area: zone-1
+    clearance: 0.15
+    blocks_passage: false
+    marginal: false
+  ward_waiting:
+    area: zone-1
+    clearance: 0.275
+    blocks_passage: false
+    marginal: false
+  xray_room_goal:
+    area: seg-6
+    clearance: 0.1
+    blocks_passage: true
+    marginal: false
+  xray_room_waiting:
+    area: seg-6
+    clearance: 0.1
+    blocks_passage: true
+    marginal: false

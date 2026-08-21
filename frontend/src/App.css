@@ -2799,6 +2799,57 @@
 
 .fleet-empty { margin: 0; color: var(--text-subtle); font-size: 0.85rem; }
 
+/* ── 전체 위치 (Fleet 탭) ──────────────────────────────────────────────
+   지도 하나에 핑키 2대를 같이 올린다. 범례의 색은 지도 위 바닥 고리와
+   같아야 하며, 둘 다 lib/robotColors.ts 가 정본이다. */
+
+.fleet-poses__map {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.fleet-poses__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fleet-poses__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.fleet-poses__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: none;
+  align-self: center;
+}
+
+/* 위치를 못 믿을 때는 색을 뺀다. 로봇 색으로 남겨두면 옆의 '10초 전' 을
+   읽기 전에 정상으로 판단해버린다. */
+.fleet-poses__swatch[data-stale] { background: var(--text-subtle); }
+
+.fleet-poses__coord { color: var(--text-muted); font-size: 0.78rem; }
+
+.fleet-poses__age { font-size: 0.74rem; color: var(--text-subtle); }
+.fleet-poses__age--warn { color: var(--warning); }
+.fleet-poses__age--stale { color: var(--danger); font-weight: 600; }
+
+.fleet-poses__unknown { font-size: 0.78rem; color: var(--text-subtle); }
+
+.fleet-poses__offline {
+  margin: 10px 0 0;
+  color: var(--warning);
+  font-size: 0.8rem;
+}
+
 /* ── 조제 로봇 패널 (System 탭) ────────────────────────────────────────
    §7.3: 선택기는 4대를 다 보여주고 제어 패널만 타입에 따라 바뀐다.
    팔에는 3D 모델 자산이 없어 카드 왼쪽 자리를 글자로 채운다. */

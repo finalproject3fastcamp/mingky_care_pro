@@ -48,6 +48,7 @@ import { usePolling } from '../lib/usePolling'
 import { MapRearCam } from './MapRearCam'
 import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
+import { ROBOT_STALE_COLOR } from '../lib/robotColors'
 import type { QrObservation } from '../types/monitoring'
 import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
@@ -61,6 +62,34 @@ export interface WaypointMarker {
   selected?: boolean
 }
 
+/**
+ * `pose` 말고 지도에 함께 그릴 로봇.
+ *
+ * 이쪽에는 진단 레이어가 없다. 라이다·파티클은 **한 대분만** 그린다 —
+ * 두 대를 겹쳐 그리면 어느 점이 어느 로봇 것인지 알 수 없어 "맵과 겹치나"
+ * 를 판단할 수 없게 된다(docs/nav2-debugging.md 가 그 판단을 시킨다).
+ *
+ * 그래서 여기 있는 로봇은 **어디 있는지만** 말한다. 위치추정이 맞는지
+ * 보려면 그 로봇을 골라야 한다.
+ */
+export interface PeerMarker {
+  robotId: string
+  /** 지도 위 배지에 뜨는 이름. `display_name` 을 그대로 쓴다. */
+  label: string
+  x: number
+  y: number
+  yaw: number
+  /** 지도 위 색(CSS). `lib/robotColors.ts` 에서 온다. 범례와 같아야 한다. */
+  color: string
+  /**
+   * 위치를 지금 것으로 볼 수 없는가.
+   *
+   * 지우지 않고 회색으로 낮춘다. 지우면 "위치를 모른다" 가 "로봇이 없다"
+   * 로 읽힌다 (backend/app/fleet_pose.py 와 같은 판단).
+   */
+  stale?: boolean
+}
+
 export interface HospitalMap3DProps extends DiagLayers {
   pose: RobotPose | null
   live: boolean
@@ -72,6 +101,19 @@ export interface HospitalMap3DProps extends DiagLayers {
   estop?: boolean
   /** 이 로봇을 고른 상태인지. 켜면 초록으로 박동한다. */
   selected?: boolean
+  /** `pose` 외에 함께 그릴 로봇들. 전체 위치 화면은 전부 여기로 넘긴다. */
+  peers?: PeerMarker[]
+  /**
+   * 이 지도가 무엇을 하는 화면인가.
+   *
+   *   control   한 대를 붙잡고 본다 — 진단 레이어와 위치 지정이 붙는다
+   *   overview  여러 대가 어디 있는지만 본다
+   *
+   * 진단 토글을 `overview` 에서 빼는 것이 요점이다. 라이다·파티클은 한
+   * 대분만 오므로, 켤 수 있는데 아무것도 안 그려지는 버튼이 남으면 "지금
+   * 라이다가 안 나온다" 로 읽힌다 — 사실은 이 화면이 안 받는 것이다.
+   */
+  variant?: 'control' | 'overview'
   /**
    * 환자 추종 상태. 로봇 쪽 `follow_state` 를 그대로 받는다.
    * 안 넘기면 이 화면은 예전과 똑같이 움직인다.
@@ -178,6 +220,13 @@ interface LabelHandle {
   x: number
   y: number
   z: number
+}
+
+/** 지도 위에 서 있는 로봇 한 대분. 모형·바닥 고리·이름표가 한 덩어리다. */
+interface PeerHandle {
+  group: THREE.Group
+  ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>
+  label: LabelHandle
 }
 
 const LAYER_LABEL = {
@@ -316,6 +365,17 @@ interface Handles {
   pulse: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
   /** 로봇 재질들. 비상정지 때 통째로 붉게 물들인다 */
   robotMats: { m: THREE.MeshStandardMaterial; base: THREE.Color; estop: number }[]
+  /** 함께 그리는 로봇들이 사는 곳 */
+  peerGroup: THREE.Group
+  /** 그 안의 로봇들. robot_id 로 찾는다 */
+  peers: Map<string, PeerHandle>
+  /**
+   * pinky.glb 원본. 로봇이 늘어날 때마다 여기서 복제한다.
+   *
+   * 값이 아니라 함수인 것은 모형이 **늦게 오기 때문**이다. 장면을 만드는
+   * 시점에는 아직 없고, 읽는 쪽(아래 reconcile)은 그때그때 물어봐야 한다.
+   */
+  getPeerModel: () => THREE.Group | null
   scan: THREE.Points
   particles: THREE.Points
   plan: Line2
@@ -355,7 +415,10 @@ export function HospitalMap3D({
   camera = 'rear',
   waitLimitSec = 20,
   paused = false,
+  peers = [],
+  variant = 'control',
 }: HospitalMap3DProps) {
+  const overview = variant === 'overview'
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
   const handles = useRef<Handles | null>(null)
@@ -534,6 +597,16 @@ export function HospitalMap3D({
     scene.add(ring)
     let ringStart = 0
 
+    // 함께 그리는 로봇들. 아래 reconcile 효과가 이 그룹만 손댄다.
+    //
+    // React ref 가 아니라 이 효과의 지역 변수인 것이 요점이다. 정리
+    // 함수에서 ref 를 읽으면 그 시점의 값이 만들 때와 같다는 보장이 없다 —
+    // 여기 담긴 것은 이 장면에 붙은 물체들이라 이 장면과 수명이 같아야 한다.
+    const peerGroup = new THREE.Group()
+    scene.add(peerGroup)
+    const peerHandles = new Map<string, PeerHandle>()
+    let peerModel: THREE.Group | null = null
+
     // ---- 진단 레이어 ----
     // 미리 자리를 잡아 두고 개수만 바꾼다. 매번 새로 만들면 초당 수십 번
     // 버퍼를 새로 올리게 돼 화면이 끊긴다.
@@ -704,22 +777,29 @@ export function HospitalMap3D({
     let flying = false
 
     const projected = new THREE.Vector3()
+    const place = (l: LabelHandle, w: number, h: number) => {
+      projected.set(l.x, l.y, l.z).project(camera)
+      if (projected.z > 1) {
+        l.el.style.display = 'none'
+        return
+      }
+      l.el.style.display = ''
+      l.el.style.transform =
+        `translate(-50%,-50%) translate(${(projected.x * 0.5 + 0.5) * w}px,` +
+        `${(-projected.y * 0.5 + 0.5) * h}px)`
+    }
+
     const syncLabels = (w: number, h: number, show: boolean) => {
       for (const l of labelsRef.current) {
         if (!show) {
           l.el.style.display = 'none'
           continue
         }
-        projected.set(l.x, l.y, l.z).project(camera)
-        if (projected.z > 1) {
-          l.el.style.display = 'none'
-          continue
-        }
-        l.el.style.display = ''
-        l.el.style.transform =
-          `translate(-50%,-50%) translate(${(projected.x * 0.5 + 0.5) * w}px,` +
-          `${(-projected.y * 0.5 + 0.5) * h}px)`
+        place(l, w, h)
       }
+      // 로봇 이름표는 '안내' 토글을 따르지 않는다. 저 토글은 병원 안내
+      // 글자를 끄는 것이고, 어느 로봇인지는 그것과 무관하게 늘 알아야 한다.
+      for (const peer of peerHandles.values()) place(peer.label, w, h)
     }
 
     let showSigns = true
@@ -950,6 +1030,10 @@ export function HospitalMap3D({
         robotMats.push({ m: mat, base: mat.color.clone(), estop: COLOR.estop })
       })
       robot.add(model)
+      // 함께 그리는 로봇들이 복제해 갈 원본. 재질은 복제본과 공유한다 —
+      // 모형에는 색을 안 칠하므로(구분은 바닥 고리와 이름표가 한다) 재질을
+      // 따로 뜰 이유가 없고, 뜨면 치울 것만 늘어난다.
+      peerModel = model
       // 모형은 늦게 온다. 그 사이에 이미 비상정지였다면 여기서 칠해 준다 —
       // 안 그러면 상태가 다시 바뀔 때까지 파란 로봇이 그대로 서 있는다.
       setRobotReady((n) => n + 1)
@@ -1007,6 +1091,9 @@ export function HospitalMap3D({
       host,
       pulse,
       robotMats,
+      peerGroup,
+      peers: peerHandles,
+      getPeerModel: () => peerModel,
       scan: scanPts,
       particles: particlePts,
       plan: planLine,
@@ -1043,6 +1130,10 @@ export function HospitalMap3D({
       controls.dispose()
       for (const l of labelsRef.current) l.el.remove()
       labelsRef.current = []
+      // 이름표는 3D 밖의 HTML 이라 아래 scene.traverse 가 치워주지 않는다.
+      for (const peer of peerHandles.values()) peer.label.el.remove()
+      peerHandles.clear()
+      peerModel = null
       scene.traverse((o) => {
         const m = o as THREE.Mesh
         if (m.geometry) m.geometry.dispose()
@@ -1299,6 +1390,87 @@ export function HospitalMap3D({
     handles.current?.focusRobot(true)
   }, [mapState])
 
+  // ---- 함께 그리는 로봇들 ----
+  // 좌표는 0.5초마다 오지만 덩어리는 그대로 두고 위치만 옮긴다. 통째로 다시
+  // 만들면 모형을 초당 두 번 복제하고 이름표가 그때마다 깜빡인다.
+  useEffect(() => {
+    const h = handles.current
+    const labelHost = labelHostRef.current
+    const template = h?.getPeerModel() ?? null
+    if (!h || !labelHost) return
+
+    // 이름을 `live` 로 두지 않는다 — 같은 이름의 prop 이 이 컴포넌트에 있고,
+    // 가려버리면 아래에서 어느 쪽을 읽는지 눈으로 구분되지 않는다.
+    const existing = h.peers
+    const wanted = new Set(peers.map((p) => p.robotId))
+
+    // 사라진 로봇을 치운다. 목록에서 빠진 것은 "서버가 위치를 모른다" 이지
+    // "저기 서 있다" 가 아니다.
+    for (const [robotId, peer] of existing) {
+      if (wanted.has(robotId)) continue
+      h.peerGroup.remove(peer.group)
+      peer.ring.geometry.dispose()
+      peer.ring.material.dispose()
+      peer.label.el.remove()
+      existing.delete(robotId)
+    }
+
+    for (const marker of peers) {
+      let peer = existing.get(marker.robotId)
+
+      if (!peer) {
+        // 모형이 아직 안 왔으면 이번 판은 건너뛴다. 도착하면 robotReady 가
+        // 올라 이 효과가 다시 돌면서 그때 만든다.
+        if (!template) continue
+
+        const group = new THREE.Group()
+        // 바닥 고리로 구분한다. 모형 자체를 칠하지 않는 이유는, 무늬가 있는
+        // 재질이라 색이 곱해져 어두운 색에서는 로봇 형태가 뭉개지기 때문이다.
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.1, 0.135, 40),
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0.85,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        )
+        ring.rotation.x = -Math.PI / 2
+        ring.position.y = 0.005
+        ring.renderOrder = 4
+        group.add(ring)
+        group.add(template.clone(true))
+        h.peerGroup.add(group)
+
+        const el = document.createElement('div')
+        el.className = 'map3d__robot-tag'
+        labelHost.appendChild(el)
+
+        peer = { group, ring, label: { el, x: 0, y: 0, z: 0 } }
+        existing.set(marker.robotId, peer)
+      }
+
+      const m = mapToModel(marker.x, marker.y)
+      peer.group.position.set(m.u, 0, -m.v)
+      peer.group.rotation.y = mapYawToModel(marker.yaw) + FACING
+      peer.ring.material.color.set(
+        marker.stale ? ROBOT_STALE_COLOR : marker.color)
+
+      peer.label.el.textContent = marker.label
+      peer.label.el.classList.toggle('map3d__robot-tag--stale', !!marker.stale)
+      // 이름표는 로봇 머리 위에 띄운다. 발밑에 두면 바닥 고리와 겹쳐 둘 다
+      // 안 읽힌다.
+      peer.label.x = m.u
+      peer.label.y = 0.2
+      peer.label.z = -m.v
+      // 색은 3D 가 아니라 CSS 라 배지 테두리에 직접 넣는다.
+      peer.label.el.style.setProperty(
+        '--tag-color', marker.stale ? ROBOT_STALE_COLOR : marker.color)
+    }
+
+    h.invalidate()
+  }, [peers, robotReady])
+
   useEffect(() => {
     const h = handles.current
     if (!h) return
@@ -1451,11 +1623,24 @@ export function HospitalMap3D({
   return (
     <section className="robot-map map3d">
       <header className="robot-map__header">
-        <span className="robot-map__label">위치 · 로컬라이제이션</span>
+        {/* overview 는 제목을 감싸는 카드가 이미 달고 있다. 여기서 한 번 더
+            적으면 같은 말이 20px 간격으로 두 줄 난다. 대신 이 자리를 연결
+            상태에 쓴다 — 좌표가 안 움직일 때 회선인지 AMCL 인지 가른다.
+            주어를 밝히는 것이 요점이다. 그냥 '실시간' 이면 로봇이 1분째
+            멈춰 있을 때 무엇이 실시간이라는 건지 알 수 없다. */}
+        <span className="robot-map__label">
+          {overview
+            ? (live ? '관제 연결됨' : '관제 연결 끊김')
+            : '위치 · 로컬라이제이션'}
+        </span>
         {/*
           색만으로는 구분하지 않는다. 화면을 비스듬히 보거나 조명이 다르면
           색이 틀어지므로 상태 이름을 항상 같이 적는다.
+
+          overview 에는 안 붙인다. 이 badge 는 **한 대의** 추종·복귀 상태라
+          여러 대를 그리는 화면에서는 누구 이야기인지 말할 수 없다.
         */}
+        {!overview && (
         <span className={`map3d__state map3d__state--${MAP_STATE[mapState].tone}`}>
           <i aria-hidden="true" />
           {MAP_STATE[mapState].text}
@@ -1491,7 +1676,18 @@ export function HospitalMap3D({
             </span>
           )}
         </span>
-        {pose ? (
+        )}
+        {overview ? (
+          <span
+            className={`robot-map__coord${
+              peers.length ? '' : ' robot-map__coord--none'}`}
+          >
+            {/* 대수를 먼저 말한다. 지도에 한 대만 보일 때 그것이 "한 대만
+                켜져 있다" 인지 "한 대는 위치를 모른다" 인지 알아야 한다. */}
+            {peers.length ? `로봇 ${peers.length}대` : (
+              live ? '위치 수신 대기 중' : '관제 서버 연결 없음')}
+          </span>
+        ) : pose ? (
           <span className="robot-map__coord">
             x {pose.x.toFixed(2)} · y {pose.y.toFixed(2)} ·{' '}
             {((pose.yaw * 180) / Math.PI).toFixed(0)}°
@@ -1504,16 +1700,19 @@ export function HospitalMap3D({
       </header>
 
       <div className="robot-map__legend">
-        {(Object.keys(LAYER_LABEL) as LayerKey[]).map((key) => (
-          <button
-            key={key}
-            type="button"
-            className={`robot-map__toggle robot-map__toggle--${key}${visible[key] ? '' : ' off'}`}
-            onClick={() => setVisible((v) => ({ ...v, [key]: !v[key] }))}
-          >
-            {LAYER_LABEL[key]}
-          </button>
-        ))}
+        {(Object.keys(LAYER_LABEL) as LayerKey[])
+          // 진단 레이어는 한 대분만 온다. 전체 위치 화면에서는 켤 것이 없다.
+          .filter((key) => !overview || key === 'signs')
+          .map((key) => (
+            <button
+              key={key}
+              type="button"
+              className={`robot-map__toggle robot-map__toggle--${key}${visible[key] ? '' : ' off'}`}
+              onClick={() => setVisible((v) => ({ ...v, [key]: !v[key] }))}
+            >
+              {LAYER_LABEL[key]}
+            </button>
+          ))}
         {recoveryPlan && recoveryPlan.length > 1 && (
           <span className="robot-map__recovery-key">복구 경로</span>
         )}
@@ -1611,11 +1810,15 @@ export function HospitalMap3D({
         {failed && <p className="map3d__loading">3D 지도를 불러오지 못했습니다.</p>}
       </div>
 
-      {!pose && (
+      {(overview ? peers.length === 0 : !pose) && (
         <p className="robot-map__empty">
-          {live
-            ? 'Nav2(AMCL)가 실행 중이어야 위치가 표시됩니다.'
-            : '로봇의 조작 브리지가 연결되면 표시됩니다.'}
+          {overview
+            ? (live
+              ? '로봇이 위치를 올리면 표시됩니다. Nav2(AMCL)와 조작 브리지가 모두 떠 있어야 합니다.'
+              : '관제 서버와 연결되면 표시됩니다.')
+            : (live
+              ? 'Nav2(AMCL)가 실행 중이어야 위치가 표시됩니다.'
+              : '로봇의 조작 브리지가 연결되면 표시됩니다.')}
         </p>
       )}
     </section>

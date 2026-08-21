@@ -824,6 +824,31 @@ class FleetConfigOut(BaseModel):
     mismatches: list[ConfigMismatchOut] = Field(default_factory=list)
 
 
+class FleetPoseOut(BaseModel):
+    """로봇 한 대의 마지막 위치. 맵 프레임 기준 미터·라디안.
+
+    `observed_at` 은 로봇 시계가 아니라 서버 수신 시각이고, **신선도 판정은
+    담고 있지 않다.** 낡았는지는 화면이 `lib/freshness.ts` 로 정한다 —
+    메시지 사이의 침묵은 서버가 알려줄 방법이 없어서, 서버가 한 번 더
+    판정하면 같은 사실에 답이 둘이 된다 (`app/fleet_pose.py`).
+    """
+
+    robot_id: str
+    x: float
+    y: float
+    yaw: float
+    observed_at: datetime
+
+
+class FleetPosesOut(BaseModel):
+    """WS 스트림의 첫 프레임과 같은 모양이다. 화면이 두 경로를 같은 코드로 읽는다."""
+
+    type: Literal["snapshot"] = "snapshot"
+    # 한 번도 위치를 올린 적 없는 로봇은 여기 없다. "모른다" 와 "여기 있다"
+    # 를 구분해야 지도가 거짓말을 하지 않는다.
+    poses: list[FleetPoseOut] = Field(default_factory=list)
+
+
 class ControlAuditOut(BaseModel):
     """제어 개입 한 건. actor 가 없으면 익명 기록이다."""
 
