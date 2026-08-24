@@ -72,16 +72,16 @@
     },
     {
       "id": "smolvla",
-      "이름": "SmolVLA",
-      "부제": "언어로 지시 (\"pick red pill\")",
-      "run": "smolvla_v2",
-      "ckpt": "130000",
-      "repo": "1unasy/pill_v3",
+      "이름": "SmolVLA 좌표 조건화",
+      "부제": "시각-언어-행동 모델에 좌표를 관측으로",
+      "run": "smolvla_v10",
+      "ckpt": "080000",
+      "repo": "1unasy/pill_v3_uvstate",
       "단일정책": true,
-      "추천": false,
+      "추천": true,
       "앙상블": false,
-      "실기": "색 구분 실패",
-      "설명": "시각-언어 모델을 미세조정했습니다. 언어 지시에 대한 반응이 필요량의 2~5% 에 그쳐 색을 구분하지 못합니다."
+      "실기": "색 구분·파지 성공 (2026-08-22, 7.8 에폭)",
+      "설명": "SmolVLA(4.5억 파라미터)에 목표 좌표를 observation.state 로 넣습니다. 언어로 목표를 준 아홉 판이 전부 실패해, 굳은 언어 경로 대신 학습되는 상태 경로로 보낸 것입니다. SmolVLA 로 실기에 성공한 첫 정책입니다. 색 판별은 HSV 검출기가 맡습니다. 자세한 내용: omx/dispense/smolvla_v10_snippet.md"
     }
   ]
 }
