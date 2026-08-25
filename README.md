@@ -7,7 +7,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 >
 > **시연 영상**
 > - [OMX 로봇팔](https://youtu.be/ukF5k4bYa9o)
-> - [Pinky 자율주행](https://youtu.be/Fco5L7wAmik)
+> - [Pinky 자율주행](https://youtu.be/plwKbx3PGU8)
 
 ## 1. 프로젝트 개요
 
