@@ -10,6 +10,7 @@ from mingky_guide_manager.low_obstacle import SidestepOutcome
 from mingky_interfaces.msg import GuideState
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import LaserScan, Range
+from std_msgs.msg import String
 
 
 class ImmediateFuture:
@@ -79,7 +80,7 @@ def manager():
     node = GuideManager(parameter_overrides=[
         Parameter('robot_id', value='pinky-01'),
         Parameter('use_arrival_chime', value=False),
-        Parameter('low_obstacle_mode', value='sidestep'),
+        Parameter('low_obstacle_mode', value='disabled'),
     ])
     node.nav = FakeNav()
     node.low_obstacle_driver = FakeSidestepDriver()
@@ -118,6 +119,9 @@ def _set_active_goal(node: GuideManager):
 
 
 def test_confirmed_low_obstacle_cancels_goal_before_sidestep(manager):
+    # 폐기된 알고리즘 자체의 회귀 테스트만 직접 활성화한다. 운영 파라미터
+    # 경로에서는 아래 모드로 전환할 수 없다.
+    manager.low_obstacle_mode = 'sidestep'
     handle = _set_active_goal(manager)
     manager._on_scan(_clear_scan())
 
@@ -140,6 +144,18 @@ def test_disabled_mode_keeps_current_navigation(manager):
     assert handle.cancelled == 0
 
 
+def test_observation_controls_forward_recovery_lock(manager):
+    manager._on_low_obstacle_observation(String(data='{"active": true}'))
+    assert manager._low_obstacle_active is True
+
+    manager._on_low_obstacle_observation(String(data='{"active": false}'))
+    assert manager._low_obstacle_active is False
+
+    manager._on_low_obstacle_observation(String(
+        data='{"active": false, "retained_active": true}'))
+    assert manager._low_obstacle_active is True
+
+
 def test_mode_change_is_rejected_during_navigation(manager):
     _set_active_goal(manager)
 
@@ -148,7 +164,16 @@ def test_mode_change_is_rejected_during_navigation(manager):
     ])
 
     assert result.successful is False
-    assert manager.low_obstacle_mode == 'sidestep'
+    assert manager.low_obstacle_mode == 'disabled'
+
+
+def test_retired_sidestep_mode_is_rejected_while_idle(manager):
+    result = manager._on_set_parameters([
+        Parameter('low_obstacle_mode', value='sidestep'),
+    ])
+
+    assert result.successful is False
+    assert manager.low_obstacle_mode == 'disabled'
 
 
 def test_successful_sidestep_resends_original_goal(manager):

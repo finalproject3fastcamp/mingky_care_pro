@@ -62,6 +62,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
         system_state="active", localization_active=True,
         navigation_speed_mps=0.18,
         low_obstacle_mode="sidestep",
+        low_obstacle_state="SLOW",
         guide_robot_state="returning_to_dock",
         guide_session_state="in_room",
         inventory_hash="a1b2c3d4", cpu_total_pct=23.4, queue_pending=1204,
@@ -74,6 +75,7 @@ def test_heartbeat_keeps_resource_fields_in_memory_only(monkeypatch):
     assert state.max_node_cpu_name == "event_gateway"
     assert state.navigation_speed_mps == 0.18
     assert state.low_obstacle_mode == "sidestep"
+    assert state.low_obstacle_state == "SLOW"
     assert state.guide_robot_state == "returning_to_dock"
     assert state.guide_session_state == "in_room"
     # 3~5초마다 덮어쓰는 값은 DB 에 쌓지 않는다. 저장 쿼리가 없어야 한다.

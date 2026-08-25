@@ -129,7 +129,7 @@ class OrderIn(BaseModel):
     # goto 면 waypoint 이름, goto_pose 면 임시 좌표 JSON,
     # start_session 이면 patient_id, start_guidance/cancel_guidance 면 session_id,
     # set_mode 면 auto | manual | estop, set_navigation_speed 면 m/s 숫자,
-    # set_low_obstacle_mode 면 disabled | sidestep,
+    # set_low_obstacle_mode은 구형 로봇을 끄기 위한 disabled만 허용하고,
     # 나머지 제어 명령은 run.
     #
     # 모드는 로봇이 정본을 갖는다. 여기서 보내는 것은 요청이고, 반영 여부는
@@ -452,6 +452,10 @@ class MobileRobotOut(RobotBase):
     returning_to_dock: bool = False
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
     low_obstacle_mode: Literal["disabled", "sidestep"] | None = None
+    low_obstacle_state: Literal[
+        "STARTING", "DISABLED", "CLEAR", "UNCERTAIN", "CONFIRMED", "SLOW",
+        "FORWARD_BLOCKED", "STALE_RANGE", "STALE_LIDAR",
+    ] | None = None
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",
         "comm_lost", "paused", "returning_to_dock",
@@ -520,6 +524,11 @@ class RobotHeartbeatIn(BaseModel):
     navigation_speed_mps: float | None = Field(default=None, ge=0.05, le=0.25)
     # guide_manager에 실제로 적용된 저상 장애물 회피 전략.
     low_obstacle_mode: Literal["disabled", "sidestep"] | None = None
+    # 초음파/LiDAR local costmap 융합 상태. 구버전 게이트웨이는 보내지 않는다.
+    low_obstacle_state: Literal[
+        "STARTING", "DISABLED", "CLEAR", "UNCERTAIN", "CONFIRMED", "SLOW",
+        "FORWARD_BLOCKED", "STALE_RANGE", "STALE_LIDAR",
+    ] | None = None
     # Guide Manager의 현재 로봇 상태. 구버전 게이트웨이는 보내지 않는다.
     guide_robot_state: Literal[
         "idle", "moving", "waiting", "charging", "battery_low",

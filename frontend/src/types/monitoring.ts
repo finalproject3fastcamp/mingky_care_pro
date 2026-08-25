@@ -104,6 +104,10 @@ export interface TopicAge {
  * armed_at 은 DB 컬럼이 아니라 백엔드 인메모리 (app/arming.py) 다.
  * 세션 시작 전 의료진이 "이 로봇 쓰겠다" 를 표시한 시각.
  */
+export type LowObstacleState =
+  | 'STARTING' | 'DISABLED' | 'CLEAR' | 'UNCERTAIN' | 'CONFIRMED' | 'SLOW'
+  | 'FORWARD_BLOCKED' | 'STALE_RANGE' | 'STALE_LIDAR'
+
 export interface MobileRobot extends RobotCommon {
   robot_type: 'mobile'
   battery_voltage: number | null
@@ -120,6 +124,7 @@ export interface MobileRobot extends RobotCommon {
   returning_to_dock: boolean
   navigation_speed_mps: number | null
   low_obstacle_mode: 'disabled' | 'sidestep' | null
+  low_obstacle_state: LowObstacleState | null
   guide_robot_state:
     | 'idle' | 'moving' | 'waiting' | 'charging' | 'battery_low'
     | 'comm_lost' | 'paused' | 'returning_to_dock' | null

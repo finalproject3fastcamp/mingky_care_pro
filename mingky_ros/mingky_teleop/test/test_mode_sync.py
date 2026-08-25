@@ -2,7 +2,10 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 
 from mingky_teleop.mode_sync import ModeAlignmentMonitor
-from mingky_teleop.teleop_bridge import TeleopBridge
+from mingky_teleop.teleop_bridge import (
+    parse_low_obstacle_observation,
+    TeleopBridge,
+)
 
 
 def test_short_mismatch_is_not_reported():
@@ -48,4 +51,63 @@ def test_recovery_path_payload_has_a_separate_message_type():
     assert payload == {
         "type": "recovery_plan",
         "points": [[1.234, -0.457], [2.0, 3.0]],
+    }
+
+
+def test_low_obstacle_observation_is_forwarded_as_realtime_layer():
+    payload = parse_low_obstacle_observation(
+        '{"active":true,"distance_m":0.1844,"fov_rad":0.26,'
+        '"state":"CONFIRMED"}')
+
+    assert payload == {
+        "type": "low_obstacle",
+        "active": True,
+        "distance_m": 0.184,
+        "fov_rad": 0.26,
+        "state": "CONFIRMED",
+        "retained_obstacles": [],
+    }
+
+
+def test_cleared_low_obstacle_does_not_keep_old_distance():
+    payload = parse_low_obstacle_observation(
+        '{"active":false,"distance_m":0.18,"fov_rad":0.26,'
+        '"state":"CLEAR"}')
+
+    assert payload == {
+        "type": "low_obstacle",
+        "active": False,
+        "distance_m": None,
+        "fov_rad": None,
+        "state": "CLEAR",
+        "retained_obstacles": [],
+    }
+
+
+def test_retained_low_obstacle_cones_and_overlap_are_forwarded():
+    payload = parse_low_obstacle_observation(
+        '{"active":false,"distance_m":null,"fov_rad":0.26,'
+        '"state":"CLEAR","retained_obstacles":['
+        '{"observations":['
+        '{"x":0.1234,"y":-0.4567,"yaw":0.12,'
+        '"range_m":0.24,"fov_rad":0.26}],'
+        '"estimate":{"x":0.33,"y":0.44,"radius_m":0.035}},'
+        '{"observations":[{"x":"bad"}],"estimate":null}]}')
+
+    assert payload == {
+        "type": "low_obstacle",
+        "active": False,
+        "distance_m": None,
+        "fov_rad": None,
+        "state": "CLEAR",
+        "retained_obstacles": [{
+            "observations": [{
+                "x": 0.123,
+                "y": -0.457,
+                "yaw": 0.12,
+                "range_m": 0.24,
+                "fov_rad": 0.26,
+            }],
+            "estimate": {"x": 0.33, "y": 0.44, "radius_m": 0.035},
+        }],
     }

@@ -109,7 +109,11 @@ DEFAULT_NAVIGATION_SPEED_MPS = 0.20
 MIN_NAVIGATION_SPEED_MPS = 0.05
 MAX_NAVIGATION_SPEED_MPS = 0.25
 NAVIGATION_SPEED_STEP_MPS = 0.01
-LOW_OBSTACLE_MODES = frozenset({"disabled", "sidestep"})
+LOW_OBSTACLE_MODES = frozenset({"disabled"})
+LOW_OBSTACLE_STATES = frozenset({
+    "STARTING", "DISABLED", "CLEAR", "UNCERTAIN", "CONFIRMED", "SLOW",
+    "FORWARD_BLOCKED", "STALE_RANGE", "STALE_LIDAR",
+})
 
 
 def parse_navigation_speed(argument: str) -> float | None:
@@ -130,8 +134,14 @@ def parse_navigation_speed(argument: str) -> float | None:
 
 
 def parse_low_obstacle_mode(argument: str) -> str | None:
-    """관제에서 선택 가능한 구현된 전략만 통과시킨다."""
+    """폐기된 목표 취소형 sidestep이 다시 켜지지 않도록 막는다."""
     return argument if argument in LOW_OBSTACLE_MODES else None
+
+
+def parse_low_obstacle_state(argument: str) -> str | None:
+    """융합 노드가 정의한 상태만 heartbeat에 싣는다."""
+    normalized = argument.strip().upper()
+    return normalized if normalized in LOW_OBSTACLE_STATES else None
 
 
 def matches_guided_patient(
@@ -478,6 +488,9 @@ class EventGateway(Node):
         self.create_subscription(
             Bool, "/fire_evac/alarm_active", self._on_fire_alarm_active, state_qos)
         self.create_subscription(String, "/mode", self._on_mode, state_qos)
+        self.create_subscription(
+            String, "/low_obstacle/state", self._on_low_obstacle_state,
+            state_qos)
 
         # 토픽 주기 감시 (§7.2). 구독 콜백은 시각만 갱신하고 메시지는 안 본다.
         watched, malformed = topic_watch.parse_watch_spec(
@@ -540,6 +553,7 @@ class EventGateway(Node):
         self._default_low_obstacle_mode = (
             parse_low_obstacle_mode(configured_low_obstacle_mode) or "disabled")
         self._low_obstacle_mode = self._default_low_obstacle_mode
+        self._low_obstacle_state = None
 
         # 인벤토리 수집 상태.
         #
@@ -750,6 +764,11 @@ class EventGateway(Node):
 
     def _on_mode(self, msg: String) -> None:
         self._mode = msg.data.strip().lower()
+
+    def _on_low_obstacle_state(self, msg: String) -> None:
+        state = parse_low_obstacle_state(msg.data)
+        if state is not None:
+            self._low_obstacle_state = state
 
     def _on_fire_alarm_active(self, msg: Bool) -> None:
         self._fire_alarm_active = bool(msg.data)
@@ -1015,6 +1034,7 @@ class EventGateway(Node):
                 "returning_to_dock": self._returning_to_dock,
                 "navigation_speed_mps": self._navigation_speed_mps,
                 "low_obstacle_mode": self._low_obstacle_mode,
+                "low_obstacle_state": self._low_obstacle_state,
                 "guide_robot_state": self._guide_robot_state,
                 "guide_session_state": self._guide_session_state,
                 "inventory_hash": self._inventory_hash,

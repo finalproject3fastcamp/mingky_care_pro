@@ -46,10 +46,14 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 import { getQrObservation } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { MapRearCam } from './MapRearCam'
-import { mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
+import { FIT, mapToModel, mapYawToModel, modelToMap, modelYawToMap } from './mapFrame'
 import { SIGNS } from './mapSigns'
-import type { QrObservation } from '../types/monitoring'
-import type { DiagLayers, RobotPose } from '../lib/useTeleopSocket'
+import type { LowObstacleState, QrObservation } from '../types/monitoring'
+import type {
+  DiagLayers,
+  LowObstacleObservation,
+  RobotPose,
+} from '../lib/useTeleopSocket'
 import './HospitalMap3D.css'
 
 export interface WaypointMarker {
@@ -128,6 +132,10 @@ export interface HospitalMap3DProps extends DiagLayers {
    * 나쁘다.**
    */
   paused?: boolean
+  /** 전방 초음파/LiDAR 저상 장애물 상태머신의 현재 상태. */
+  lowObstacleState?: LowObstacleState | null
+  /** 실시간 조작 소켓으로 받는 로봇 전방 저상 장애물 추정 영역. */
+  lowObstacle?: LowObstacleObservation | null
 }
 
 type MapState = 'idle' | 'escort' | 'slow' | 'waiting' | 'returning' | 'estop'
@@ -170,6 +178,21 @@ const MAP_STATE: Record<
   waiting: { text: '기다리는 중', tone: 'wait', pulseMs: 2000, ring: false },
   returning: { text: '충전소로 복귀 중', tone: 'wait', pulseMs: null, ring: true },
   estop: { text: '비상정지', tone: 'alarm', pulseMs: 500, ring: false },
+}
+
+const LOW_OBSTACLE_DISPLAY: Record<
+  LowObstacleState,
+  { text: string; tone: 'normal' | 'wait' | 'slow' | 'alarm' | 'muted' }
+> = {
+  STARTING: { text: '저상 감시 준비 중', tone: 'muted' },
+  DISABLED: { text: '저상 감지 꺼짐', tone: 'muted' },
+  CLEAR: { text: '저상 감시 정상', tone: 'normal' },
+  UNCERTAIN: { text: '낮은 장애물 확인 중', tone: 'wait' },
+  CONFIRMED: { text: '낮은 장애물 감지', tone: 'wait' },
+  SLOW: { text: '저상 장애물 감속 회피', tone: 'slow' },
+  FORWARD_BLOCKED: { text: '전방 저상 장애물 · 이동 제한', tone: 'alarm' },
+  STALE_RANGE: { text: '초음파 센서 확인 필요', tone: 'muted' },
+  STALE_LIDAR: { text: 'LiDAR 연결 확인 필요', tone: 'muted' },
 }
 
 interface LabelHandle {
@@ -320,6 +343,11 @@ interface Handles {
   particles: THREE.Points
   plan: Line2
   recoveryPlan: Line2
+  lowObstacle: THREE.Group
+  lowObstacleFan: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
+  lowObstaclePoint: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
+  retainedLowObstacleCones: THREE.InstancedMesh
+  retainedLowObstacles: THREE.InstancedMesh
   waypoints: THREE.Group
   invalidate: () => void
   resetView: () => void
@@ -355,6 +383,8 @@ export function HospitalMap3D({
   camera = 'rear',
   waitLimitSec = 20,
   paused = false,
+  lowObstacleState = null,
+  lowObstacle = null,
 }: HospitalMap3DProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const labelHostRef = useRef<HTMLDivElement | null>(null)
@@ -489,6 +519,75 @@ export function HospitalMap3D({
     contact.position.y = 0.002
     contact.renderOrder = 3
     robot.add(contact)
+
+    // 초음파에는 좌우 각도가 없으므로 장애물을 점으로 단정하지 않는다.
+    // 센서가 실제로 말할 수 있는 전방 부채꼴과 추정 거리만 표시한다.
+    const lowObstacleGroup = new THREE.Group()
+    const lowObstacleMat = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.38,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    })
+    const lowObstacleFan = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 32, -0.13, 0.26),
+      lowObstacleMat,
+    )
+    lowObstacleFan.rotation.x = -Math.PI / 2
+    lowObstacleFan.position.y = 0.024
+    lowObstacleFan.renderOrder = 7
+    lowObstacleGroup.add(lowObstacleFan)
+    const lowObstaclePoint = new THREE.Mesh(
+      new THREE.SphereGeometry(0.024, 16, 10),
+      lowObstacleMat.clone(),
+    )
+    lowObstaclePoint.position.y = 0.04
+    lowObstaclePoint.renderOrder = 8
+    lowObstacleGroup.add(lowObstaclePoint)
+    // URDF의 ultrasonic_link x=0.0267m를 모델 좌표계 배율로 옮긴다.
+    lowObstacleGroup.position.x = 0.0267 / FIT.scale
+    lowObstacleGroup.visible = false
+    robot.add(lowObstacleGroup)
+
+    // map에 고정된 초음파 관측도 점으로 단정하지 않고 부채꼴로 표시한다.
+    // 최대 32군집 x 3관측이며 InstancedMesh 하나를 재사용해 draw call과 GC를
+    // 늘리지 않는다. 겹치는 영역은 투명도가 누적되어 자연스럽게 진해진다.
+    const retainedLowObstacleCones = new THREE.InstancedMesh(
+      new THREE.CircleGeometry(1, 20, -0.13, 0.26),
+      new THREE.MeshBasicMaterial({
+        color: 0xf59e0b,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+      96,
+    )
+    retainedLowObstacleCones.count = 0
+    retainedLowObstacleCones.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    retainedLowObstacleCones.renderOrder = 8
+    scene.add(retainedLowObstacleCones)
+
+    // 서로 다른 자세의 관측이 실제로 겹칠 때만 후보 영역 고리를 그린다.
+    const retainedLowObstacles = new THREE.InstancedMesh(
+      new THREE.RingGeometry(0.026, 0.047, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xf97316,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      }),
+      32,
+    )
+    retainedLowObstacles.count = 0
+    retainedLowObstacles.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    retainedLowObstacles.renderOrder = 9
+    scene.add(retainedLowObstacles)
 
     /**
      * 로봇 아래에서 번지는 원. 어제 2D 지도에서 쓰던 것과 같은 박동이다 —
@@ -1011,6 +1110,11 @@ export function HospitalMap3D({
       particles: particlePts,
       plan: planLine,
       recoveryPlan: recoveryPlanLine,
+      lowObstacle: lowObstacleGroup,
+      lowObstacleFan,
+      lowObstaclePoint,
+      retainedLowObstacleCones,
+      retainedLowObstacles,
       waypoints: wpGroup,
       invalidate,
       resetView,
@@ -1083,6 +1187,76 @@ export function HospitalMap3D({
     }
     h.invalidate()
   }, [pose, estop, robotReady])
+
+  useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const active = Boolean(
+      pose && lowObstacle?.active &&
+      typeof lowObstacle.distance === 'number' &&
+      typeof lowObstacle.fov === 'number',
+    )
+    h.lowObstacle.visible = active
+    if (active && lowObstacle?.distance != null && lowObstacle.fov != null) {
+      const radius = THREE.MathUtils.clamp(lowObstacle.distance, 0.03, 0.50) / FIT.scale
+      const fov = THREE.MathUtils.clamp(lowObstacle.fov, 0.10, Math.PI / 2)
+      const previousFov = Number(h.lowObstacleFan.userData.fov)
+      if (!Number.isFinite(previousFov) || Math.abs(previousFov - fov) > 0.001) {
+        h.lowObstacleFan.geometry.dispose()
+        h.lowObstacleFan.geometry = new THREE.CircleGeometry(
+          1, 32, -fov / 2, fov)
+        h.lowObstacleFan.userData.fov = fov
+      }
+      h.lowObstacleFan.scale.set(radius, radius, 1)
+      h.lowObstaclePoint.position.x = radius
+      const alarm = lowObstacle.state === 'FORWARD_BLOCKED'
+      const color = alarm ? 0xef4444 : 0xf59e0b
+      h.lowObstacleFan.material.color.setHex(color)
+      h.lowObstaclePoint.material.color.setHex(color)
+    }
+    h.invalidate()
+  }, [lowObstacle, pose, robotReady])
+
+  useEffect(() => {
+    const h = handles.current
+    if (!h) return
+    const retained = lowObstacle?.retained ?? []
+    const marker = new THREE.Object3D()
+    const flatCones = retained.slice(0, 32).flatMap(
+      (cluster) => cluster.observations.slice(0, 3),
+    ).slice(0, 96)
+    const up = new THREE.Vector3(0, 1, 0)
+    const flatten = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    flatCones.forEach((cone, index) => {
+      const m = mapToModel(cone.x, cone.y)
+      marker.position.set(m.u, 0.021, -m.v)
+      marker.quaternion.setFromAxisAngle(up, mapYawToModel(cone.yaw))
+      marker.quaternion.multiply(flatten)
+      const radius = THREE.MathUtils.clamp(cone.range, 0.03, 0.50) / FIT.scale
+      marker.scale.set(radius, radius, 1)
+      marker.updateMatrix()
+      h.retainedLowObstacleCones.setMatrixAt(index, marker.matrix)
+    })
+    h.retainedLowObstacleCones.count = flatCones.length
+    h.retainedLowObstacleCones.instanceMatrix.needsUpdate = true
+
+    const estimates = retained.slice(0, 32).flatMap(
+      (cluster) => cluster.estimate ? [cluster.estimate] : [],
+    )
+    estimates.forEach((point, index) => {
+      const m = mapToModel(point.x, point.y)
+      marker.position.set(m.u, 0.028, -m.v)
+      marker.rotation.set(-Math.PI / 2, 0, 0)
+      const scale = THREE.MathUtils.clamp(point.radius / 0.04, 0.65, 2.0)
+      marker.scale.set(scale, scale, scale)
+      marker.updateMatrix()
+      h.retainedLowObstacles.setMatrixAt(index, marker.matrix)
+    })
+    h.retainedLowObstacles.count = estimates.length
+    h.retainedLowObstacles.instanceMatrix.needsUpdate = true
+    h.invalidate()
+  }, [lowObstacle?.retained, robotReady])
 
   // ------------------------------------------------------------- 추종 상태
   /**
@@ -1491,6 +1665,15 @@ export function HospitalMap3D({
             </span>
           )}
         </span>
+        {lowObstacleState && (
+          <span
+            className={`map3d__obstacle map3d__obstacle--${LOW_OBSTACLE_DISPLAY[lowObstacleState].tone}`}
+            role="status"
+          >
+            <i aria-hidden="true" />
+            {LOW_OBSTACLE_DISPLAY[lowObstacleState].text}
+          </span>
+        )}
         {pose ? (
           <span className="robot-map__coord">
             x {pose.x.toFixed(2)} · y {pose.y.toFixed(2)} ·{' '}

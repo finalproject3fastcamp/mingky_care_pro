@@ -181,6 +181,29 @@ def test_test_metadata_does_not_replace_ros_context(manager):
     assert node._test_context is None
 
 
+def test_low_obstacle_observation_controls_forward_recovery_lock(manager):
+    node, _ = manager
+
+    node._on_low_obstacle_observation(String(data='{"active": true}'))
+    assert node._low_obstacle_active is True
+
+    node._on_low_obstacle_observation(String(data='{"active": false}'))
+    assert node._low_obstacle_active is False
+
+    node._on_low_obstacle_observation(String(
+        data='{"active": false, "retained_active": true}'))
+    assert node._low_obstacle_active is True
+
+
+def test_invalid_low_obstacle_observation_preserves_last_state(manager):
+    node, _ = manager
+    node._low_obstacle_active = True
+
+    node._on_low_obstacle_observation(String(data='{invalid'))
+
+    assert node._low_obstacle_active is True
+
+
 def test_temporary_pose_starts_one_nav2_goal(manager):
     node, published = manager
 

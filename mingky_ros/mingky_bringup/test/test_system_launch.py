@@ -47,9 +47,15 @@ def test_private_runtime_switch_is_ordered_and_observable() -> None:
     assert "grep -Eq '/home/pinky/[^/]+/mingky_care_pro'" in script
     assert 'wait_for_topic "$validation_repo" /mode 20' in script
     assert 'wait_for_topic "$validation_repo" /guide_manager/state 60' in script
+    assert 'ros2 topic type "$topic"' in script
+    assert 'ros2 topic echo "$topic" "$topic_type" --once' in script
     assert 'transition_active_units "$private_repo"' in script
     assert 'transition_active_units "$public_repo"' in script
     assert r'robot_id:=\${MINGKY_ROBOT_ID}' in script
+    assert (
+        r'low_obstacle_fusion_enabled:='
+        r'\${MINGKY_LOW_OBSTACLE_FUSION_ENABLED:-true}' in script
+    )
     assert 'verify_private_exec_paths' in script
 
 
@@ -197,7 +203,7 @@ def test_adaptive_recovery_is_the_integrated_default() -> None:
             '$(var recovery_retry_delay_sec)')
 
 
-def test_low_obstacle_sidestep_is_opt_in() -> None:
+def test_legacy_low_obstacle_sidestep_cannot_be_enabled() -> None:
     root = _root()
 
     assert _argument(root, 'low_obstacle_mode').get('default') == 'disabled'
@@ -209,7 +215,7 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
         item.get('name'): item.get('value')
         for item in guide_manager.findall('param')
     }
-    assert params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+    assert params['low_obstacle_mode'] == 'disabled'
 
     navigation_manager = next(
         item for item in root.findall('node')
@@ -219,7 +225,7 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
         item.get('name'): item.get('value')
         for item in navigation_manager.findall('param')
     }
-    assert navigation_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+    assert navigation_params['low_obstacle_mode'] == 'disabled'
 
     event_gateway = next(
         item for item in root.findall('node')
@@ -229,12 +235,20 @@ def test_low_obstacle_sidestep_is_opt_in() -> None:
         item.get('name'): item.get('value')
         for item in event_gateway.findall('param')
     }
-    assert gateway_params['low_obstacle_mode'] == '$(var low_obstacle_mode)'
+    assert gateway_params['low_obstacle_mode'] == 'disabled'
 
     unit = ROBOT_SYSTEMD_UNIT.read_text(encoding='utf-8')
+    private_runtime = PRIVATE_RUNTIME_SCRIPT.read_text(encoding='utf-8')
     env_example = ROBOT_ENV_EXAMPLE.read_text(encoding='utf-8')
-    assert 'low_obstacle_mode:=${MINGKY_LOW_OBSTACLE_MODE:-disabled}' in unit
-    assert 'MINGKY_LOW_OBSTACLE_MODE=disabled' in env_example
+    assert 'low_obstacle_mode:=disabled' in unit
+    assert 'low_obstacle_mode:=disabled' in private_runtime
+    assert 'MINGKY_LOW_OBSTACLE_MODE' not in private_runtime
+    assert 'MINGKY_LOW_OBSTACLE_MODE=' not in env_example
+    assert (
+        'low_obstacle_fusion_enabled:='
+        '${MINGKY_LOW_OBSTACLE_FUSION_ENABLED:-true}' in unit
+    )
+    assert 'MINGKY_LOW_OBSTACLE_FUSION_ENABLED=true' in env_example
 
 
 def test_patient_distance_guidance_is_enabled_for_test() -> None:
@@ -452,6 +466,9 @@ def test_systemd_owned_publishers_are_not_duplicated() -> None:
 def test_nav2_and_teleop_are_arbitrated_before_safety_gate() -> None:
     root = _root()
 
+    assert _argument(
+        root, 'low_obstacle_fusion_enabled').get('default') == 'true'
+
     navigation = next(
         item for item in root.findall('include')
         if item.get('file', '').endswith('/launch/bringup_launch.xml')
@@ -468,6 +485,26 @@ def test_nav2_and_teleop_are_arbitrated_before_safety_gate() -> None:
     }
     assert 'twist_mux.launch.py' in includes
     assert 'teleop.launch.py' not in includes
+    twist_mux_args = {
+        item.get('name'): item.get('value')
+        for item in includes['twist_mux.launch.py'].findall('arg')
+    }
+    assert twist_mux_args['output_topic'] == 'cmd_vel_low_obstacle_input'
+
+    low_obstacle = next(
+        item for item in root.findall('node')
+        if item.get('name') == 'low_obstacle_supervisor'
+    )
+    assert low_obstacle.get('pkg') == 'mingky_low_obstacle'
+    low_obstacle_params = {
+        item.get('name'): item.get('value')
+        for item in low_obstacle.findall('param')
+    }
+    assert low_obstacle_params['cmd_vel_input_topic'] == (
+        'cmd_vel_low_obstacle_input')
+    assert low_obstacle_params['cmd_vel_output_topic'] == 'cmd_vel_safety_input'
+    assert low_obstacle_params['enabled'] == (
+        '$(var low_obstacle_fusion_enabled)')
 
     emergency_stop = next(
         item for item in root.findall('node')

@@ -12,8 +12,10 @@
     <arg name="planner_mode" default="smac2d"/>
     <!-- 장애물이 사라진 뒤 거의 즉시 최신 LiDAR로 다시 판단한다. -->
     <arg name="recovery_retry_delay_sec" default="0.3"/>
-    <!-- 실로봇 검증 전까지 기존 주행을 유지한다. 지원값: disabled, sidestep -->
+    <!-- 호환성을 위해 인자는 유지하지만 목표 취소형 sidestep은 폐기되어 무시한다. -->
     <arg name="low_obstacle_mode" default="disabled"/>
+    <!-- 기존 목표 취소형 sidestep과 독립된 local costmap 기반 저상 장애물 대응. -->
+    <arg name="low_obstacle_fusion_enabled" default="true"/>
     <arg name="backend_url" default="http://192.168.0.10:8000"/>
 
     <arg name="start_robot_base" default="true"/>
@@ -89,7 +91,20 @@
 
     <!-- 자동주행과 수동조작 중 하나만 안전 게이트로 전달한다. 원격 조작의
          mode_manager와 teleop_limiter는 fg-teleop.service가 상시 실행한다. -->
-    <include file="$(find-pkg-share mingky_bringup)/launch/twist_mux.launch.py"/>
+    <include file="$(find-pkg-share mingky_bringup)/launch/twist_mux.launch.py">
+        <!-- 저상 장애물 감독을 통과한 뒤 기존 비상정지 단일 게이트로 보낸다. -->
+        <arg name="output_topic" value="cmd_vel_low_obstacle_input"/>
+    </include>
+
+    <!-- 낮은 물체는 목표를 즉시 취소하지 않고 Local RangeSensorLayer와 MPPI가
+         먼저 피한다. 7cm 이내의 반복 관측에서만 전진 성분을 0으로 제한하며,
+         제자리 회전과 안전한 후퇴 판단은 계속 허용한다. -->
+    <node pkg="mingky_low_obstacle" exec="low_obstacle_supervisor"
+          name="low_obstacle_supervisor" output="screen">
+        <param name="enabled" value="$(var low_obstacle_fusion_enabled)" type="bool"/>
+        <param name="cmd_vel_input_topic" value="cmd_vel_low_obstacle_input"/>
+        <param name="cmd_vel_output_topic" value="cmd_vel_safety_input"/>
+    </node>
 
     <!-- 환자 카드 인식은 안내 세션의 기본 입력이다. 카메라가 없는 개발 PC나
          Nav2 단독 시험에서는 start_qr_reader:=false 로 끈다. -->
@@ -164,7 +179,7 @@
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
         <param name="recovery_retry_delay_sec"
                value="$(var recovery_retry_delay_sec)"/>
-        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="disabled" type="str"/>
         <param name="patient_follow_enabled"
                value="$(var start_patient_follow)" type="bool"/>
         <param name="patient_follow_timeout_sec"
@@ -223,7 +238,7 @@
         <param name="planner_mode" value="$(var planner_mode)" type="str"/>
         <param name="recovery_retry_delay_sec"
                value="$(var recovery_retry_delay_sec)"/>
-        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="disabled" type="str"/>
     </node>
 
     <node pkg="mingky_lcd_status" exec="lcd_status"
@@ -244,7 +259,7 @@
           name="event_gateway" output="screen" if="$(var start_event_gateway)">
         <param name="robot_id" value="$(var robot_id)"/>
         <param name="backend_url" value="$(var backend_url)"/>
-        <param name="low_obstacle_mode" value="$(var low_obstacle_mode)" type="str"/>
+        <param name="low_obstacle_mode" value="disabled" type="str"/>
         <!-- 형상 패널이 읽는 이름. 지문은 /map 에서 직접 뜬다. -->
         <param name="map_name" value="$(var map_name)"/>
     </node>

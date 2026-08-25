@@ -99,45 +99,48 @@ battery
 `start_event_gateway:=true`로 실행합니다. 다른 맵을 쓸 때는 같은 맵에 대응하는
 `map`, `map_name`, waypoint 파일을 함께 바꿔야 합니다.
 
-### 저상 장애물 옆걸음 회피
+### 저상 장애물 대응
 
-라이다가 보지 못하고 `/us_sensor/range` 초음파에만 잡히는 낮은 장애물은
-선택적으로 직접 옆걸음 회피할 수 있습니다. 기본값은 기존 Nav2 동작을 보존하는
-`disabled`이며, 실제 로봇에서 기능을 시험할 때만 `sidestep`을 명시합니다.
-초음파 감지 임계값은 10cm 미만이고 2회 연속 확인해야 회피를 시작합니다. 회피
-이동 중 거리가 4cm 미만으로 줄어들면 안전을 위해 현재 동작을 즉시 취소합니다.
+목표를 취소한 뒤 직접 옆걸음을 수행하던 `sidestep` 실험 모드는 폐기했습니다.
+이 모드는 Nav2가 이미 만든 우회 경로까지 취소해 Waypoint 시험과 안내 주행을
+오류 코드 `-10`으로 끝낼 수 있었기 때문입니다. 이전 배포 파일과의 호환성을 위해
+`low_obstacle_mode` 이름은 남아 있지만 운영 launch, 관제 명령, ROS 파라미터
+변경 모두 `disabled`만 허용합니다. `/etc/mingky/robot.env`에 과거의
+`MINGKY_LOW_OBSTACLE_MODE=sidestep`이 남아 있어도 다시 활성화되지 않습니다.
+
+대신 `low_obstacle_fusion_enabled:=true`가 기본 적용됩니다. 전방 초음파를
+median 3개와 최근 3개 중 2개로 확인하고, 같은 부채꼴의 LiDAR보다 물체가 충분히
+가까울 때만 `/low_obstacle/range`에 발행합니다. 확정 장애물은 로봇 footprint와
+inflation 바깥인 최소 20cm에 투영해 local·global costmap에 함께 추가됩니다.
+MPPI가 가까이 피하지 못하면 Smac2D가 복도 단위 우회 경로를 다시 만들며,
+PGM/YAML 지도에는 저장되지 않습니다. 같은 거리에서 LiDAR도 물체를 보고 있으면
+벽으로 판단해 저상 장애물로 확정하지 않습니다.
+좌우 90° LiDAR 최솟값은 옆 벽 문맥을 관제에 설명하기 위한 진단값이며, 그
+값만으로 실제 저상 장애물을 무시하지 않습니다. costmap 투영 거리는 실제
+정지 판단과 분리되어 있고, 전진 접근 중에는 표식을
+유지하고, 로봇이 옆·뒤로 10cm 이동하거나 20도 회전해 회피가 확인되면 1.5초
+유예 후 과거 부채꼴을 local·global costmap에서 지웁니다. 재검출되면 삭제를
+취소해 우회 경로가 출렁이지 않게 합니다. 같은 수명의 실시간
+부채꼴이 엔지니어·의료진 3D 지도에도 표시됩니다.
+15cm 이내에서는 전진 상한을 0.08m/s부터 4cm까지 거리에 비례해 낮추고,
+저상 장애물 확정 후 4cm에서 전진 성분을 0으로 만듭니다. 회전과 후퇴는 기존
+Nav2 판단을 유지합니다.
+관제는 이 자동 판정 상태만 표시하며 알고리즘을 선택하지 않습니다.
+
+20cm 미만 값은 footprint와 inflation 안쪽을 lethal cost로 만들어 모든
+MPPI·Smac2D 복구 경로의 시작점을 막을 수 있으므로 costmap에는 안전한 최솟값
+20cm로 투영해 넣습니다.
+기존 cone을 지워 planner가 장애물을 놓치는 문제를 피하면서, 실제 초음파
+거리로 전진 속도를 제한해 회전과 Adaptive Recovery 공간을 남깁니다.
+
+센서 또는 융합 노드가 끊겨도 기존 LiDAR costmap을 `not current`로 만들지
+않습니다. 대신 `/low_obstacle/state`가 `STALE_RANGE` 또는 `STALE_LIDAR`를
+보고합니다. 실로봇 비교 시험에서만 다음과 같이 끌 수 있습니다.
 
 ```bash
 ros2 launch mingky_bringup mingky_system.launch.xml \
-  low_obstacle_mode:=sidestep
+  low_obstacle_fusion_enabled:=false
 ```
-
-운영 systemd에서는 `/etc/mingky/robot.env`에 다음 값을 넣고 통합 시스템을
-재시작합니다.
-
-```bash
-MINGKY_LOW_OBSTACLE_MODE=sidestep
-```
-
-안내 주행 또는 Waypoint 시험 주행이 시작되기 전에는 재시작 없이도 모드를 바꿀
-수 있습니다. 진행 중인 주행이나 회피가 있으면 변경 요청을 거부합니다.
-
-```bash
-ros2 param set /guide_manager low_obstacle_mode sidestep
-ros2 param set /navigation_manager low_obstacle_mode sidestep
-ros2 param set /guide_manager low_obstacle_mode disabled
-ros2 param set /navigation_manager low_obstacle_mode disabled
-```
-
-운영에서는 관제의 **로봇 시스템 관리 → 저상 장애물 대응**에서 같은 값을
-선택할 수 있습니다. 주행이 시작되기 전에만 변경되며, 화면의 현재 적용값은 로봇
-게이트웨이가 `guide_manager`와 `navigation_manager` 양쪽의 파라미터 적용 성공을
-확인한 뒤 보고합니다.
-
-`sidestep`은 안내 목표나 Waypoint 시험 목표를 취소하고 좌우 탐색과 단계 전진을
-완료한 뒤 원래 목표를 다시 보냅니다. 일반 라이다 장애물은 기존 Nav2에 맡기며,
-LiDAR가 오래됐거나 초음파가 끊기면 직접 회피를 시작하지 않습니다.
-`RangeSensorLayer` 방식은 넓은 환경에서 별도 검증한 뒤 후속 모드로 추가합니다.
 
 카메라가 없는 개발 PC 또는 Nav2 단독 시험에서는 QR Reader를 끕니다. USB
 카메라로 QR을 읽을 때는 소스만 바꿉니다.
@@ -148,9 +151,10 @@ ros2 launch mingky_bringup mingky_system.launch.xml qr_source:=usb
 ```
 
 Nav2의 `cmd_vel_smoothed`와 원격 조작의 `cmd_vel_teleop`은 `twist_mux`에서
-중재된 뒤 `cmd_vel_safety_input`으로 연결됩니다. 실제 `/cmd_vel`은 안전
-게이트만 발행합니다. 일반 운영에서 `pinky_navigation bringup_launch.xml`을 직접
-실행하면 이 연결을 우회하므로 통합 launch를 사용하세요.
+중재된 뒤 저상 장애물 감독을 거쳐 `cmd_vel_safety_input`으로 연결됩니다.
+실제 `/cmd_vel`은 기존 비상정지 안전 게이트만 발행합니다. 일반 운영에서
+`pinky_navigation bringup_launch.xml`을 직접 실행하면 이 연결을 우회하므로
+통합 launch를 사용하세요.
 
 원격 조작의 `teleop_bridge`는 `mingky-teleop-bridge.service`,
 `mode_manager`와 `teleop_limiter`는 `fg-teleop.service`가 상시 실행합니다.

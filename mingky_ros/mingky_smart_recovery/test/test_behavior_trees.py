@@ -38,7 +38,37 @@ def test_smac_tree_selects_smac_planner() -> None:
 
     assert selector is not None
     assert selector.attrib['default_planner'] == 'Smac2D'
-    assert root.find('.//RateController').attrib['hz'] == '1.0'
+
+
+def test_replanning_validates_only_the_untraveled_path() -> None:
+    for name in (
+            'navigate_no_recovery_navfn.xml',
+            'navigate_no_recovery_smac2d.xml',
+            'navigate_recovery_smac2d.xml'):
+        root = _root(name)
+        controller = root.find('.//RateController')
+        planner_fallback = controller.find(
+            './RecoveryNode[@name="ComputePathToPose"]/Fallback')
+
+        assert controller is not None
+        assert controller.attrib == {'hz': '1.0'}
+        assert root.find('.//DistanceController') is None
+        assert planner_fallback is not None
+        assert planner_fallback.find('.//GlobalUpdatedGoal') is not None
+        assert planner_fallback.find('.//PathExpiringTimer') is None
+        truncator = planner_fallback.find('.//TruncatePathLocal')
+        assert truncator is not None
+        assert truncator.attrib == {
+            'input_path': '{path}',
+            'output_path': '{remaining_path}',
+            'distance_forward': '20.0',
+            'distance_backward': '0.0',
+            'robot_frame': 'base_link',
+            'transform_tolerance': '0.3',
+        }
+        validator = planner_fallback.find('.//IsPathValid')
+        assert validator is not None
+        assert validator.attrib == {'path': '{remaining_path}'}
 
 
 def test_stalled_follow_path_refreshes_costmap_once_before_adaptive_recovery() -> None:
