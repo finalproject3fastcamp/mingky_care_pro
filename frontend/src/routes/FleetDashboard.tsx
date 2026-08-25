@@ -20,6 +20,7 @@
 
 import { useMemo } from 'react'
 
+import { FleetPoseCard } from '../components/FleetPoseCard'
 import { getControlAudit, getRobots, getSloCompletion } from '../lib/api'
 import { usePolling } from '../lib/usePolling'
 import { isMobile, type Robot } from '../types/monitoring'
@@ -270,6 +271,11 @@ export function FleetDashboard() {
 
       {slo.data && <SloPanel slo={slo.data} />}
       {slo.data && <FailedSessions slo={slo.data} />}
+
+      {/* SLO 아래, 로봇 요약 위. 완주율이 나빠졌을 때 가장 먼저 묻는 것이
+          "그때 두 대가 어디 있었나" 이고, 요약의 숫자보다 지도가 먼저
+          답한다. 화면의 주장 순서는 §7.2 를 따른다. */}
+      <FleetPoseCard robots={robotList} />
 
       <RobotSummary robots={robotList} />
 

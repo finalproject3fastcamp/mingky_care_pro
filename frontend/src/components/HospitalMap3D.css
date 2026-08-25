@@ -88,6 +88,43 @@
   outline-offset: 2px;
 }
 
+/*
+ * 로봇 이름표. 병원 안내 글자(.map3d__sign)와 같은 방식으로 3D 위에 띄우되,
+ * 색으로 어느 로봇인지 말해야 해서 테두리를 로봇 색으로 칠한다. 색은
+ * lib/robotColors.ts 가 정본이고 --tag-color 로 들어온다.
+ *
+ * 크기를 em 이 아니라 px 로 고정한다. 안내 글자는 지도가 커지면 같이 커져야
+ * 하지만(건물의 일부다), 이름표는 어느 배율에서도 같은 크기로 읽혀야 한다.
+ */
+.map3d__robot-tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  font-family: 'Pretendard Variable', Pretendard, -apple-system, 'Noto Sans KR', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+  background: rgb(255 255 255 / 92%);
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 2px solid var(--tag-color, #2563eb);
+  box-shadow: 0 2px 6px rgb(20 40 60 / 18%);
+}
+
+/*
+ * 위치를 지금 것으로 볼 수 없을 때. 값을 지우지 않고 흐린다 —
+ * lib/freshness.ts 의 stalenessClass 와 같은 판단이다. 사람은 먼저 읽고
+ * 나중에 의심하므로, 흐려져 있어야 "믿지 마라" 가 말없이 전달된다.
+ */
+.map3d__robot-tag--stale {
+  opacity: 0.72;
+  color: #475569;
+  font-style: italic;
+}
+
 .map3d__loading {
   position: absolute;
   inset: 0;

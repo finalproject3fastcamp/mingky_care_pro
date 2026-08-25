@@ -9,6 +9,7 @@ Pinky(mobile) 2대 + OMX(manipulator) 2대로 구성된 이종 군집의 관제�
 관련 문서 — [`system-communication.md`](system-communication.md)(통신 원칙) ·
 [`infra-setup.md`](infra-setup.md)(인프라) · [`robot-onboarding.md`](robot-onboarding.md)(온보딩) ·
 [`qr-scan-flow.md`](qr-scan-flow.md)(QR 입력) ·
+[`fleet-coordination.md`](fleet-coordination.md)(핑키 2대 동시 운용) ·
 [`../config/event_codes.yaml`](../config/event_codes.yaml)(이벤트 정본)
 
 ---

@@ -20,6 +20,17 @@ export function messageFor(code: string, payload: Record<string, unknown>): stri
         : '환자가 멀어져 현재 위치에서 기다립니다.'
     case 'patient.follow_wait_ended':
       return '환자가 복귀해 안내를 다시 시작합니다.'
+    // 군집 조정. 로봇이 스스로 양보한 것이라 장애가 아니다 — 문구도 그렇게
+    // 읽혀야 한다. "멈춤" 이 아니라 "지나갈 때까지 기다린다" 다.
+    case 'fleet.yield_started':
+      return p.peer
+        ? `${p.peer} 이(가) 좁은 구간을 지날 때까지 기다립니다.`
+        : '다른 로봇이 지날 때까지 기다립니다.'
+    case 'fleet.yield_ended':
+      return p.reason === 'deadman'
+        // 관제와 끊긴 것이라 그냥 '재개' 로 적으면 장애가 묻힌다.
+        ? '관제 조정이 끊겨 스스로 판단해 안내를 계속합니다.'
+        : '길이 비어 안내를 다시 시작합니다.'
     case 'person_follow.state_changed':
       return `환자 추적 상태 변경: ${p.state ?? '알 수 없음'}`
     case 'person_follow.inference_unavailable':

@@ -6,6 +6,7 @@ import type { ControlAuditPage, SloWindow } from '../types/slo'
 import type {
   ActiveSession,
   FleetConfig,
+  FleetCoordination,
   ServoHealth,
   QrObservation,
   MobileRobot,
@@ -55,6 +56,14 @@ export async function getRobots(
 ): Promise<Robot[]> {
   const { data } = await api.get<Robot[]>('/robots', { signal: options.signal })
   return data
+}
+
+export async function getFleetCoordination(
+  options: { signal?: AbortSignal } = {},
+): Promise<FleetCoordination[]> {
+  const { data } = await api.get<{ robots: FleetCoordination[] }>(
+    '/fleet/coordination', { signal: options.signal })
+  return data.robots
 }
 
 export async function getQrObservation(

@@ -81,6 +81,8 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 핵심 운영 문서
 
 - [docs/robot-onboarding.md](docs/robot-onboarding.md) — 로봇을 처음 쓰는 사람이 따라 하는 순서
+- [docs/fleet-coordination.md](docs/fleet-coordination.md) — **핑키 2대를 동시에 돌린다.** 마주침·경로 겹침·검사실 겹침을 어떻게 푸는가
+- [docs/fleet-coordination-field-notes.md](docs/fleet-coordination-field-notes.md) — 그것을 **실제 로봇에 올리면서** 걸린 것들. 워크스페이스 위치, systemd drop-in, 유령 세션, 배터리 오판
 - [tools/fake_robot/README.md](tools/fake_robot/README.md) — **로봇 없이 개발하기.** ROS 없이 HTTP 로 로봇을 흉내내는 하네스
 - [config/event_codes.yaml](config/event_codes.yaml) — 이벤트 코드 정본 (발행 가능한 목록과 payload 형태)
 - [docs/system-communication.md](docs/system-communication.md) — 프론트·백엔드·로봇 통신 원칙과 데이터 흐름

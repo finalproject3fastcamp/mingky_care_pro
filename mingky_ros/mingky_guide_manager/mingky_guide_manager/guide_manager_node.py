@@ -273,6 +273,32 @@ class GuideManager(Node):
         self._patient_wait_cancel_pending = False
         self._patient_resume_pending = False
         self._patient_pause_requested = False
+
+        # 지금 이 로봇을 세워 두고 있는 이유들. 'patient' 는 환자가 뒤처진
+        # 것이고 'fleet' 은 관제가 외길을 아직 못 내준 것이다.
+        #
+        # **집합인 것이 요점이다.** 둘이 동시에 걸릴 수 있고, 한쪽이 풀렸다고
+        # 출발하면 다른 쪽 이유가 그대로인데 움직이게 된다. 비어야 간다.
+        self._hold_sources: set[str] = set()
+
+        # 관제 판정을 마지막으로 받은 시각과 그때의 ttl. 이 시간이 지나도록
+        # 갱신이 없으면 **스스로 푼다** — 서버나 링크가 죽었을 때 안내 중인
+        # 로봇이 영구히 서 있는 것을 막는 유일한 장치다.
+        self._fleet_decision_at = 0.0
+        self._fleet_ttl_sec = 0.0
+        self._fleet_hold_segment = ''
+        self._fleet_hold_peer = ''
+        # 마지막으로 관제에 올린 목표. 같은 값을 반복해 발행하지 않는다.
+        self._fleet_intent_sent: tuple[str, bool] | None = None
+        # 관제가 정해 준 다음 검사실. 검사실이 겹치면 순서가 바뀐다.
+        self._fleet_next_step_order = 0
+        self._fleet_skipped_visit = ''
+        self._fleet_room_blocked_by = ''
+
+        # 끝난 단계들(step_order). 관제가 순서를 바꾸면 진행이 1씩 오르지
+        # 않으므로 세는 대신 **집합으로 들고 있어야** 한다.
+        self._completed_orders: set[int] = set()
+
         # 새 목표가 이전 목표를 선점했을 때 늦게 도착한 콜백이 상태를 되돌리지
         # 못하도록 세대 번호를 붙인다.
         self._nav_generation = 0
@@ -284,6 +310,10 @@ class GuideManager(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
         self.state_pub = self.create_publisher(GuideState, '~/state', state_qos)
+        # 관제 조정층에 올리는 '지금 어디로 가는가'. mingky_fleet_agent 가
+        # 주워서 서버로 보낸다 — 이 노드는 소켓을 모른다.
+        self.fleet_intent_pub = self.create_publisher(
+            String, '~/fleet_intent', state_qos)
         self.navigation_cancel_pub = self.create_publisher(
             Bool, '/navigation_manager/cancel', 10)
         self.obstacle_stop_pub = self.create_publisher(
@@ -334,6 +364,10 @@ class GuideManager(Node):
         # 나중에 그 노드들이 대체하면 이 두 개는 지운다.
         self.create_subscription(String, '~/start_session', self._on_start_session, 10)
 
+        # 관제 조정층의 판정. mingky_fleet_agent 가 흘려준다.
+        self.create_subscription(
+            String, '/fleet/decision', self._on_fleet_decision, state_qos)
+
         # 관제 버튼이 생기기 전에는 ros2 topic pub 으로 같은 명령을 시험한다.
         # session_id 를 함께 받아 오래된 화면의 출발 요청이 새 세션을 움직이지
         # 못하게 한다.
@@ -370,6 +404,9 @@ class GuideManager(Node):
 
         self.create_timer(1.0, self._publish_state)
         self.create_timer(0.5, self._check_patient_follow_timeout)
+        # 관제 판정이 끊겼는지 본다. 여기가 조정층의 fail-open 을 실제로
+        # 성립시키는 지점이다 (_check_fleet_deadman 주석).
+        self.create_timer(0.5, self._check_fleet_deadman)
         self.get_logger().info(
             f'guide_manager 시작 (robot_id={self.robot_id}, '
             f'waypoint {len(self.waypoints)}개, 충전소={self.charging_waypoint}, '
@@ -915,6 +952,10 @@ class GuideManager(Node):
                     f'요청={incoming_session_id}/{incoming_patient_id}')
                 return
             if self.session_state == GuideState.SESSION_IN_ROOM:
+                # 완료 경로는 아래 세션 초기화를 타지 않는다. 이미 진행 중이던
+                # 세션이라 완료 집합이 비어 있을 수 있으므로 여기서 채운다 —
+                # 안 하면 마지막 단계를 끝내고도 세션이 안 끝난다.
+                self._seed_completed_orders(int(msg.current_step_order))
                 self._complete_current_step_from_qr()
             else:
                 self.get_logger().info(
@@ -925,6 +966,8 @@ class GuideManager(Node):
         self.session_id = incoming_session_id
         self.patient_id = incoming_patient_id
         self.session_visits = list(msg.visit_names)
+        self._completed_orders = set()
+        self._seed_completed_orders(int(msg.current_step_order))
         # 0은 백엔드가 "남은 단계 없음"을 나타내는 값이다. 0을 첫 단계로
         # 보정하면 완료된 세션을 재스캔했을 때 첫 검사실로 다시 출발한다.
         self.current_step_order = int(msg.current_step_order)
@@ -949,6 +992,52 @@ class GuideManager(Node):
                 self.session_id,
             )
 
+    def _seed_completed_orders(self, current_step_order: int) -> None:
+        """재스캔으로 되받은 세션의 진행 상황을 채운다.
+
+        `SessionStart` 는 '지금 몇 번째' 만 알려주므로 그 앞은 끝난 것으로 본다.
+        순서를 바꿔 진행하던 세션이면 이 추정이 틀릴 수 있지만, 관제가
+        `next_visit` 으로 정정해 주고 완료 여부의 정본은 DB 에 있다.
+
+        **이미 채워져 있으면 건드리지 않는다.** 진행 중에 다시 부르면 실제로
+        끝낸 단계를 이 추정이 덮어쓴다.
+        """
+        if self._completed_orders:
+            return
+        self._completed_orders = set(range(1, max(1, current_step_order)))
+
+    def _next_step_order(self) -> int:
+        """다음에 갈 단계. **관제가 정해 주면 그것을 따른다.**
+
+        검사실이 겹치면 관제가 순서를 바꾼다 — "X-ray 가 차 있으니 CT 먼저".
+        그 판정은 상대 세션까지 봐야 하는데 로봇은 남의 세션을 모르므로,
+        관제가 정하고 로봇은 따른다.
+
+        관제 값을 **검사하고 쓴다.** 로봇이 방금 끝낸 단계를 서버가 아직 못
+        봤을 수 있고, 그대로 믿으면 방금 마친 방으로 다시 간다. 이미 끝난
+        단계이거나 범위를 벗어나면 버린다.
+
+        관제가 없으면 계획 순서로 떨어진다 — 남은 것 중 가장 이른 단계.
+        이 기능을 붙이기 전 동작과 같다(fail-open).
+        """
+        suggested = self._fleet_next_step_order
+        if (suggested and 1 <= suggested <= len(self.session_visits)
+                and suggested not in self._completed_orders):
+            if suggested != self._planned_next_step_order():
+                self.get_logger().info(
+                    f'관제가 방문 순서를 바꿨습니다: '
+                    f'{self._fleet_skipped_visit!r} 사용 중 → '
+                    f'{self.session_visits[suggested - 1]!r} 먼저')
+            return suggested
+        return self._planned_next_step_order()
+
+    def _planned_next_step_order(self) -> int:
+        """계획 순서대로 남은 것 중 가장 이른 단계."""
+        for order in range(1, len(self.session_visits) + 1):
+            if order not in self._completed_orders:
+                return order
+        return 0
+
     def _complete_current_step_from_qr(self) -> None:
         """waiting spot에서 같은 환자 QR을 현재 검사 완료로 해석한다."""
         if self.robot_state != GuideState.ROBOT_WAITING:
@@ -970,7 +1059,9 @@ class GuideManager(Node):
             self.session_id,
         )
 
-        if completed_order >= len(self.session_visits):
+        self._completed_orders.add(completed_order)
+
+        if len(self._completed_orders) >= len(self.session_visits):
             active_session_id = self.session_id
             self.previous_visit = self.current_visit
             self.current_step_order = 0
@@ -992,7 +1083,7 @@ class GuideManager(Node):
             return
 
         self.previous_visit = self.current_visit
-        self.current_step_order = completed_order + 1
+        self.current_step_order = self._next_step_order()
         self.current_visit = self.session_visits[self.current_step_order - 1]
         waypoint_name = self._visit_waypoint(self.current_visit, 'goal')
         if not waypoint_name:
@@ -1088,14 +1179,135 @@ class GuideManager(Node):
             dock_reason='patient_wait_timeout',
         )
 
+    # ------------------------------------------------------------- 군집 조정
+
+    def _publish_fleet_intent(self) -> None:
+        """지금 어디로 가는지를 관제에 알린다.
+
+        조정층은 위치만으로는 판정할 수 없다 — 두 대가 **어디로 가려는지**를
+        알아야 같은 외길로 향하는지 안다. 이 발행이 없으면 서버의 예약층은
+        있어도 아무 판정을 하지 못한다.
+
+        목표가 없어도(대기·도착) 보낸다. '목표 없음' 역시 판정에 쓰는 사실
+        이고, 안 보내면 서버는 옛 목표를 계속 들고 남의 길을 막는다.
+        """
+        goal = ''
+        if (self._patient_wait_context is not None
+                and not self._patient_wait_context['is_dock']):
+            # 세워 둔 동안에도 원래 가려던 곳을 계속 말한다. 안 그러면 서버가
+            # '목표 없음' 으로 보고 구간을 풀어 상대에게 내주고, 재개할 때
+            # 다시 처음부터 기다리게 된다.
+            goal = self._patient_wait_context['waypoint_name']
+        elif self._active_nav_context is not None:
+            goal = self._active_nav_context['waypoint_name']
+
+        guiding = self.session_state == GuideState.SESSION_GUIDING
+        current = (goal, guiding)
+        if current == self._fleet_intent_sent:
+            return
+        self._fleet_intent_sent = current
+        message = String()
+        message.data = json.dumps(
+            {'goal_waypoint': goal or None, 'guiding': guiding})
+        self.fleet_intent_pub.publish(message)
+
+    def _on_fleet_decision(self, msg: String) -> None:
+        """관제의 판정. `proceed` 하나만 본다.
+
+        서버는 구간 이름으로 무엇을 하라고 지시하지 않는다 — 갈 수 있는지만
+        말하고, 목표를 취소하고 다시 보내는 일은 이 노드가 한다. 주행 상태를
+        소유한 노드가 하나여야 한다는 규칙이다.
+        """
+        try:
+            payload = json.loads(msg.data)
+            proceed = bool(payload['proceed'])
+        except (KeyError, TypeError, ValueError) as exc:
+            self.get_logger().warn(f'군집 판정 형식 오류: {exc}')
+            return
+
+        ttl = payload.get('ttl_sec')
+        self._fleet_decision_at = time.monotonic()
+        # ttl 이 없으면(조정 꺼짐·링크 끊김 통지) 데드맨을 걸지 않는다.
+        self._fleet_ttl_sec = float(ttl) if ttl else 0.0
+
+        self._apply_next_visit(payload.get('next_visit'))
+
+        if proceed:
+            if 'fleet' in self._hold_sources:
+                self._resume_for_patient(
+                    source=str(payload.get('reason') or 'cleared'), hold='fleet')
+            self._fleet_hold_segment = ''
+            self._fleet_hold_peer = ''
+            return
+
+        segments = payload.get('segments') or []
+        self._fleet_hold_segment = str(segments[0]) if segments else ''
+        self._fleet_hold_peer = str(payload.get('blocked_by') or '')
+        self._pause_for_patient(
+            reason=str(payload.get('reason') or 'fleet_yield'),
+            distance=None, source='fleet', hold='fleet')
+
+    def _apply_next_visit(self, payload) -> None:
+        """관제가 정해 준 다음 검사실을 받아 둔다. **여기서 움직이지 않는다.**
+
+        지금 가고 있는 목적지를 중간에 갈아치우면 로봇이 왔다 갔다 하고 환자는
+        무슨 일이 벌어지는지 모른다. 실제로 쓰는 것은 **다음 단계를 고르는
+        순간** 뿐이다 (`_next_step_order`).
+        """
+        if not isinstance(payload, dict):
+            self._fleet_next_step_order = 0
+            self._fleet_skipped_visit = ''
+            self._fleet_room_blocked_by = ''
+            return
+        try:
+            self._fleet_next_step_order = int(payload.get('step_order') or 0)
+        except (TypeError, ValueError):
+            self._fleet_next_step_order = 0
+            return
+        self._fleet_skipped_visit = str(payload.get('skipped_visit') or '')
+        self._fleet_room_blocked_by = str(payload.get('blocked_by') or '')
+
+    def _check_fleet_deadman(self) -> None:
+        """판정이 끊기면 **스스로 푼다.**
+
+        이 타이머가 조정층의 fail-open 을 실제로 성립시킨다. 서버가 죽거나
+        회선이 끊기면 hold 를 풀어 줄 사람이 없고, 그러면 안내 중인 로봇이
+        영구히 서 있는다. 서버 버그 하나가 로봇을 세워 놓는 구조는 안 된다.
+
+        침묵을 '계속 서 있어라' 로 읽지 않는 것이 요점이다. 조정층은
+        안전장치가 아니라 교착 예방층이라, 조정이 사라지면 이 기능을 붙이기
+        전 동작(LiDAR·MPPI)으로 돌아가는 것이 맞다.
+        """
+        if 'fleet' not in self._hold_sources or self._fleet_ttl_sec <= 0.0:
+            return
+        if time.monotonic() - self._fleet_decision_at < self._fleet_ttl_sec:
+            return
+        self.get_logger().warn(
+            f'군집 판정이 {self._fleet_ttl_sec:.1f}초 동안 갱신되지 않아 '
+            '스스로 풀고 주행을 재개합니다.')
+        self._fleet_ttl_sec = 0.0
+        self._resume_for_patient(source='deadman', hold='fleet')
+
     def _pause_for_patient(
             self, *, reason: str, distance: float | None,
-            source: str) -> None:
+            source: str, hold: str = 'patient') -> None:
+        """안내 목표를 취소하고 컨텍스트를 보관한다. 재개는 `_resume_for_patient`.
+
+        `hold` 는 **누가 세우는가** 다. 환자가 뒤처져서(`patient`)와 관제가
+        외길을 못 내줘서(`fleet`)는 사유가 다르지만 하는 일은 같다 — 목표를
+        취소하고 그대로 보관했다가 다시 보낸다. 그래서 기계는 하나를 쓰고
+        이유만 집합으로 센다.
+
+        **비상정지·저전압·화재대피가 이긴다.** 아래 가드가 그 순서를 지킨다 —
+        군집 조정은 그 셋보다 아래이고, 셋 중 하나라도 걸려 있으면 여기서
+        아무것도 하지 않는다.
+        """
         if (self.session_state != GuideState.SESSION_GUIDING
                 or self._battery_alarm
                 or self._emergency_engaged
                 or self._fire_evacuating):
             return
+        self._hold_sources.add(hold)
         if self._patient_wait_context is not None:
             if self._patient_wait_started_at <= 0.0:
                 self._patient_wait_started_at = time.monotonic()
@@ -1122,14 +1334,27 @@ class GuideManager(Node):
         self._active_nav_goal_handle = None
         self._active_nav_result_future = None
         self._active_nav_context = None
-        self.events.publish(
-            'patient.follow_wait_started',
-            {'reason': reason, 'source': source},
-            self.session_id,
-        )
-        self.get_logger().warn(
-            f'환자 대기로 안내 목표를 취소합니다 '
-            f'(distance={distance}, source={source}).')
+        if hold == 'fleet':
+            self.events.publish(
+                'fleet.yield_started',
+                {'segment': self._fleet_hold_segment,
+                 'peer': self._fleet_hold_peer,
+                 'reason': reason},
+                self.session_id,
+            )
+            self.get_logger().warn(
+                f'군집 조정으로 안내 목표를 취소합니다 '
+                f'(segment={self._fleet_hold_segment}, '
+                f'peer={self._fleet_hold_peer}, reason={reason}).')
+        else:
+            self.events.publish(
+                'patient.follow_wait_started',
+                {'reason': reason, 'source': source},
+                self.session_id,
+            )
+            self.get_logger().warn(
+                f'환자 대기로 안내 목표를 취소합니다 '
+                f'(distance={distance}, source={source}).')
         cancel = handle.cancel_goal_async()
         cancel.add_done_callback(
             lambda done: self._on_patient_wait_cancel_response(
@@ -1173,7 +1398,18 @@ class GuideManager(Node):
         if self._patient_resume_pending:
             self._resume_for_patient(source='patient_returned')
 
-    def _resume_for_patient(self, *, source: str) -> None:
+    def _resume_for_patient(self, *, source: str, hold: str = 'patient') -> None:
+        """세운 이유 하나를 지운다. **전부 지워져야 출발한다.**
+
+        환자 대기와 군집 조정이 동시에 걸릴 수 있다. 한쪽만 풀렸다고 출발하면
+        다른 쪽 이유가 그대로인데 움직이게 되므로, 집합이 빌 때까지 서 있는다.
+        """
+        self._hold_sources.discard(hold)
+        if self._hold_sources:
+            self.get_logger().info(
+                f'{hold} 해제됐지만 아직 {sorted(self._hold_sources)} 때문에 '
+                '서 있습니다.')
+            return
         self._patient_wait_started_at = 0.0
         context = self._patient_wait_context
         if context is None:
@@ -1193,10 +1429,16 @@ class GuideManager(Node):
         self._patient_wait_context = None
         self._patient_resume_pending = False
         self.robot_state = GuideState.ROBOT_MOVING
-        self.events.publish(
-            'patient.follow_wait_ended', {'source': source}, self.session_id)
-        self.get_logger().info(
-            '환자가 복귀해 원래 안내 목표를 다시 전송합니다.')
+        if hold == 'fleet':
+            self.events.publish(
+                'fleet.yield_ended', {'reason': source}, self.session_id)
+            self.get_logger().info(
+                f'군집 조정이 풀려 원래 안내 목표를 다시 전송합니다 ({source}).')
+        else:
+            self.events.publish(
+                'patient.follow_wait_ended', {'source': source}, self.session_id)
+            self.get_logger().info(
+                '환자가 복귀해 원래 안내 목표를 다시 전송합니다.')
         self._send_nav_goal(
             context['waypoint_name'],
             is_dock=context['is_dock'],
@@ -1217,6 +1459,15 @@ class GuideManager(Node):
         self._patient_wait_cancel_pending = False
         self._patient_resume_pending = False
         self._patient_pause_requested = False
+        # 세워 둔 이유도 같이 지운다. 남겨두면 다음 세션이 이전 세션의
+        # 이유 때문에 출발하지 못한다.
+        self._hold_sources.clear()
+        self._fleet_ttl_sec = 0.0
+        self._fleet_hold_segment = ''
+        self._fleet_hold_peer = ''
+        self._fleet_next_step_order = 0
+        self._fleet_skipped_visit = ''
+        self._fleet_room_blocked_by = ''
 
     # ------------------------------------------------------------------ 주행
 
@@ -2198,6 +2449,12 @@ class GuideManager(Node):
     # ------------------------------------------------------------------ 발행
 
     def _publish_state(self):
+        # 목표 보고를 상태 발행에 얹는다. 목표가 바뀌는 지점이 여러 곳
+        # (출발·재개·다음 검사실·충전소 복귀)이라 각각에 호출을 흩어 놓으면
+        # 언젠가 하나를 빠뜨린다. 값이 그대로면 발행하지 않으므로 1Hz 로
+        # 훑어도 토픽이 시끄러워지지 않는다.
+        self._publish_fleet_intent()
+
         msg = GuideState()
         msg.robot_id = self.robot_id
         msg.robot_state = self.robot_state

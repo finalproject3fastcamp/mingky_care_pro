@@ -7,7 +7,7 @@ const HospitalMap3D = lazy(async () => {
   return { default: module.HospitalMap3D }
 })
 
-export type { WaypointMarker } from './HospitalMap3D'
+export type { PeerMarker, WaypointMarker } from './HospitalMap3D'
 
 export function LazyHospitalMap3D(props: HospitalMap3DProps) {
   return (

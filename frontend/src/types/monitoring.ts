@@ -22,6 +22,11 @@ export interface Patient {
 }
 
 export interface SessionStep {
+  /**
+   * 실제로 몇 번째로 방문했는가 (013). 계획 순서(step_order)와 다를 수 있다 —
+   * 검사실이 겹치면 관제가 순서를 바꾼다. null 은 아직 안 간 단계다.
+   */
+  visit_seq?: number | null
   step_order: number
   visit_name: string
   arrived_at: string | null
@@ -326,6 +331,44 @@ export interface FleetConfig {
   robots: RobotConfig[]
   /** 비어 있으면 4대가 같은 형상으로 돌고 있다는 뜻이다. */
   mismatches: ConfigMismatch[]
+}
+
+/**
+ * 로봇 한 대의 마지막 위치. schemas.py 의 `FleetPoseOut` 과 1:1.
+ *
+ * 맵 프레임 기준 미터·라디안이라 `useTeleopSocket` 의 `RobotPose` 와 같은
+ * 좌표계다. 다른 점은 **어느 로봇인지가 값에 붙어 있다는 것** — 조작 소켓은
+ * 로봇 하나에 매여 있어 그 사실이 URL 에 있었다.
+ *
+ * 낡았는지는 여기 없다. `observed_at` 을 `freshnessLevel` 에 넣어 화면이
+ * 판정한다 (backend/app/fleet_pose.py 의 "낡은 위치를 지우지 않는다").
+ */
+/**
+ * 로봇 한 대에 대한 지금의 군집 판정. schemas.py 의 `FleetCoordinationOut` 과 1:1.
+ *
+ * `linked` 가 거짓이면 그 로봇은 판정을 **받지 못하고 있다.** 그때는 화면이
+ * 양보 중이라고 말하면 안 된다 — 서버 혼자 그렇게 생각하고 있을 뿐이고 로봇은
+ * 그냥 달리고 있다.
+ */
+export interface FleetCoordination {
+  robot_id: string
+  linked: boolean
+  proceed: boolean
+  reason: 'peer_in_segment' | 'peer_at_goal' | 'no_route' | null
+  blocked_by: string | null
+  segment: string | null
+  reordered: boolean
+  next_visit: string | null
+  skipped_visit: string | null
+  room_blocked_by: string | null
+}
+
+export interface FleetPose {
+  robot_id: string
+  x: number
+  y: number
+  yaw: number
+  observed_at: string
 }
 
 export interface QrObservation {

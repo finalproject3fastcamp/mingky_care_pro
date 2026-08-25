@@ -23,6 +23,8 @@ COPY database/seeds database/seeds
 # 대시보드가 로봇 위치를 그릴 바탕 지도. Nav2 가 쓰는 것과 같은 파일이다.
 COPY mingky_ros/mingky_bringup/map map
 COPY mingky_ros/mingky_bringup/config/waypoints waypoints
+# 구간 지도 (군집 조정). 없으면 조정이 꺼진 채로 돈다.
+COPY mingky_ros/mingky_bringup/config/fleet fleet
 
 EXPOSE 8000
 
