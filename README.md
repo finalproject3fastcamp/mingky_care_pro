@@ -4,6 +4,8 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 환자의 병원 이용 전 과정을 지원하는 AI 기반 스마트 병원 서비스 프로젝트입니다.
 
 > **라이브 데모:** [https://mingkycarepro.site/medical](https://mingkycarepro.site/medical) — 의료진 대시보드
+>
+> **시연 영상:** [https://youtu.be/ukF5k4bYa9o](https://youtu.be/ukF5k4bYa9o) — OMX 로봇팔
 
 ## 1. 프로젝트 개요
 
@@ -86,16 +88,17 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 ## 6. 기술 스택
 
-| 영역          | 기술                                                                 |
-| ------------- | -------------------------------------------------------------------- |
-| OS · 미들웨어 | Ubuntu 24.04 · ROS2 Jazzy                                            |
-| 자율주행      | Pinky Pro · Nav2 · SLAM Toolbox                                      |
-| 로봇팔        | OpenManipulator-X (리더-팔로워) · Dynamixel SDK · LeRobot (모방학습) |
-| 비전          | OpenCV · ArUco · YOLO                                                |
-| 백엔드        | FastAPI · Uvicorn · asyncpg · Pydantic                               |
-| 프론트엔드    | React 19 · Vite · TypeScript · React Router · Axios · Three.js       |
-| 데이터베이스  | PostgreSQL                                                           |
-| 인프라 · 배포 | Docker Compose · Nginx                                               |
+| 영역          | 기술                                                                           |
+| ------------- | ------------------------------------------------------------------------------ |
+| OS · 미들웨어 | Ubuntu 24.04 · ROS2 Jazzy · Fast DDS                                           |
+| 자율주행      | Pinky Pro · Nav2 (MPPI · AMCL · twist_mux) · SLAM Toolbox                      |
+| 로봇팔        | OpenManipulator-X (리더-팔로워) · Dynamixel SDK · LeRobot · SmolVLA (모방학습) |
+| 비전          | OpenCV · ArUco · YOLO · pyzbar · Picamera2                                     |
+| 백엔드        | FastAPI · Uvicorn · asyncpg · Pydantic · SSE                                   |
+| 프론트엔드    | React 19 · Vite · TypeScript · React Router · Axios · Three.js · anime.js      |
+| 데이터베이스  | PostgreSQL                                                                     |
+| 품질 · CI     | GitHub Actions · pytest · oxlint                                               |
+| 인프라 · 배포 | Docker Compose · Nginx                                                         |
 
 ## 7. 팀원 역할
 
@@ -107,7 +110,8 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
         <b>정수진</b>
       </a>
       <br/>
-      <sub>의료진 대시보드<br/>QR 스캔 파이프라인<br/>로봇 arming</sub>
+      <div align="left"><sub>∙ 의료진, 약국 대시보드<br/>∙ QR 파이프라인<br/>∙ OMX 포장 
+      </sub></div>
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/vanillaturtlechips">
@@ -115,7 +119,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
         <b>이명일</b>
       </a>
       <br/>
-      <sub>엔지니어 대시보드<br/>백엔드 · 이벤트 게이트웨이<br/>teleop · safety · 인프라</sub>
+      <div align="left"><sub>∙ 엔지니어 대시보드<br/>∙ 이벤트 로그 수집<br/>∙ Observability<br/>∙ 백엔드 · 이벤트 게이트웨이</sub></div>
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/YANGJONGSU">
@@ -123,7 +127,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
         <b>양종수</b>
       </a>
       <br/>
-      <sub>OMX 조제 (로봇팔)<br/>모방학습<br/>초기 저장소 세팅</sub>
+      <div align="left"><sub>∙ OMX 조제<br/>∙ 약국 대시보드<br/>∙ 화재 자동 대피<br/>∙ AMCL 재탐색</sub></div>
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/wmkimDev">
@@ -131,7 +135,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
         <b>김원민</b>
       </a>
       <br/>
-      <sub>Mingky ROS 골격<br/>DB · waypoint · ArUco<br/>deploy · waypoint UI</sub>
+      <div align="left"><sub>∙ Mingky ROS 골격<br/>∙ DB · waypoint<br/>∙ Nav2 · MPPI<br/>∙ 저상 장애물 회피</sub></div>
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/153yjw">
@@ -139,7 +143,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
         <b>윤정우</b>
       </a>
       <br/>
-      <sub>배터리 저전압 감시<br/>충전소 복귀<br/>&nbsp;</sub>
+      <div align="left"><sub>∙ 3D 병원 지도<br/>∙ 배터리 저전압 감시 및 충전소 복귀<br/>∙ 환자 이탈 시 충전소 자동 복귀</sub></div>
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/kimyunseo">
@@ -147,7 +151,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
         <b>김윤서</b>
       </a>
       <br/>
-      <sub>YOLO 기반<br/>환자 인형 검출<br/>&nbsp;</sub>
+      <div align="left"><sub>∙ YOLO 환자 인형 검출<br/>∙ 저상 장애물 우회</sub></div>
     </td>
   </tr>
 </table>
