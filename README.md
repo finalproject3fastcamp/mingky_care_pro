@@ -108,7 +108,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
   <tr>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/soojjung">
-        <img src="https://github.com/soojjung.png" width="120" height="120" alt="정수진"/><br/>
+        <img src="https://github.com/soojjung.png?size=240" width="120" height="120" alt="정수진"/><br/>
         <b>정수진</b>
       </a>
       <br/>
@@ -117,7 +117,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/vanillaturtlechips">
-        <img src="https://github.com/vanillaturtlechips.png" width="120" height="120" alt="이명일"/><br/>
+        <img src="https://github.com/vanillaturtlechips.png?size=240" width="120" height="120" alt="이명일"/><br/>
         <b>이명일</b>
       </a>
       <br/>
@@ -125,7 +125,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/YANGJONGSU">
-        <img src="https://github.com/YANGJONGSU.png" width="120" height="120" alt="양종수"/><br/>
+        <img src="https://github.com/YANGJONGSU.png?size=240" width="120" height="120" alt="양종수"/><br/>
         <b>양종수</b>
       </a>
       <br/>
@@ -133,7 +133,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/wmkimDev">
-        <img src="https://github.com/wmkimDev.png" width="120" height="120" alt="김원민"/><br/>
+        <img src="https://github.com/wmkimDev.png?size=240" width="120" height="120" alt="김원민"/><br/>
         <b>김원민</b>
       </a>
       <br/>
@@ -141,7 +141,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/153yjw">
-        <img src="https://github.com/153yjw.png" width="120" height="120" alt="윤정우"/><br/>
+        <img src="https://github.com/153yjw.png?size=240" width="120" height="120" alt="윤정우"/><br/>
         <b>윤정우</b>
       </a>
       <br/>
@@ -149,7 +149,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
     </td>
     <td align="center" valign="top" width="160">
       <a href="https://github.com/kimyunseo0902-commits">
-        <img src="https://github.com/kimyunseo0902-commits.png" width="120" height="120" alt="김윤서"/><br/>
+        <img src="https://github.com/kimyunseo0902-commits.png?size=240" width="120" height="120" alt="김윤서"/><br/>
         <b>김윤서</b>
       </a>
       <br/>
