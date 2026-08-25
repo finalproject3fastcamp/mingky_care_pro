@@ -5,7 +5,9 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 > **라이브 데모:** [https://mingkycarepro.site/medical](https://mingkycarepro.site/medical) — 의료진 대시보드
 >
-> **시연 영상:** [https://youtu.be/ukF5k4bYa9o](https://youtu.be/ukF5k4bYa9o) — OMX 로봇팔
+> **시연 영상**
+> - [OMX 로봇팔](https://youtu.be/ukF5k4bYa9o)
+> - [Pinky 자율주행](https://youtu.be/Fco5L7wAmik)
 
 ## 1. 프로젝트 개요
 
@@ -146,8 +148,8 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
       <div align="left"><sub>∙ 3D 병원 지도<br/>∙ 배터리 저전압 감시 및 충전소 복귀<br/>∙ 환자 이탈 시 충전소 자동 복귀</sub></div>
     </td>
     <td align="center" valign="top" width="160">
-      <a href="https://github.com/kimyunseo">
-        <img src="https://github.com/kimyunseo.png" width="120" height="120" alt="김윤서"/><br/>
+      <a href="https://github.com/kimyunseo0902-commits">
+        <img src="https://github.com/kimyunseo0902-commits.png" width="120" height="120" alt="김윤서"/><br/>
         <b>김윤서</b>
       </a>
       <br/>
