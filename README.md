@@ -12,6 +12,9 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 > **발표 자료**
 > - [PDF](docs/presentations/Mingky-Care-Pro.pdf)
 > - [PPTX](docs/presentations/Mingky-Care-Pro.pptx)
+>
+> **OMX 설명**
+> - [Claude Artifact](https://claude.ai/code/artifact/47ce1cc2-0d45-44e0-946a-43f858b39cce)
 
 ## 1. 프로젝트 개요
 
