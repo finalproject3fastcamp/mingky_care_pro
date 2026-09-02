@@ -96,6 +96,8 @@ TURN_RPS = 1.4
 # 이 각도보다 어긋나 있으면 제자리에서 돌고, 안쪽이면 돌면서 나아간다.
 # 헐겁게 두면 경로를 옳게 뽑아 놓고도 궤적이 부풀어 벽을 스친다.
 HEADING_TOLERANCE = 0.10
+# 벽에 막힌 채 이만큼 지나면 다시 계획한다. POSE_HZ 가 10 이므로 2 초다.
+BLOCKED_TICKS_BEFORE_REPLAN = 20
 # 조작 명령이 끊긴 뒤 자동으로 돌아가기까지. 실기의 twist_mux timeout 과 같은 뜻.
 MANUAL_HOLD_SEC = 1.0
 
@@ -358,21 +360,24 @@ class OccupancyGrid:
     def _smooth(self, points):
         """보이는 데까지 건너뛴다. 격자 경로 그대로면 계단처럼 꺾인다.
 
-        지름길에는 **한 칸 여유를 요구한다**(margin=1). 벽에 닿지만 않으면
-        된다고 하면 대각선 지름길이 모서리를 스치고, 로봇이 그 위를 직선으로
-        지나면서 한순간 벽 안에 들어간다. 실제로 궤적 551 표본 중 1 개가
-        그렇게 벽 안에 있었다.
+        지름길에는 **두 칸(5 cm) 여유를 요구한다**. 벽에 닿지만 않으면 된다고
+        하면 대각선 지름길이 모서리를 스치고, 로봇이 그 위를 지나면서 한순간
+        벽 안에 들어간다. 실제로 궤적 551 표본 중 1 개가 그랬다.
 
-        여유를 못 만들면 그냥 안 건너뛴다. 그때 남는 것은 A* 가 낸 격자 경로인데
-        그건 자유 칸만 밟으므로 안전하다 — 지름길은 있으면 좋은 것이지 필수가
-        아니다.
+        두 칸인 것은 추종 오차에서 나온 수다. 방향 허용이 0.10 rad 이므로 50 cm
+        짜리 지름길에서 옆으로 최대 `50 * sin(0.10)` ≈ 5 cm 까지 부푼다. 여유가
+        그보다 좁으면 경로가 옳아도 궤적이 벽에 닿는다.
+
+        여유를 못 만들면 그냥 안 건너뛴다. 그때 남는 것은 A* 가 낸 격자 경로이고,
+        마디가 한 칸(2.5 cm)씩이라 부풀 여지 자체가 없다 — 지름길은 있으면 좋은
+        것이지 필수가 아니다.
         """
         if len(points) <= 2:
             return points
         smoothed = [points[0]]
         anchor = 0
         for i in range(2, len(points)):
-            if not self.line_of_sight(points[anchor], points[i], margin=1):
+            if not self.line_of_sight(points[anchor], points[i], margin=2):
                 smoothed.append(points[i - 1])
                 anchor = i - 1
         smoothed.append(points[-1])
@@ -460,6 +465,8 @@ class VirtualRobot:
         # 목적지까지의 계획 경로(지도 좌표)와 지금 향하는 지점.
         self.path = []
         self.path_index = 0
+        # 벽에 막혀 한 발짝도 못 간 연속 횟수. 다시 계획할 때를 정한다.
+        self.blocked_ticks = 0
         self.x, self.y, self.yaw = home
         self.mode = "auto"
         # 조작자가 마지막으로 보낸 속도와 그 시각.
@@ -567,11 +574,20 @@ class VirtualRobot:
         ny = self.y + travel * math.sin(self.yaw)
 
         # 마지막 안전판. 계획이 옳아도 추종 오차로 한 발짝이 벽에 걸릴 수 있고,
-        # **화면에서는 그 한 프레임이 곧 '벽을 뚫었다'** 이다. 못 들어가면 그
-        # 자리에서 다시 계획한다.
+        # **화면에서는 그 한 프레임이 곧 '벽을 뚫었다'** 이다.
+        #
+        # 여기서 곧바로 다시 계획하면 안 된다. 막힌 자리에서 새로 뽑은 경로가
+        # 같은 자리로 다시 데려와 교착에 빠진다 — 실제로 그렇게 만들었다가
+        # X-ray 를 1 m 앞에 두고 300 초를 헛돌았다. 먼저 제자리에서 방향만
+        # 맞춰 보고, 그래도 안 풀릴 때만 다시 계획한다.
         if self.grid.is_blocked(*self.grid.to_cell(nx, ny)):
-            self.replan()
+            self.blocked_ticks += 1
+            if self.blocked_ticks > BLOCKED_TICKS_BEFORE_REPLAN:
+                self.blocked_ticks = 0
+                self.replan()
             return
+
+        self.blocked_ticks = 0
         self.x, self.y = nx, ny
 
     # --- 진단 레이어 ---
