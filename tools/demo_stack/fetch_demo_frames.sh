@@ -20,6 +20,17 @@
 #
 # ffmpeg 합성 화면으로 떨어진다. 데모가 '카메라 죽음' 으로 보이는 것보다는
 # 낫고, 합성인 게 눈에 보이는 편이 조용히 가짜를 흘리는 것보다 정직하다.
+#
+# **클라우드 서버에서는 이 경로로 떨어질 가능성이 높다.** 유튜브가 데이터센터
+# IP 를 'Sign in to confirm you are not a bot' 으로 막는다. player_client 를
+# 바꿔도 안 된다. 그때는 사람이 쓰는 회선에서 받아 소스를 직접 넣어 준다.
+#
+#     yt-dlp -S res:720 -o demo.mp4 <URL>          # 노트북에서
+#     scp demo.mp4 서버:/opt/mingky-demo/.work/    # 확장자는 아무거나 된다
+#     sudo -u mingky-demo MINGKY_DEMO_FRAMES_DIR=... ./fetch_demo_frames.sh
+#
+# 아래 소스 탐색이 `demo.*` 를 통째로 보므로 webm·mkv 를 그대로 넣어도 된다 —
+# ffmpeg 은 확장자가 아니라 내용으로 형식을 판별한다.
 
 set -euo pipefail
 
@@ -43,12 +54,16 @@ command -v ffmpeg >/dev/null 2>&1 \
   || die "ffmpeg 이 없다. sudo apt install -y ffmpeg"
 
 mkdir -p "$WORK_DIR"
-SOURCE="$WORK_DIR/demo.mp4"
+
+# 이미 있는 소스를 먼저 찾는다. 손으로 넣어 준 파일은 확장자가 무엇일지
+# 모르므로(webm·mkv·mp4) 이름만 보고 고른다.
+SOURCE="$(find "$WORK_DIR" -maxdepth 1 -type f -name 'demo.*' 2>/dev/null | sort | head -1)"
+[ -n "$SOURCE" ] || SOURCE="$WORK_DIR/demo.mp4"
 
 # --- 1. 영상 확보 ---------------------------------------------------------
 
 SYNTHETIC=0
-if [ -f "$SOURCE" ]; then
+if [ -s "$SOURCE" ]; then
   log "이미 받아 둔 영상을 쓴다: $SOURCE"
 elif command -v yt-dlp >/dev/null 2>&1; then
   log "시연 영상 내려받는 중: $VIDEO_URL"

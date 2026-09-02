@@ -48,11 +48,22 @@ X-ray 실로 간다. 안내가 없으면 충전소로 돌아간다.
 ## 설치
 
 ```bash
-sudo apt install -y ffmpeg
-pipx install yt-dlp          # 없으면 합성 화면으로 떨어진다
+# python3-venv 는 기본으로 안 깔려 있다. 관제 서버는 백엔드를 도커로 돌려서
+# 호스트에 venv 가 필요했던 적이 없기 때문이다.
+sudo apt install -y ffmpeg python3-venv
+
+# yt-dlp 은 apt 판이 낡아 유튜브를 자주 못 받는다. 공식 단일 실행 파일을 쓴다.
+sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+  -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
 
 sudo ./tools/demo_stack/install.sh
 ```
+
+> **유튜브가 클라우드 IP 를 막는다.** 서버에서 받으면 대개
+> `Sign in to confirm you are not a bot` 이 뜨고 합성 화면으로 떨어진다.
+> 그때는 사람이 쓰는 회선에서 받아 `/opt/mingky-demo/.work/` 에 넣고 다시
+> 돌린다. 확장자는 아무거나 된다 (`fetch_demo_frames.sh` 머리말).
 
 설치가 하는 일은 여섯 단계다 — 시스템 사용자, `/opt/mingky-demo` 로 소스 복사,
 venv, `/etc/mingky/demo.env`, 카메라 프레임 굽기, systemd 등록.

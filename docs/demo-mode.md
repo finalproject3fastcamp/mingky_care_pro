@@ -57,33 +57,56 @@ sudo ./deploy/backup-server-state.sh
 `deploy/.env` 에서 두 줄을 비운다. OMX 박스가 회수됐으므로 역터널 포트
 (`host.docker.internal:2203x`)에 아무도 없다.
 
+`.env.example` 의 기본값은 빈 값이지만 **운영 서버는 그렇지 않았다.** 실기를
+붙이며 네 줄이 다 켜져 있었다(2026-09-02 확인).
+
 ```diff
--MINGKY_OMX_DISPENSE_URL=http://host.docker.internal:22031
--MINGKY_OMX_PACK_URL=http://host.docker.internal:22032
+-MINGKY_OMX_DISPENSE_URL=http://172.18.0.1:22131
+-MINGKY_OMX_PACK_URL=http://172.18.0.1:22132
+-PHARMACY_REAL=1
+-PACK_REAL=1
 +MINGKY_OMX_DISPENSE_URL=
 +MINGKY_OMX_PACK_URL=
++PHARMACY_REAL=0
++PACK_REAL=0
 ```
 
-비어 있으면 원격 프록시를 안 쓰고 SIM 으로 돈다 (`compose.yaml` 주석).
-`.env.example` 의 기본값이 이미 빈 값이므로, 실기를 붙이며 채웠던 것을
-되돌리는 것이다.
+URL 이 비면 원격 프록시를 안 찾고, `PHARMACY_REAL=0` 이라야 `_dispense_worker`
+가 SIM 분기로 간다 (`compose.yaml` 주석). **넷 다 되돌려야 한다** — URL 만
+비우고 `PHARMACY_REAL=1` 을 두면 없는 러너를 계속 부른다.
 
-`PHARMACY_REAL` · `PACK_REAL` 은 건드릴 것이 없다. `.env` 에 없으면
-`compose.yaml` 이 `${PHARMACY_REAL:-0}` 으로 0 을 준다 — 애초에 **시뮬레이션이
-기본이고 실제 모드가 명시적 opt-in** 이다. 실기를 붙이며 1 로 켰다면 그 줄만
-지우거나 0 으로 되돌린다.
+바꾸기 전 원본을 옆에 남겨 둔다.
 
 ```bash
-./deploy/deploy.sh restart
+cp deploy/.env deploy/.env.real-robot-$(date +%Y%m%d)
 ```
+
+그리고 **`restart` 가 아니라 `up -d`** 로 올려야 한다. `docker compose restart`
+는 컨테이너를 그대로 다시 띄울 뿐 `.env` 를 다시 읽지 않아서, 바꾼 값이 반영되지
+않는다.
+
+```bash
+docker compose --env-file deploy/.env --file deploy/compose.yaml \
+  up -d --no-build backend
+docker compose --env-file deploy/.env --file deploy/compose.yaml \
+  exec -T backend printenv PHARMACY_REAL PACK_REAL
+```
+
+`--no-build` 라 이미지를 다시 굽지 않고 backend 컨테이너만 새 환경으로 바꾼다.
+프론트엔드와 DB 는 건드리지 않으므로 화면이 끊기지 않는다.
 
 ### 3. 데모 스택을 세운다
 
 ```bash
-sudo apt install -y ffmpeg
-pipx install yt-dlp
+sudo apt install -y ffmpeg python3-venv
+sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+  -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
 sudo ./tools/demo_stack/install.sh
 ```
+
+카메라 영상은 유튜브가 클라우드 IP 를 막아 서버에서 직접 못 받는다. 사람이
+쓰는 회선에서 받아 `/opt/mingky-demo/.work/` 에 넣고 다시 돌린다.
 
 자세한 것은 [`tools/demo_stack/README.md`](../tools/demo_stack/README.md).
 
