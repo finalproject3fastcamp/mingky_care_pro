@@ -66,6 +66,10 @@ DEFAULT_CANON = REPO_ROOT / "config" / "event_codes.yaml"
 # 시나리오 시작 전에 안 갖춰지고, 더 빠르면 없는 부하를 만든다.
 HEARTBEAT_INTERVAL_SEC = 3.0
 
+# 회차가 연달아 실패할 때 대기 간격을 몇 배까지 늘리나. loop_delay 가 5 초면
+# 최대 30 초 간격이 된다 — 복구를 포기하지 않으면서 서버를 두드리지도 않는다.
+BACKOFF_MAX_STEPS = 6
+
 # 로봇이 events 에 싣는 source_node. 진짜 로봇과 구분되어야 한다 —
 # 타임라인에서 가짜가 섞여 들어온 것을 알아볼 수 있어야 조사가 된다.
 SOURCE_NODE = "fake_robot"
@@ -500,19 +504,55 @@ class Harness:
         "order": do_order,
     }
 
+    def _open_sessions(self) -> dict:
+        """**서버가 아는** 활성 세션 중 이 시나리오의 로봇 것.
+
+        self.sessions 를 믿으면 안 되는 경우가 있어서 따로 묻는다. 프로세스가
+        재시작되면 그 기억은 비어 있는데 서버에는 앞 프로세스가 열어 둔 세션이
+        그대로 남아 있다. 하네스가 자기 기억만 보면 그 세션을 영원히 못 닫는다.
+        """
+        try:
+            rows = request(self.base_url, "GET", "/sessions/active") or []
+        except Exception as exc:
+            self.log(f"  활성 세션 조회 실패: {exc}")
+            return {}
+
+        ours = {robot.robot_id for robot in self.scenario.robots}
+        found = {}
+        for row in rows:
+            robot_id = row.get("robot_id")
+            session_id = row.get("session_id")
+            if robot_id in ours and session_id:
+                found[robot_id] = session_id
+        return found
+
     def _recover(self) -> None:
-        """실패한 회차가 열어 둔 세션을 닫는다. 반복 재생에서만 부른다.
+        """열려 있는 세션을 닫는다. 반복 재생에서만 부른다.
 
         회차가 중간에 죽으면 session.ended 까지 못 가고 세션이 열린 채 남는다.
         그 상태로 다음 회차가 arm 을 부르면 `robot busy with session N` 409 가
         나고(routers/robots.py 의 arm_robot), 그 회차도 같은 자리에서 죽는다.
         아무도 손대지 않으면 **한 번의 일시적 실패가 데모를 영구히 세운다.**
 
-        그래서 실패한 회차의 뒤처리로 세션을 직접 닫는다. end_reason 은
-        `aborted` 다 — 정본에 있는 값이고, 완주가 아니었다는 사실을 타임라인에
-        남기는 쪽이 completed 로 덮는 것보다 정직하다.
+        ## 왜 서버에 묻나
+
+        처음에는 self.sessions 만 닫았는데 그것으로는 못 푸는 자리가 있었다.
+        실기 배포에서 실제로 걸린 것이 그 자리다 — 서비스를 재시작하자 앞
+        프로세스가 열어 둔 세션이 남았고, 새 프로세스의 기억은 비어 있었다.
+        게다가 실패 지점이 arm 이라 qr_scan 을 못 지나 기억이 채워지지도
+        않는다. 1250 회차를 같은 409 로 헛돌았다.
+
+        그래서 자기 기억이 아니라 **서버의 활성 세션 목록**을 기준으로 닫는다.
+        end_reason 은 `aborted` 다 — 정본에 있는 값이고, 완주가 아니었다는
+        사실을 타임라인에 남기는 쪽이 completed 로 덮는 것보다 정직하다.
         """
-        for robot_id, session_id in list(self.sessions.items()):
+        pending = dict(self._open_sessions())
+        # 서버 조회가 실패했을 때를 대비해 자기 기억도 합친다.
+        for robot_id, session_id in self.sessions.items():
+            if session_id:
+                pending.setdefault(robot_id, session_id)
+
+        for robot_id, session_id in list(pending.items()):
             if not session_id:
                 continue
             try:
@@ -576,6 +616,12 @@ class Harness:
             # 그 전에 arm 을 부르면 link_unknown 으로 거부된다.
             time.sleep(1.0)
 
+            if loop:
+                # 앞 프로세스가 남긴 세션을 먼저 치운다. 재시작이 곧 복구여야
+                # 한다 — 사람이 DB 를 열어 손으로 닫아야 하면 상시 데모가 아니다.
+                self._recover()
+
+            consecutive_failures = 0
             while True:
                 if loop:
                     self.log(f"[회차 {self.iteration + 1}] {self.scenario.name}")
@@ -584,9 +630,11 @@ class Harness:
                     self.sessions.clear()
                 try:
                     self._play_once()
+                    consecutive_failures = 0
                 except Exception as exc:
                     if not loop:
                         raise
+                    consecutive_failures += 1
                     self.log(f"[회차 실패] {exc} — 정리하고 다음 회차로 간다")
                     self._recover()
 
@@ -598,7 +646,12 @@ class Harness:
 
                 # 세션이 닫히고 화면이 '복귀 완료' 를 보여줄 틈을 준다.
                 # 곧바로 다시 스캔하면 완주 상태가 한 프레임도 안 보인다.
-                if self._stop.wait(loop_delay):
+                #
+                # 계속 실패하는 중이면 간격을 늘린다. 정리로도 안 풀리는 사정이
+                # 있을 때(서버가 내려갔다거나) 5초마다 같은 요청을 던지면 로그만
+                # 채우고 서버를 두드린다. 실기 배포에서 1250 회차가 그렇게 돌았다.
+                delay = loop_delay * min(max(consecutive_failures, 1), BACKOFF_MAX_STEPS)
+                if self._stop.wait(delay):
                     break
         finally:
             self.stop_heartbeats()
