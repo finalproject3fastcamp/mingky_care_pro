@@ -387,18 +387,47 @@ class Harness:
         self.sessions[robot.robot_id] = result["session_id"]
         self.log(f"  QR 스캔 {args['patient_id']} → session {result['session_id']}")
 
+    @staticmethod
+    def _fill_session(payload: dict, session_id: int) -> dict:
+        """payload 의 `session_id: 0` 자리에 진짜 세션 번호를 넣는다.
+
+        시나리오는 사람이 손으로 쓰는 파일이라 세션 번호를 미리 적을 수 없다.
+        그래서 자리만 0 으로 비워 두는 관례가 생겼는데, **그 0 이 그대로 서버로
+        갔다.**
+
+        일부 경로는 이벤트 컬럼이 아니라 payload 의 session_id 를 본다.
+        `pharmacy.arrived` 가 그렇다 — `pharmacy_link.on_event` 가
+        `if not session_id` 로 걸러서, 0 이면 조제를 시작하지 않고
+        "payload 가 불완전합니다" 만 남긴다. 상시 데모에서 조제가 한 번도 안
+        도는 것을 보고 찾았다.
+
+        E2E 는 이 구멍을 못 잡았다. seam 테스트가 시나리오를 거치지 않고
+        이벤트를 직접 넣으면서 진짜 session_id 를 손으로 실었기 때문이다.
+
+        키가 없으면 만들지 않는다. 0 을 적어 둔 자리만 채운다 — 세션에 딸리지
+        않는 팔(manipulator) 이벤트까지 건드리지 않기 위해서다.
+        """
+        if not session_id:
+            return payload
+        if payload.get("session_id") != 0:
+            return payload
+        filled = dict(payload)
+        filled["session_id"] = session_id
+        return filled
+
     def do_event(self, robot: Robot, args: dict) -> None:
         code = args["code"]
+        session_id = self.sessions.get(robot.robot_id, 0)
         event = {
             "event_id": str(uuid.uuid4()),
             "robot_id": robot.robot_id,
             # session_id 0 은 '세션 없음'. 백엔드가 NULL 로 저장한다.
-            "session_id": self.sessions.get(robot.robot_id, 0),
+            "session_id": session_id,
             "occurred_at": now_iso(),
             "level": args.get("level", self.canon.level_of(code)),
             "event_code": code,
             "source_node": SOURCE_NODE,
-            "payload": args.get("payload", {}),
+            "payload": self._fill_session(args.get("payload", {}), session_id),
         }
         self.last_ingest = request(self.base_url, "POST", "/events", [event])
         self.log(f"  이벤트 {code} ({robot.robot_id})")
