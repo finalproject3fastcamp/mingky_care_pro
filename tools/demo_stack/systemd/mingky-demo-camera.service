@@ -1,0 +1,20 @@
+[Unit]
+Description=Mingky demo — 가짜 MJPEG 카메라 (회수된 로봇의 역터널 자리)
+Documentation=file:///opt/mingky-demo/tools/demo_stack/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mingky-demo
+WorkingDirectory=/opt/mingky-demo
+EnvironmentFile=/etc/mingky/demo.env
+# stdlib 만 쓰므로 venv 가 필요 없다. 시스템 python3 으로 충분하다.
+ExecStart=/usr/bin/python3 /opt/mingky-demo/tools/demo_stack/mock_camera.py \
+  --frames-dir ${MINGKY_DEMO_FRAMES_DIR} \
+  --fps ${MINGKY_DEMO_FPS}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

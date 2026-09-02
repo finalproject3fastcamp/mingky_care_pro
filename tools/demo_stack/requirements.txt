@@ -1,0 +1,12 @@
+# 데모 스택 의존성. 짧게 유지한다 — 상시로 도는 프로세스가 무엇에 기대는지
+# 한눈에 보여야 실기 복귀 때 무엇을 걷어내는지도 분명해진다.
+
+# fake_teleop 이 teleop 소켓의 로봇 쪽에 붙는다. stdlib 에는 WebSocket
+# 클라이언트가 없다 — RFC 6455 를 직접 짜는 것보다 이 한 줄이 낫다.
+websockets>=12.0
+
+# waypoint 정본(yun_map_highres_clean_waypoints.yaml)을 읽는다.
+# fake_robot.py 도 같은 이유로 이것 하나만 쓴다.
+PyYAML>=6.0
+
+# mock_camera.py 는 stdlib 만 쓴다. 여기에 아무것도 더하지 마라.

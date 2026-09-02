@@ -17,6 +17,21 @@ python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/session_complet
     --base-url http://localhost:8000
 ```
 
+`--loop` 을 붙이면 시나리오가 끝나도 멈추지 않는다. 실기가 회수된 뒤 관제를
+상시로 세워 두는 데 쓴다 ([`tools/demo_stack`](../demo_stack/README.md)).
+
+```bash
+python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/demo_showcase.yaml \n    --base-url http://localhost:8000 --loop --loop-delay 12
+```
+
+루프에서 달라지는 것은 셋이다.
+
+- **heartbeat 를 회차 사이에 안 끊는다.** 끊으면 15초 뒤 comm_lost 가 찍힌다
+- **마커를 회차마다 돌린다.** 앞 회차 세션이 아직 안 닫혔을 때
+  `uq_active_session_marker` 에 걸리지 않게 한다 (1 회차는 시나리오에 적힌 값 그대로다)
+- **회차가 실패해도 안 죽는다.** 열어 둔 세션을 `aborted` 로 닫고 다음 회차로
+  간다. 이 정리가 없으면 409 한 번이 그 뒤 모든 회차의 arming 을 막는다
+
 `--check` 는 CI 단위 잡에서도 돈다
 ([`backend/tests/test_fake_robot_scenarios.py`](../../backend/tests/test_fake_robot_scenarios.py)).
 
@@ -33,6 +48,10 @@ python tools/fake_robot/fake_robot.py tools/fake_robot/scenarios/session_complet
 | `topic_stale.yaml` | 라이다는 죽었는데 유닛은 active. 서버가 heartbeat 만 보고 판정한다 |
 | `fleet_config_split.yaml` | 커밋·맵이 갈린 2대. 형상 패널이 무엇을 잡는지 |
 | `servo_overheat.yaml` | 서보 과열·해제. 조인트별 임계와 히스테리시스 |
+| `outpatient_full_journey.yaml` | 외래 완주. 검사 뒤 수납→약국→약수령까지 6단계 |
+| `inpatient_ward.yaml` | 입원 안내. 검사 뒤 병동에서 끝난다 (수납·약국 없음) |
+| `two_pinky_concurrent.yaml` | 핑키 2대 인터리브. 세션이 로봇별로 갈리는지 |
+| `demo_showcase.yaml` | **상시 데모용.** 로봇 4대가 한 이야기로 돈다. `--loop` 전제 |
 
 ```yaml
 name: 세션 완주 (p001, 3단계)

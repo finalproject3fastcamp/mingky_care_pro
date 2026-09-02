@@ -1,0 +1,23 @@
+[Unit]
+Description=Mingky demo — 시나리오 상시 재생 (heartbeat·세션·이벤트)
+Documentation=file:///opt/mingky-demo/tools/demo_stack/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mingky-demo
+WorkingDirectory=/opt/mingky-demo
+EnvironmentFile=/etc/mingky/demo.env
+# --loop 가 핵심이다. 이게 없으면 시나리오가 끝나는 순간 heartbeat 도 멈추고
+# 15초 뒤 백엔드가 로봇 4대에 전부 comm_lost 를 찍는다.
+ExecStart=/opt/mingky-demo/venv/bin/python \
+  /opt/mingky-demo/tools/fake_robot/fake_robot.py \
+  ${MINGKY_DEMO_SCENARIO} \
+  --base-url ${MINGKY_DEMO_BASE_URL} \
+  --loop --loop-delay ${MINGKY_DEMO_LOOP_DELAY}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Mingky demo — 가상 주행체 (teleop 소켓의 로봇 쪽)
+Documentation=file:///opt/mingky-demo/tools/demo_stack/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mingky-demo
+WorkingDirectory=/opt/mingky-demo
+EnvironmentFile=/etc/mingky/demo.env
+ExecStart=/opt/mingky-demo/venv/bin/python \
+  /opt/mingky-demo/tools/demo_stack/fake_teleop.py \
+  --base-url ${MINGKY_DEMO_BASE_URL} \
+  --robots ${MINGKY_DEMO_ROBOTS}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

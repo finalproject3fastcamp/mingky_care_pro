@@ -1,0 +1,146 @@
+# 상시 데모 — 로봇 4대가 한 이야기로 돈다.
+#
+# 실기가 회수된 뒤 mingkycarepro.site 를 살려 두기 위한 시나리오다.
+# `--loop` 로 돌리는 것을 전제로 쓴다 (tools/demo_stack/README.md).
+#
+# ## 왜 시나리오 하나에 4대를 다 넣나
+#
+# 시드에 로봇이 4대 있다 (database/seeds/002_robots.sql). heartbeat 는
+# 시나리오의 `robots` 에 선언된 로봇에게만 나가고, 안 나가는 로봇은 15초 뒤
+# comm_lost 로 빨갛게 뜬다. 시나리오를 나눠 여러 프로세스로 돌리면 그중 하나가
+# 죽었을 때 로봇 몇 대만 조용히 빨개진다 — 상시 데모에서 제일 알아채기 어려운
+# 고장이다. 한 프로세스가 4대를 다 들면 죽어도 다 같이 죽어 바로 눈에 띈다.
+#
+# ## omx-01 에 이벤트 스텝이 없는 이유
+#
+# 일부러 비웠다. pinky-01 이 `pharmacy.arrived` 를 찍으면 **백엔드가**
+# 세션을 물고 조제를 시작한다 (backend/app/pharmacy_link.py). PHARMACY_REAL=0
+# 이면 그 조제가 SIM 으로 돌면서 pharmacy.dispense_requested →
+# dispense_completed 를 스스로 발행한다 (source_node: backend.pharmacy).
+#
+# 여기서 manipulator.* 를 또 뿌리면 같은 조제가 두 번 일어난 것처럼 보인다.
+# omx-01 은 heartbeat 만 받고, 실제 조제 활동은 안내 흐름에서 자연스럽게
+# 나오게 둔다. 대신 팔의 어휘(manipulator.*)는 omx-02 가 보여준다.
+#
+# ## 마커
+#
+# 30·31 로 갈라 둔다. 003 의 uq_active_session_marker 가 활성 세션 사이에서
+# 전역 유니크라, 두 세션이 같은 마커를 동시에 들면 두 번째 스캔이 409 로 막힌다.
+# 회차마다 어긋나게 돌리는 것은 하네스의 _rotate_marker 가 맡는다.
+#
+# ## 환자
+#
+#   pinky-01 → p001 윤동수 (외래·퇴행성 무릎 관절염) 6단계
+#              X-ray → 임상병리실 → 물리치료실 → 수납 → 약국 → 약수령
+#   pinky-02 → p003 김지우 (입원·십자인대 파열)     4단계
+#              X-ray → MRI → 물리치료실 → 병동
+#
+# (단계 수·이름은 database/seeds/001_initial_data.sql 의 examination_steps 정본)
+#
+# 스텝을 한 대씩 몰지 않고 번갈아 배치한다. 그래야 타임라인이 한 로봇으로
+# 길게 눌리지 않고 두 대가 같이 일하는 것처럼 보인다.
+
+name: 상시 데모 — 외래(p001)·입원(p003)·조제 스테이션 2대
+
+robots:
+  - id: pinky-01
+    type: mobile
+    battery_percent: 88
+    voltage: 11.9
+  - id: pinky-02
+    type: mobile
+    battery_percent: 82
+    voltage: 11.7
+  # heartbeat 만 받는다. 조제는 백엔드가 pharmacy.arrived 를 보고 돌린다.
+  - id: omx-01
+    type: manipulator
+  - id: omx-02
+    type: manipulator
+
+steps:
+  # === 기동 =================================================================
+  - { robot: omx-02, action: event, code: manipulator.policy_loaded, payload: { checkpoint_id: act_omx_020000, dataset_revision: v3 } }
+
+  - { robot: pinky-01, action: battery }
+  - { robot: pinky-02, action: battery }
+  - { robot: pinky-01, action: arm }
+  - { robot: pinky-02, action: arm }
+  - { robot: pinky-01, action: qr_scan, patient_id: p001, marker_id: 30 }
+  - { robot: pinky-02, action: qr_scan, patient_id: p003, marker_id: 31 }
+
+  - { robot: pinky-01, action: event, code: session.started, payload: { patient_id: p001, marker_id: 30 } }
+  - { robot: pinky-02, action: event, code: session.started, payload: { patient_id: p003, marker_id: 31 } }
+  - { robot: pinky-01, action: event, code: qr.scan_ok, payload: { patient_id: p001 } }
+  - { robot: pinky-02, action: event, code: qr.scan_ok, payload: { patient_id: p003 } }
+
+  # === 1단계 — 둘 다 X-ray ==================================================
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: X-ray } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: X-ray }, wait: 2.0 }
+  - { robot: pinky-02, action: event, code: nav.goal_succeeded, payload: { visit_name: X-ray }, wait: 1.0 }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 1, source: qr } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 1, source: qr } }
+
+  # === 2단계 — 외래는 임상병리실, 입원은 MRI ================================
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 임상병리실 } }
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: MRI } }
+
+  # 이 틈에 조제 스테이션 2호가 한 사이클 돈다. 팔이 노는 화면이 안 되게
+  # 안내가 진행되는 사이사이에 끼워 둔다.
+  - { robot: omx-02, action: event, code: manipulator.cycle_started, payload: { dispense_id: d-2001, medication_id: 소염진통제 } }
+  - { robot: omx-02, action: event, code: manipulator.pick_succeeded, payload: { medication_id: 소염진통제, attempt: 1, duration_ms: 4200 }, wait: 1.5 }
+  - { robot: omx-02, action: event, code: manipulator.place_succeeded, payload: { tray_slot: 1 } }
+
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 임상병리실 }, wait: 2.0 }
+  - { robot: pinky-02, action: event, code: nav.goal_succeeded, payload: { visit_name: MRI }, wait: 1.0 }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 2, source: qr } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 2, source: qr } }
+
+  - { robot: omx-02, action: event, code: manipulator.pick_succeeded, payload: { medication_id: 관절재활제, attempt: 1, duration_ms: 3900 }, wait: 1.5 }
+  - { robot: omx-02, action: event, code: manipulator.place_succeeded, payload: { tray_slot: 2 } }
+  - { robot: omx-02, action: event, code: manipulator.cycle_completed, payload: { dispense_id: d-2001, duration_ms: 11800 } }
+
+  # === 3단계 — 둘 다 물리치료실 =============================================
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 물리치료실 } }
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: 물리치료실 } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 물리치료실 }, wait: 2.0 }
+  - { robot: pinky-02, action: event, code: nav.goal_succeeded, payload: { visit_name: 물리치료실 }, wait: 1.0 }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 3, source: qr } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 3, source: qr } }
+
+  # === 입원 4단계 — 병동에서 끝난다 =========================================
+  - { robot: pinky-02, action: event, code: nav.goal_sent, payload: { visit_name: 병동 } }
+  - { robot: pinky-02, action: event, code: nav.goal_succeeded, payload: { visit_name: 병동 }, wait: 1.5 }
+  - { robot: pinky-02, action: event, code: ward.arrived, payload: { session_id: 0, patient_id: p003 } }
+  - { robot: pinky-02, action: event, code: session.step_completed, payload: { step_order: 4, source: qr } }
+  - { robot: pinky-02, action: event, code: session.ended, payload: { end_reason: completed } }
+  - { robot: pinky-02, action: event, code: dock.return_started, payload: { station_name: dock-2 } }
+  - { robot: pinky-02, action: event, code: dock.return_succeeded, payload: { station_name: dock-2 }, wait: 1.0 }
+
+  # === 외래 4단계 — 수납 ====================================================
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 수납 } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 수납 }, wait: 1.5 }
+  - { robot: pinky-01, action: event, code: payment.arrived, payload: { session_id: 0, patient_id: p001 } }
+  - { robot: pinky-01, action: event, code: payment.completed, payload: { session_id: 0, patient_id: p001 } }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 4, source: qr } }
+
+  # === 외래 5단계 — 약국. 여기서 백엔드가 omx-01 조제를 건다 ================
+  #
+  # pharmacy.arrived 가 seam 이다. 이 이벤트 하나로 백엔드가
+  # pharmacy.dispense_requested → (SIM 조제) → dispense_completed 를 스스로
+  # 발행한다. 그래서 아래에 조제 스텝을 적지 않는다.
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 약국 } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 약국 }, wait: 1.5 }
+  - { robot: pinky-01, action: event, code: pharmacy.arrived, payload: { session_id: 0, patient_id: p001 } }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 5, source: qr }, wait: 6.0 }
+
+  # === 외래 6단계 — 약수령 ==================================================
+  - { robot: pinky-01, action: event, code: nav.goal_sent, payload: { visit_name: 약수령 } }
+  - { robot: pinky-01, action: event, code: nav.goal_succeeded, payload: { visit_name: 약수령 }, wait: 1.5 }
+  - { robot: pinky-01, action: event, code: pickup.completed, payload: { session_id: 0, patient_id: p001 } }
+  - { robot: pinky-01, action: event, code: session.step_completed, payload: { step_order: 6, source: qr } }
+
+  # === 복귀 =================================================================
+  - { robot: pinky-01, action: event, code: session.ended, payload: { end_reason: completed } }
+  - { robot: pinky-01, action: event, code: dock.return_started, payload: { station_name: dock-1 } }
+  - { robot: pinky-01, action: event, code: dock.return_succeeded, payload: { station_name: dock-1 }, wait: 1.0 }

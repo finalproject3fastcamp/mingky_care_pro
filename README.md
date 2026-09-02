@@ -66,7 +66,10 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 ├── database/      # PostgreSQL 스키마와 초기 데이터
 ├── config/        # 서비스 간 공유 설정 (event_codes.yaml)
 ├── deploy/        # 관제 서버 배포 · 인프라 스크립트
-├── tools/         # 진단 · 캘리브레이션 · 보조 도구 (fake_robot 하네스 포함)
+├── tools/         # 진단 · 캘리브레이션 · 보조 도구
+│   ├── fake_robot/    # ROS 없이 로봇을 흉내내는 하네스
+│   ├── demo_stack/    # 실기 회수 뒤 관제를 살려 두는 상시 데모
+│   └── ...            # 캘리브레이션 · nav2 진단 등
 └── docs/          # 설계 문서와 다이어그램
 ```
 
@@ -89,6 +92,7 @@ Pinky 자율주행 로봇과 고정형 OMX(OpenManipulator-X) 로봇팔을 연�
 
 - [docs/robot-onboarding.md](docs/robot-onboarding.md) — 로봇을 처음 쓰는 사람이 따라 하는 순서
 - [tools/fake_robot/README.md](tools/fake_robot/README.md) — **로봇 없이 개발하기.** ROS 없이 HTTP 로 로봇을 흉내내는 하네스
+- [docs/demo-mode.md](docs/demo-mode.md) — **실기 회수 뒤 관제를 살려 두는 법.** 백업 · 전환 · 되돌리기
 - [config/event_codes.yaml](config/event_codes.yaml) — 이벤트 코드 정본 (발행 가능한 목록과 payload 형태)
 - [docs/system-communication.md](docs/system-communication.md) — 프론트·백엔드·로봇 통신 원칙과 데이터 흐름
 - [docs/monitoring-spec.md](docs/monitoring-spec.md) — 관제 기능 스펙과 기술 스택 결정 배경

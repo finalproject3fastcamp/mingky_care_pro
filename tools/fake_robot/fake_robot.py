@@ -306,6 +306,8 @@ class Harness:
         self.verbose = verbose
         # qr_scan 이 돌려준 session_id. 이후 이벤트에 자동으로 달린다.
         self.sessions: dict[str, int] = {}
+        # 반복 재생(--loop)의 회차. 0 부터 센다. 마커 회전이 이 값을 읽는다.
+        self.iteration = 0
         # 마지막 ingest 응답. E2E 어서션이 읽는다.
         self.last_ingest: dict | None = None
         self._stop = threading.Event()
@@ -355,10 +357,28 @@ class Harness:
         request(self.base_url, "POST", f"/robots/{robot.robot_id}/arm")
         self.log(f"  활성화 {robot.robot_id}")
 
+    def _rotate_marker(self, base: int) -> int:
+        """반복 재생에서 마커를 돌린다.
+
+        003 의 uq_active_session_marker 는 **활성 세션 사이에서 전역 유니크**다.
+        루프가 같은 마커로 다시 스캔했을 때 앞 회차 세션이 아직 안 닫혀 있으면
+        409 로 막힌다. 회차마다 어긋나게 두면 그 창이 겹치지 않는다.
+
+        1 회차는 시나리오에 적힌 값 그대로다 — 한 번만 돌리는 기존 사용과
+        동작이 같아야 회귀 테스트가 계속 유효하다.
+
+        스키마가 0~49 로 제한하므로(schemas.py) 반드시 그 안에서 돈다.
+        """
+        if self.iteration == 0:
+            return base
+        # 2 씩 벌린다. 한 시나리오의 두 로봇(30·31)이 같은 오프셋을 받아도
+        # 서로 겹치지 않아야 한다.
+        return (base + 2 * (self.iteration % 10)) % 50
+
     def do_qr_scan(self, robot: Robot, args: dict) -> None:
         body = {"patient_id": args["patient_id"], "robot_id": robot.robot_id}
         if "marker_id" in args:
-            body["marker_id"] = args["marker_id"]
+            body["marker_id"] = self._rotate_marker(args["marker_id"])
         result = request(self.base_url, "POST", "/qr/scan", body)
         self.sessions[robot.robot_id] = result["session_id"]
         self.log(f"  QR 스캔 {args['patient_id']} → session {result['session_id']}")
@@ -480,7 +500,75 @@ class Harness:
         "order": do_order,
     }
 
-    def run(self) -> None:
+    def _recover(self) -> None:
+        """실패한 회차가 열어 둔 세션을 닫는다. 반복 재생에서만 부른다.
+
+        회차가 중간에 죽으면 session.ended 까지 못 가고 세션이 열린 채 남는다.
+        그 상태로 다음 회차가 arm 을 부르면 `robot busy with session N` 409 가
+        나고(routers/robots.py 의 arm_robot), 그 회차도 같은 자리에서 죽는다.
+        아무도 손대지 않으면 **한 번의 일시적 실패가 데모를 영구히 세운다.**
+
+        그래서 실패한 회차의 뒤처리로 세션을 직접 닫는다. end_reason 은
+        `aborted` 다 — 정본에 있는 값이고, 완주가 아니었다는 사실을 타임라인에
+        남기는 쪽이 completed 로 덮는 것보다 정직하다.
+        """
+        for robot_id, session_id in list(self.sessions.items()):
+            if not session_id:
+                continue
+            try:
+                request(self.base_url, "POST", "/events", [{
+                    "event_id": str(uuid.uuid4()),
+                    "robot_id": robot_id,
+                    "session_id": session_id,
+                    "occurred_at": now_iso(),
+                    "level": self.canon.level_of("session.ended"),
+                    "event_code": "session.ended",
+                    "source_node": SOURCE_NODE,
+                    "payload": {"end_reason": "aborted"},
+                }])
+                self.log(f"  정리 — {robot_id} 세션 {session_id} 를 닫았다")
+            except Exception as exc:
+                self.log(f"  정리 실패 {robot_id}: {exc}")
+        self.sessions.clear()
+
+    def _play_once(self) -> None:
+        """시나리오 스텝을 한 번 재생한다. heartbeat 는 건드리지 않는다."""
+        for step in self.scenario.steps:
+            if step.wait:
+                time.sleep(step.wait)
+
+            if step.action == "sleep":
+                continue
+
+            robot = self.scenario.robot(step.robot)
+            if robot is None:
+                raise RuntimeError(f"robots 에 없는 로봇: {step.robot}")
+
+            handler = self._ACTIONS.get(step.action)
+            if handler is None:
+                raise RuntimeError(f"모르는 action: {step.action}")
+            handler(self, robot, step.args)
+
+    def run(self, loop: bool = False, loop_delay: float = 10.0,
+            max_iterations: int | None = None) -> None:
+        """시나리오를 재생한다. loop 면 끝나도 멈추지 않는다.
+
+        ## 왜 반복이 필요한가
+
+        하네스가 끝나면 heartbeat 도 멈추고, 15 초 뒤 백엔드가 그 로봇에
+        comm_lost 를 찍는다(HEARTBEAT_OFFLINE_AFTER_SEC). 개발 중에는 그게
+        맞는 동작이다 — 진짜 로봇은 안 멈추기 때문이다.
+
+        하지만 실기가 회수된 뒤 상시 데모로 세워 둘 때는 그 전제가 뒤집힌다.
+        아무도 안 보고 있어도 대시보드가 살아 있어야 하므로, 여기서 heartbeat
+        를 끊지 않고 시나리오만 다시 돈다.
+
+        ## 회차 사이에 죽지 않는다
+
+        한 회차가 실패해도(409·네트워크 등) 다음 회차를 계속 간다. 상시
+        데모에서 일시적인 실패 하나로 프로세스가 죽으면 그 뒤로 화면이
+        영영 빈 채로 남는다. 대신 무엇이 실패했는지는 남긴다.
+        """
         self.log(f"[시나리오] {self.scenario.name}")
         self.start_heartbeats()
         try:
@@ -488,21 +576,30 @@ class Harness:
             # 그 전에 arm 을 부르면 link_unknown 으로 거부된다.
             time.sleep(1.0)
 
-            for step in self.scenario.steps:
-                if step.wait:
-                    time.sleep(step.wait)
+            while True:
+                if loop:
+                    self.log(f"[회차 {self.iteration + 1}] {self.scenario.name}")
+                    # 앞 회차의 session_id 를 물고 가면 이번 회차 이벤트가
+                    # 이미 닫힌 세션에 붙는다. qr_scan 이 곧 다시 채운다.
+                    self.sessions.clear()
+                try:
+                    self._play_once()
+                except Exception as exc:
+                    if not loop:
+                        raise
+                    self.log(f"[회차 실패] {exc} — 정리하고 다음 회차로 간다")
+                    self._recover()
 
-                if step.action == "sleep":
-                    continue
+                self.iteration += 1
+                if not loop:
+                    break
+                if max_iterations and self.iteration >= max_iterations:
+                    break
 
-                robot = self.scenario.robot(step.robot)
-                if robot is None:
-                    raise RuntimeError(f"robots 에 없는 로봇: {step.robot}")
-
-                handler = self._ACTIONS.get(step.action)
-                if handler is None:
-                    raise RuntimeError(f"모르는 action: {step.action}")
-                handler(self, robot, step.args)
+                # 세션이 닫히고 화면이 '복귀 완료' 를 보여줄 틈을 준다.
+                # 곧바로 다시 스캔하면 완주 상태가 한 프레임도 안 보인다.
+                if self._stop.wait(loop_delay):
+                    break
         finally:
             self.stop_heartbeats()
 
@@ -519,6 +616,12 @@ def main(argv=None) -> int:
     parser.add_argument("--check", action="store_true",
                         help="정본 대조만 하고 끝낸다 (서버 불필요)")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--loop", action="store_true",
+                        help="시나리오를 끝나도 계속 반복한다 (상시 데모용)")
+    parser.add_argument("--loop-delay", type=float, default=10.0,
+                        help="회차 사이 대기 초 (기본 10)")
+    parser.add_argument("--max-iterations", type=int, default=None,
+                        help="이 회차만큼만 돌고 멈춘다 (테스트용)")
     args = parser.parse_args(argv)
 
     scenario = load_scenario(args.scenario)
@@ -535,7 +638,9 @@ def main(argv=None) -> int:
         print(f"[정본 OK] {scenario.name} — 스텝 {len(scenario.steps)}개")
         return 0
 
-    Harness(scenario, canon, args.base_url, verbose=not args.quiet).run()
+    Harness(scenario, canon, args.base_url, verbose=not args.quiet).run(
+        loop=args.loop, loop_delay=args.loop_delay,
+        max_iterations=args.max_iterations)
     return 0
 
 
