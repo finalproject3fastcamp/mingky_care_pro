@@ -353,20 +353,39 @@ class OccupancyGrid:
         return self._smooth(points)
 
     def _smooth(self, points):
-        """보이는 데까지 건너뛴다. 격자 경로 그대로면 계단처럼 꺾인다."""
+        """보이는 데까지 건너뛴다. 격자 경로 그대로면 계단처럼 꺾인다.
+
+        지름길에는 **한 칸 여유를 요구한다**(margin=1). 벽에 닿지만 않으면
+        된다고 하면 대각선 지름길이 모서리를 스치고, 로봇이 그 위를 직선으로
+        지나면서 한순간 벽 안에 들어간다. 실제로 궤적 551 표본 중 1 개가
+        그렇게 벽 안에 있었다.
+
+        여유를 못 만들면 그냥 안 건너뛴다. 그때 남는 것은 A* 가 낸 격자 경로인데
+        그건 자유 칸만 밟으므로 안전하다 — 지름길은 있으면 좋은 것이지 필수가
+        아니다.
+        """
         if len(points) <= 2:
             return points
         smoothed = [points[0]]
         anchor = 0
         for i in range(2, len(points)):
-            if not self.line_of_sight(points[anchor], points[i]):
+            if not self.line_of_sight(points[anchor], points[i], margin=1):
                 smoothed.append(points[i - 1])
                 anchor = i - 1
         smoothed.append(points[-1])
         return smoothed
 
-    def line_of_sight(self, a, b) -> bool:
-        """두 점 사이가 트여 있나. 격자를 촘촘히 훑어 본다."""
+    def clearance_at(self, col: int, row: int) -> int:
+        if not self.inside(col, row):
+            return 0
+        return self.clearance[row * self.width + col]
+
+    def line_of_sight(self, a, b, margin: int = 0) -> bool:
+        """두 점 사이가 트여 있나. 격자를 촘촘히 훑어 본다.
+
+        margin 은 '벽에서 이만큼 떨어져 있어야 한다'는 요구다(칸 단위).
+        0 이면 벽에 닿지만 않으면 된다.
+        """
         distance = math.hypot(b[0] - a[0], b[1] - a[1])
         steps = int(distance / (self.resolution * 0.5)) + 1
         for i in range(steps + 1):
@@ -374,6 +393,8 @@ class OccupancyGrid:
             col, row = self.to_cell(a[0] + (b[0] - a[0]) * t,
                                     a[1] + (b[1] - a[1]) * t)
             if self.is_blocked(col, row):
+                return False
+            if margin and self.clearance_at(col, row) < margin:
                 return False
         return True
 
