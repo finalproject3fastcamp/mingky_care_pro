@@ -134,10 +134,17 @@ teleop 은 그렇지 않다 — 진짜 로봇이 붙으면 서버가 옛 소켓�
 - **가짜인 것을 숨기지 않는다.** 이벤트의 `source_node` 가 `fake_robot` ·
   `fake_teleop` 으로 고정이다. 타임라인에서 가짜가 섞인 것을 알아볼 수 있어야
   나중에 조사가 된다.
-- **회차가 실패해도 데모는 안 선다.** 반복 재생이 실패한 회차의 세션을
-  `aborted` 로 닫고 다음 회차로 간다 (`Harness._recover`). 이 정리가 없으면
-  일시적인 409 한 번이 데모를 영구히 세운다 — 열린 세션이 다음 회차의 arming 을
-  계속 막기 때문이다.
+- **재시작이 곧 복구다.** 반복 재생은 기동할 때와 회차가 실패할 때
+  `GET /sessions/active` 를 읽어 **서버에 열려 있는** 세션을 `aborted` 로 닫는다
+  (`Harness._recover`). 이 정리가 없으면 열린 세션이 다음 회차의 arming 을 계속
+  막아 데모가 영구히 선다 — 실제로 배포 중에 서비스를 재시작하다 세션이 남았고,
+  1250 회차를 같은 409 로 헛돌았다. 그래서 자기 기억이 아니라 서버를 기준으로
+  닫는다. 뭔가 이상하면 **일단 재시작해 보는 것이 맞다.**
+
+  ```bash
+  sudo systemctl restart mingky-demo-scenario
+  sudo journalctl -u mingky-demo-scenario -n 20 --no-pager -o cat
+  ```
 - **카메라는 실제 시연 영상이다.** [Pinky 자율주행 시연](https://youtu.be/plwKbx3PGU8)
   에서 구운 프레임을 돌린다. 영상을 못 받으면 합성 화면으로 떨어지고, 그때는
   화면에 `SIMULATED` 가 찍힌다.
