@@ -105,6 +105,9 @@ database/*.backup
 
 # Local deployment secrets
 /deploy/.env
+# 실기 설정을 되돌릴 수 있게 옆에 남기는 사본(.env.real-robot-YYYYMMDD 등).
+# 같은 DB 비밀번호가 들어 있으므로 본체와 같이 막는다.
+/deploy/.env.*
 tools/yolo_patient_detection/.env
 
 # OMX 모방학습 — 장비마다 다른 로컬 설정과 산출물
