@@ -93,6 +93,9 @@ HOME = {
 # 시나리오가 다음 단계로 넘어갈 때까지 로봇이 못 따라간다.
 CRUISE_MPS = 0.28
 TURN_RPS = 1.4
+# 이 각도보다 어긋나 있으면 제자리에서 돌고, 안쪽이면 돌면서 나아간다.
+# 헐겁게 두면 경로를 옳게 뽑아 놓고도 궤적이 부풀어 벽을 스친다.
+HEADING_TOLERANCE = 0.10
 # 조작 명령이 끊긴 뒤 자동으로 돌아가기까지. 실기의 twist_mux timeout 과 같은 뜻.
 MANUAL_HOLD_SEC = 1.0
 
@@ -546,9 +549,13 @@ class VirtualRobot:
             return
 
         # 먼저 돌고 나서 간다. 실기의 Nav2 도 큰 각도차에서는 제자리 회전을 한다.
+        #
+        # 여유를 좁게 잡는 이유가 있다. 예전에는 0.25 rad(14도)까지 어긋난 채로
+        # 전진했는데, 그러면 경로 선분을 느슨하게 좇으면서 실제 궤적이 안쪽으로
+        # 부풀어 벽을 스쳤다. 경로가 아무리 옳아도 추종이 헐거우면 소용없다.
         heading = math.atan2(dy, dx)
         error = wrap(heading - self.yaw)
-        if abs(error) > 0.25:
+        if abs(error) > HEADING_TOLERANCE:
             self.yaw = wrap(self.yaw + math.copysign(
                 min(TURN_RPS * dt, abs(error)), error))
             return
@@ -556,8 +563,16 @@ class VirtualRobot:
         self.yaw = wrap(self.yaw + max(-TURN_RPS * dt,
                                        min(TURN_RPS * dt, error)))
         travel = min(CRUISE_MPS * dt, distance)
-        self.x += travel * math.cos(self.yaw)
-        self.y += travel * math.sin(self.yaw)
+        nx = self.x + travel * math.cos(self.yaw)
+        ny = self.y + travel * math.sin(self.yaw)
+
+        # 마지막 안전판. 계획이 옳아도 추종 오차로 한 발짝이 벽에 걸릴 수 있고,
+        # **화면에서는 그 한 프레임이 곧 '벽을 뚫었다'** 이다. 못 들어가면 그
+        # 자리에서 다시 계획한다.
+        if self.grid.is_blocked(*self.grid.to_cell(nx, ny)):
+            self.replan()
+            return
+        self.x, self.y = nx, ny
 
     # --- 진단 레이어 ---
 
